@@ -7,7 +7,7 @@ description: >
   want a Lens session (no SSE, no setup/teardown, no warmup) or wants
   direct access to the embeddings for visualization, custom distance
   metrics, or other downstream uses. Powered by `/query` + an Omega
-  model (`OmegaEncoder::omega_embeddings_01`) called with
+  model (`OmegaEncoder::omega_embeddings_1_4`) called with
   `data.numeric_array` events.
   Do NOT use for streaming Machine State with hosted KNN (use newton-machine-state).
   Do NOT use for batch classification of large CSVs (use newton-machine-state-batch).
@@ -66,7 +66,7 @@ The library *is* the model — there's no model fit beyond storing the labeled e
 ```json
 {
   "query": "",
-  "model": "OmegaEncoder::omega_embeddings_01",
+  "model": "OmegaEncoder::omega_embeddings_1_4",
   "normalize_input": false,
   "events": [
     {
@@ -85,7 +85,7 @@ The library *is* the model — there's no model fit beyond storing the labeled e
 
 Notes on each parameter:
 
-- **`model`** — `OmegaEncoder::omega_embeddings_01` is the current Omega checkpoint. Same encoder family as the Lens skill's `omega_1_4_base`.
+- **`model`** — `OmegaEncoder::omega_embeddings_1_4` is the current recommended default. `OmegaEncoder::omega_embeddings_01` is also exposed on `/query` and was the previous default; it produces materially different embedding vectors than `_1_4` for the same input (same `[N × 768]` shape, different values), so re-build any cached KNN library when switching. Empirical comparison on the SWaT 6-stage benchmark: swapping `_01` → `_1_4` lifts library leave-one-out KNN accuracy on the two non-saturated stages with no regressions. For the full prod model catalog across `/query`, Lens, and batch, see [`newton-models`](../newton-models/SKILL.md).
 - **`query: ""`** — there's no prompt; you're calling the encoder, not the reasoning model.
 - **`normalize_input: false`** — see *The normalize_input pitfall* below. **You almost always want this set to false** combined with global pre-normalization at the call site.
 - **`events`** — `data.numeric_array` is the multivariate-window shape. A single event with `contents` set to a `[num_channels × window_size]` 2D array returns a `[num_channels × 768]` embedding matrix. Sending N separate single-channel events behaves the same but is rate-limit-wasteful — always batch into one event.
@@ -201,7 +201,7 @@ async function embedWindow(endpoint, apiKey, channelFirstWindow) {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query: '',
-      model: 'OmegaEncoder::omega_embeddings_01',
+      model: 'OmegaEncoder::omega_embeddings_1_4',
       normalize_input: false,
       events: [{ type: 'data.numeric_array', event_data: { contents: channelFirstWindow } }]
     })
