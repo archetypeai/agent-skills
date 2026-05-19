@@ -60,7 +60,9 @@ The same `/query` endpoint accepts four genuinely different input shapes. Pickin
 | Input | Recommended path | Also accepted | Avoid |
 |---|---|---|---|
 | Text (state snapshot, prompt context) | `query` field directly | `data.text` event | — |
-| CSV / JSON content for the model to read | inline in `query`, **or** `data.text` event with the file contents | — | `file_ids` of `.csv` / `.json` — file uploads but contents are not injected into the prompt |
+| JSON content for the model to read | `file_ids` with the `.json` filename | inline in `query`, or `data.text` / `data.json` event with the JSON as a **string** | passing parsed objects to `data.json` (`contents` must be a string, not a dict) |
+| Plain-text content (logs, notes) | `file_ids` with the `.txt` filename | inline in `query`, or `data.text` event | — |
+| **CSV content** | inline in `query`, **or** `data.text` event with the CSV as a string, **or** upload with a `.txt` filename | — | `file_ids` of a `.csv` file — uploads successfully but the Newton text model does **not** see the contents (almost certainly routed to the numeric/Omega ingestion path, not the LLM prompt). Renaming the same bytes to `.txt` before upload fixes it. |
 | Image (screenshot, chart, photo) | `file_ids` with the filename (e.g. `"dashboard.png"`) | `data.base64_img` event with inline base64 | `file_ids` with the `fil_...` UID — rejected as `unsupported_file_type` because the API filters by extension |
 | Video (.mp4) | None reliable on Newton text checkpoints today | API accepts the file but `c2_4_7b` / `c2_5_8b` respond "I can't see videos" | Use [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) instead |
 
@@ -80,38 +82,114 @@ The canonical operator-suggestion shape:
 }
 ```
 
-### Request body — CSV / JSON content the model should read
+### Request body — JSON / TXT content the model should read
 
-`file_ids` upload is **not** the right path for tabular / structured data even though `.csv` and `.json` are accepted by the upload endpoint. The file lands in the file service but its contents do not get injected into the model's prompt context — Newton will respond "I don't have access to those details" when asked about specific values. Two paths that actually work:
+JSON and TXT files **do** get their contents injected into the Newton text model's prompt context via `file_ids`. Three working paths in order of convenience:
 
-**(a) Inline the content directly into `query`** (simplest, recommended for small/medium payloads):
+**(a) Upload the JSON/TXT file and reference by filename in `file_ids`** (cleanest if the content is reused across queries):
+
+```bash
+# 1) Upload
+curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
+  -H "Authorization: Bearer $ATAI_API_KEY" \
+  -F "file=@plant_state.json;type=text/plain"
+# Note: upload with mime=text/plain — application/json mime is rejected
+# by a server-side validation bug despite being listed as supported.
+# → { "is_valid": true, "file_id": "plant_state.json", "file_uid": "fil_..." }
+```
 
 ```json
 {
-  "query": "Identify the attack rows in this CSV and report their values:\n\ntimestamp,sensor,value,status\n1000,temp,72.1,normal\n1010,temp,72.4,normal\n1020,temp,98.7,attack\n1030,temp,99.1,attack\n1040,temp,72.2,normal",
+  "query": "What is the status field and which sensor has the highest value?",
+  "file_ids": ["plant_state.json"],
   "model": "Newton::c2_4_7b_251215a172f6d7",
   "max_new_tokens": 250,
   "sanitize": false
 }
 ```
 
-Newton returns: *"The attack rows are 1020 (temp=98.7) and 1030 (temp=99.1)…"* — i.e. it actually reads the values.
+Verified: Newton reads obscure keys correctly (e.g. `alpha_zorlon_cannon: 42.7` from a randomly-named JSON came back exactly).
 
-**(b) Use a `data.text` event** with the file contents (slightly better recall observed in side-by-side tests; preferred when the content is already-serialized JSON you don't want to re-stringify into the query):
+**(b) Inline the JSON / text directly into `query`** (simplest for one-shot queries):
+
+```json
+{
+  "query": "What is the status field?\n\n{\"plant\":\"P3\",\"status\":\"attack\",\"sensors\":{\"LIT301\":850}}",
+  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "max_new_tokens": 200,
+  "sanitize": false
+}
+```
+
+**(c) Use a `data.text` event** (cleanest when you don't want to re-escape the JSON into the query string):
+
+```json
+{
+  "query": "What is the status field?",
+  "events": [
+    { "type": "data.text", "event_data": { "contents": "<full JSON or text>" } }
+  ],
+  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "max_new_tokens": 200,
+  "sanitize": false
+}
+```
+
+There's also a typed `data.json` event variant — same effect, but `contents` must be a **string** (a serialized JSON document), not a parsed object:
+
+```json
+{
+  "events": [
+    {
+      "type": "data.json",
+      "event_data": { "contents": "{\"plant\":\"P3\",\"status\":\"attack\"}" }
+    }
+  ],
+  "...": "..."
+}
+```
+
+Passing a dict here returns `400: Parameter 'contents' should be a <class 'str'>. Got: <class 'dict'>`. Bound by `max_query_size_mb` server-side (default 0.04 MB combined prompt size); split into multiple queries if you exceed it.
+
+### Request body — CSV content the model should read
+
+`.csv` is the one extension where `file_ids` upload does **not** inject contents into the Newton text model's prompt. The file uploads cleanly (200 OK with a `file_id`), `/query` accepts the file_id reference, but the model responds as if no file is attached ("please upload the CSV file"). Verified by uploading the same bytes with `.txt` extension instead — `.txt` Newton reads correctly. The likely explanation is that `.csv` extension routes downstream to the numeric / Omega ingestion path the LLM doesn't observe.
+
+Three workarounds that all work:
+
+**(a) Rename to `.txt` before upload** (cheapest if you're not changing your storage layout):
+
+```bash
+curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
+  -H "Authorization: Bearer $ATAI_API_KEY" \
+  -F "file=@plant_history.txt;type=text/plain"
+# Same bytes that wouldn't be injected as .csv are injected as .txt.
+```
+
+**(b) Inline content directly into `query`** (simplest for small payloads):
+
+```json
+{
+  "query": "Identify the attack rows and report their values:\n\ntimestamp,sensor,value,status\n1000,temp,72.1,normal\n1020,temp,98.7,attack\n1030,temp,99.1,attack",
+  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "max_new_tokens": 250,
+  "sanitize": false
+}
+```
+
+**(c) Use a `data.text` event** with the CSV as a string:
 
 ```json
 {
   "query": "Identify the attack rows and report their values.",
   "events": [
-    { "type": "data.text", "event_data": { "contents": "<full CSV or JSON text>" } }
+    { "type": "data.text", "event_data": { "contents": "timestamp,sensor,value,status\n1000,...\n1020,...,attack\n..." } }
   ],
   "model": "Newton::c2_4_7b_251215a172f6d7",
   "max_new_tokens": 250,
   "sanitize": false
 }
 ```
-
-Either path keeps the data in the same context as the prompt, which is what Newton needs to reason over it. Bound by `max_query_size_mb` server-side (default 0.04 MB combined prompt size); split into multiple queries if you exceed it.
 
 ### Request body — image input
 
@@ -175,9 +253,10 @@ When an image is attached, end-to-end latency jumps from text-only's ~3 s to ~6�
 
 | What | What happens | What to do instead |
 |---|---|---|
-| `file_ids` with `.csv` or `.json` filename | Upload returns 200 with a `file_id`. `/query` accepts the file_id. Newton responds "I don't have access to those details" — the contents are not injected into the prompt context. | Inline content in `query`, **or** use a `data.text` event with the file contents (see *Request body — CSV / JSON*). |
+| `file_ids` with `.csv` filename | Upload returns 200 with a `file_id`. `/query` accepts the file_id. Newton responds "please upload the CSV" — contents are not injected. Same bytes uploaded as `.txt` are read correctly, so the discriminator is the `.csv` extension itself (probably routes to the numeric / Omega ingestion path). | Rename to `.txt` before upload, inline in `query`, or use a `data.text` event. |
 | `file_ids` with the `fil_...` UID instead of the filename | `400 unsupported_file_type` — the API filters by extension on the file_id string, and the UID has no extension. | Use the `file_id` returned from the upload (i.e. the filename), not the `file_uid`. |
 | Upload with `Content-Type: application/json` | `400 invalid_file_type: Unsupported file type: application/json` even though the same error's `suggestion` field lists `application/json` as a supported type. Server-side validation bug. | Upload with `Content-Type: text/plain` (the file extension is what the rest of the pipeline checks). |
+| `data.json` event with `contents` set to a parsed object | `400: Parameter 'contents' should be a <class 'str'>. Got: <class 'dict'>` | Pass `contents` as a serialized JSON string, or just use `data.text` with the JSON text. |
 | `file_ids` with `.mp4` | API accepts; `c2_4_7b` and `c2_5_8b` respond "I'm sorry, but as an AI language model, I don't have the capability to view videos." in ~2 s (consistent with frames never reaching the model). | Use [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md). |
 | `data.base64_img_array` event with `contents: [<base64>, <base64>, ...]` | Schema accepts `contents` as a list but returns `400 event_payload_error: "The data could not be converted"`. Exact accepted payload shape is undocumented. | Send each image as a separate `data.base64_img` event (or upload them via `file_ids`) and set `multi_image: true` if you want them treated as one input. |
 
@@ -441,7 +520,7 @@ const res = await fetch(`${env.ATAI_API_ENDPOINT}/v0.5/query`, {
 | Cites a familiar-looking sensor instead of the actual anomaly | Newton followed priors over state | Pre-pick server-side, emphatic "cite this" rule |
 | Copies your example values verbatim | Concrete identifiers in the prompt | Use placeholder names (`ZZZ000`, `PX`) in examples |
 | Drops half the expected fields | No separator or missing multi-part spec | `part 1 — part 2` format with verb list |
-| "I don't have access to that data" when CSV / JSON is attached via `file_ids` | Tabular file uploaded but contents not injected into prompt context | Inline content in `query`, or use a `data.text` event with the file contents — see *Input Modes* |
+| "Please upload the CSV file" when a `.csv` is attached via `file_ids` | `.csv` extension is the one text-ish file type that doesn't inject contents into the LLM prompt (likely routed to a numeric pipeline). `.json` and `.txt` via `file_ids` both work | Rename to `.txt` before upload, inline content in `query`, or use a `data.text` event — see *Input Modes* |
 | `400 unsupported_file_type` when referencing an uploaded file by `fil_...` UID | API checks file extension on the file_id string | Use the `file_id` (filename) returned from the upload, not the `file_uid` |
 | `400 invalid_file_type: Unsupported file type: application/json` | Upload-side mime validation bug — `application/json` is rejected even though the error message lists it as supported | Upload with `Content-Type: text/plain`; the rest of the pipeline keys off the file extension |
 | "I can't view videos" on `.mp4` attachment | Newton text checkpoints (`c2_4_7b`, `c2_5_8b`) don't process video frames | Use [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) instead |
