@@ -24,28 +24,60 @@ What's currently exposed on `https://api.u1.archetypeai.app/` as of 2026-05-18. 
 
 ## At a glance
 
-| Identifier | Family | API surfaces | Verified on prod |
+**Heads-up on naming:** the same model family ships under different identifier strings depending on which API surface you call. There's no single canonical string. The table below lists the **accepted-by-each-surface** identifier — pass an identifier from a different surface and you get `400 invalid_model_version` (or its equivalent) even when the underlying weights are presumably similar. The unfortunate consequence: you cannot infer the right identifier for one surface from the right identifier for another. Always cross-check.
+
+### Newton C language + vision models
+
+| Family | `/query` (Direct Query) | Batch pipeline (`activity-detection`) `model_variant` |
+|---|---|---|
+| **C 2.5 (8 B, current default)** | `Newton::c2_5_8b_260413b723a9ab` | `newton/c:2.5.1-8b-base` (default) **and** `newton/c:2.5.0-8b-base` |
+| C 2.4 (4.7 B / 7 B) | `Newton::c2_4_7b_251215a172f6d7` | `newton/c:2.4.0-7b-base` |
+| C 2.3 (7 B, older) | not exposed on `/query` | `newton/c:2.3.0-7b-base` |
+
+Source: probed `/query` directly + read `/v0.5/batch/registry/pipelines/ppl_5w8x15v9n69tprdt8h9mg5cffs/schema` (the `activity-detection` pipeline's `ModelVariant` enum). The batch surface exposes the wider catalog (four versions); `/query` is more selective (only two are accepted).
+
+Important caveats:
+
+- **`c2_5_8b` (short, unnamespaced) and `c:2.5.0-8b-base` (semver only) are NOT valid identifiers on `/query`** — probed live, both return `400 invalid_model_version`. They're useful as conceptual handles for "the 2.5 family" but you cannot pass them to the endpoint. Use the full namespaced hash-suffixed form `Newton::c2_5_8b_260413b723a9ab`.
+- **`/query`'s 2.5 build (`c2_5_8b_260413b723a9ab`, dated 2026-04-13) and batch's default `2.5.1-8b-base` may be different patch builds.** The naming doesn't line up — `/query` uses an opaque build hash, batch uses semver. Don't assume bit-for-bit equivalent outputs across surfaces.
+- **None of the Newton C identifiers are accepted as a Lens `model_version`.** Newton C isn't a Lens model — there's no Lens session that wraps it. The closest Lens equivalent for vision is the Activity Monitor Lens.
+
+### Omega numeric encoders
+
+| Family | `/query` (Direct Query) | Batch pipeline (`machine-state-classification`) `model_type` | Lens session `model_version` |
 |---|---|---|---|
-| `Newton::c2_4_7b_251215a172f6d7` | Newton C (text reasoning, image vision) | `/query`, `activity-detection` batch pipeline | ✅ |
-| `Newton::c2_5_8b_260413b723a9ab` | Newton C (text reasoning, image vision) | `/query`, `activity-detection` batch pipeline | ✅ |
-| `OmegaEncoder::omega_embeddings_01` | Omega encoder (sensor → embedding) | `/query`, Machine State Lens | ✅ |
-| `OmegaEncoder::omega_embeddings_1_4` | Omega encoder (sensor → embedding) | `/query`, Machine State Lens | ✅ |
-| `omega_1_4_base` | Omega encoder (sensor → classification) | `machine-state-classification` batch pipeline only | ✅ |
-| `omega_1_3_surface` | Omega encoder, legacy 9-channel | `machine-state-classification` batch pipeline only | ✅ (legacy) |
-| `omega_1_3_power_drive` | Omega encoder, legacy 9-channel | `machine-state-classification` batch pipeline only | ✅ (legacy) |
-| Activity Monitor Lens<br/>`lns-fd669361822b07e2-bc608aa3fdf8b4f9` | Newton vision (video + chart understanding) | Lens session only | ✅ |
-| Machine State Lens<br/>`lns-1d519091822706e2-bc108andqxf8b4os` | Lens-wrapped Omega + KNN | Lens session only | ✅ |
+| **Omega 1.4 (current default)** | `OmegaEncoder::omega_embeddings_1_4` | `omega_1_4_base` (default) **and** `omega_1_4` | `OmegaEncoder::omega_embeddings_1_4` |
+| Omega initial / "01" | `OmegaEncoder::omega_embeddings_01` | not exposed | `OmegaEncoder::omega_embeddings_01` (prod default for Machine State Lens) |
+| Omega 1.3 SLB | not exposed | `omega_1_3_slb` | not exposed |
+| Omega 1.3 Surface | not exposed | `omega_1_3_surface` (legacy, 9-channel) | not exposed |
+| Omega 1.3 Power Drive | not exposed | `omega_1_3_power_drive` (legacy, 9-channel) | not exposed |
 
-## Newton C language models
+Source: probed `/query` directly + read `/v0.5/batch/registry/pipelines/ppl_18zrcb6m1c96ds77sgqbs7cf84/schema` (the `machine-state-classification` pipeline's `ModelType` enum) + cross-referenced [`newton-machine-state`](../newton-machine-state/SKILL.md) for the Lens-side identifiers (which the Lens layer doesn't validate at session-create time — invalid model_versions accept registration and session-creation but fail later at inference, so trust the skills that verified end-to-end usage).
 
-Text-reasoning + image-vision multimodal LLMs.
+Important caveats:
 
-| Identifier | Params | Build date | Use when |
+- **`omega_1_4_base` is NOT valid on `/query`** despite being the obvious-looking identifier. Direct Query only accepts the `OmegaEncoder::omega_embeddings_*` form. Conversely, `OmegaEncoder::omega_embeddings_1_4` is NOT valid as a batch `model_type` — the batch pipeline only accepts the bare `omega_1_X_*` form.
+- **`omega_1_4_base` and `OmegaEncoder::omega_embeddings_1_4` are probably the same encoder weights but this hasn't been bit-for-bit verified.** A direct comparison of their output embeddings on the same input would settle it — until then, treat them as nominally-equivalent-but-formally-different.
+- **The Lens layer doesn't validate `model_version` at session-create time.** I confirmed this by registering a lens with `OmegaEncoder::nonexistent_xyz` and successfully creating a session that reached `RUNNING` status. The validation happens later in the inference path. Don't use Lens registration as a "is this identifier valid?" probe.
+
+### Pre-configured Lens deployments
+
+These are Lens IDs already mounted on prod. You connect to the lens_id and the lens handles model invocation internally. Each lens pins a specific model + processor combination — to switch underlying model versions, switch lens IDs.
+
+| Lens ID | Processor | Pinned model_version | Purpose |
 |---|---|---|---|
-| `Newton::c2_4_7b_251215a172f6d7` | 4.7 B | 2025-12-15 | Latency-sensitive paths that can tolerate occasional structural mistakes. ~3–6 s typical for text-only queries; cheaper to run. |
-| **`Newton::c2_5_8b_260413b723a9ab`** | **8 B** | **2026-04-13** | **Default for structured-output reasoning.** Materially better JSON shape compliance and richer citations on the SWaT operator-suggestions prompt (9-of-9 valid topology-checked cards every run vs c2_4_7b's 3-of-9 average). ~13 s per call. |
+| `lns-1286e5d1d1b84a77-af311d579cc14869` | `lens_camera_processor` | `Newton::c2_5_8b_260413b723a9ab` | **Activity Monitor — C 2.5 (current).** Video activity detection / chart understanding on the newer 8B Newton C. Default `focus = "Describe the video."`, `temporal_focus = 5`, `camera_buffer_size = 5`. |
+| `lns-fd669361822b07e2-bc608aa3fdf8b4f9` | `lens_camera_processor` | `Newton::c2_4_7b_251215a172f6d7` | Activity Monitor — C 2.4 (older variant). Same processor / parameter shape; uses the smaller 4.7B model. The lens currently referenced from [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) — worth migrating to the C 2.5 lens above for newer projects. |
+| `lns-1d519091822706e2-bc108andqxf8b4os` | `lens_timeseries_state_processor` | `OmegaEncoder::omega_embeddings_01` | **Machine State Lens — n-shot KNN classifier.** Real-time per-window classification with SSE output, hosted KNN over n-shot focus CSVs. Default buffer/window/step = 1024 (much larger than the per-window probes in `/query`), `normalize_input: true`. Used by [`newton-machine-state`](../newton-machine-state/SKILL.md). |
+| _(lens_id not yet probed by us)_ | `lens_anomaly_detector` | `OmegaEncoder::omega_embeddings_1_4` | **Anomaly Detector Lens.** Fit-predict isolation-forest-style detector over Omega 1.4 embeddings (768-dim vectors, 100 estimators). `mode: fit_predict`, `normalize_input: true`, up to 1 GB of accumulated embedding state per session. Different processor + different model from the Machine State Lens — pick this when you want unsupervised anomaly detection rather than n-shot KNN. List via `GET /v0.5/lens/metadata` to get the lens_id. |
 
-Both checkpoints accept the same input modes via `/query`:
+A few notes:
+
+- **The Machine State Lens uses `normalize_input: true`** (per-window normalization inside the encoder). That's the *opposite* of what [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) recommends for `/query` workloads. The Lens layer has historically run this way (the flag isn't exposed through the Lens config to override) — see [`newton-machine-state`](../newton-machine-state/SKILL.md) and the matching batch skill for pre-normalization workarounds.
+- **There are two Activity Monitor lenses on prod** — both serve the same purpose but at different model versions. The C 2.5 lens (`lns-1286e5d1d1b84a77-…`) is the one to use for newer work; the C 2.4 lens remains mounted for backwards compatibility.
+- **Lens registration does NOT validate `model_version` at session-create time.** I probed: registering a lens with `OmegaEncoder::nonexistent_xyz` succeeds and the session reaches `RUNNING` status — the failure surfaces only when data streams through and inference is attempted. Do not use Lens registration as a "is this identifier valid?" probe; trust the pinned values in the table above (which come from actual mounted lenses on prod).
+
+## Newton C input modes (when used via `/query`)
 
 | Input | Path | Notes |
 |---|---|---|
@@ -56,66 +88,29 @@ Both checkpoints accept the same input modes via `/query`:
 | Image (PNG / JPG / JPEG) | `file_ids` with the filename, **or** `data.base64_img` event | Vision pipeline activates; latency rises to ~6–8 s. **Use the `file_id` (filename) from the upload response, not the `file_uid` (`fil_…`) — the API filters file types by extension on the file_id string.** |
 | Video (MP4) | `file_ids` of `.mp4` filename | API accepts; both checkpoints currently respond "I can't see videos" in ~2 s (frames don't reach the model). Use the Activity Monitor Lens instead — see [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md). |
 
-Used by: [`newton-query-prompting`](../newton-query-prompting/SKILL.md), [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md), and the [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) / [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo) / [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo) reference apps.
+For details on the Direct Query call shape, see [`newton-query-prompting`](../newton-query-prompting/SKILL.md). For batch Newton C usage (JSONL prompts at scale), see [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md). Reference apps that exercise these patterns: [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query), [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo), [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo).
 
-## Omega encoders
+## Omega input shape (when used via `/query`)
 
-Numeric-only encoders. Input is channel-first time-series; output is per-channel 768-dim embedding vectors. Different model families across the three API surfaces — same encoder family in spirit, but the identifiers are **not interchangeable** and the underlying checkpoints differ.
+Send `query: ""` plus a `data.numeric_array` event carrying the window in `event_data.contents` (channel-first 2D: outer = channels, inner = window samples). For most anomaly-detection workloads, pre-normalize with a global scaler and pass `normalize_input: false` — the per-window normalization on `true` erases cross-window amplitude signal.
 
-### Via `/query` (Direct Query)
+**The same input sent to `omega_embeddings_01` and `omega_embeddings_1_4` produces materially different embedding vectors** (same `[N × 768]` shape, different values). They're different checkpoints, not the same model under different names. Re-build any cached KNN library when switching identifiers. Empirical data from the SWaT 6-stage benchmark: swapping `_01` → `_1_4` lifts library leave-one-out KNN accuracy on the two non-saturated stages (P1 93→98 %, P3 93→97 %) with no regressions; per-call latency is within 5 % on isolated calls but ~2 × slower under sustained back-to-back load.
 
-| Identifier | Notes |
-|---|---|
-| `OmegaEncoder::omega_embeddings_01` | Initial release. Wide adoption in newer demos before `1_4` became preferred. |
-| **`OmegaEncoder::omega_embeddings_1_4`** | **Default for new Direct Query projects.** Replaces `_01` for most workloads. On the SWaT 6-stage KNN benchmark, swapping `_01` → `_1_4` lifts library leave-one-out accuracy on the two non-saturated stages (P1 93→98 %, P3 93→97 %) with no regressions. Note: ~2 × slower than `_01` under sustained back-to-back call load (~13 s vs ~6 s sustained on a 6-stage fan-out); isolated single-call latency is within 5 %. |
-
-**Important:** the same input window sent to `omega_embeddings_01` and `omega_embeddings_1_4` produces **different embedding vectors** — same `[N × 768]` shape, materially different values. They're different checkpoints, not the same model under different names. Re-build any KNN library you've stored when switching identifiers.
-
-Send these with `query: ""` and a `data.numeric_array` event carrying the window in `event_data.contents` (channel-first 2D: outer = channels, inner = window samples). Pre-normalize with a global scaler and pass `normalize_input: false` for most anomaly-detection workloads — the per-window normalization on `true` erases cross-window amplitude signal. Used by [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md).
-
-### Via the `machine-state-classification` batch pipeline
-
-| Identifier | Channels | When to use |
-|---|---|---|
-| **`omega_1_4_base`** | Arbitrary | **Default.** Generic, no channel-count constraint. Suitable for almost every dataset. |
-| `omega_1_3_surface` | Exactly 9 | Legacy. Use only if you're working from an existing `omega_1_3_surface` n-shot library. |
-| `omega_1_3_power_drive` | Exactly 9 | Legacy. Same caveat. |
-
-These names are **only valid as the `model_type` field of the batch-job parameters block**. They will fail with `400 invalid_model_version` if you try to pass them to `/query`. Used by [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md).
-
-### Via Machine State Lens sessions
-
-The streaming Lens accepts both `OmegaEncoder::omega_embeddings_01` and `OmegaEncoder::omega_embeddings_1_4` as the `model_version` in `model_parameters`. `omega_embeddings_01` is the prod default; `omega_embeddings_1_4` is documented as a staging fallback that also works on prod. Used by [`newton-machine-state`](../newton-machine-state/SKILL.md).
-
-### Why three identifier conventions?
-
-| Surface | Convention | Example |
-|---|---|---|
-| `/query` (Direct Query) | `OmegaEncoder::<name>` | `OmegaEncoder::omega_embeddings_1_4` |
-| Batch pipeline | bare `omega_<version>_<variant>` | `omega_1_4_base` |
-| Lens session | `OmegaEncoder::<name>` (same as Direct Query) | `OmegaEncoder::omega_embeddings_1_4` |
-
-`omega_1_4_base` and `OmegaEncoder::omega_embeddings_1_4` are **probably** the same encoder weights exposed under different identifiers (the version numbers align), but this has not been verified by comparing their outputs on the same input. Don't assume bit-for-bit equivalence across surfaces.
-
-## Vision lenses
-
-For video + image understanding via Lens sessions (separate from Newton C's `/query` image vision). Used by [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md).
-
-| Lens ID | Family | When to use |
-|---|---|---|
-| `lns-fd669361822b07e2-bc608aa3fdf8b4f9` | Newton vision (~2 B params) | Video activity detection, chart/dashboard understanding, Q&A over a video stream, any time you need video frames analyzed (Newton C `/query` doesn't process video). |
+For full Omega `/query` + local KNN guidance, see [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md).
 
 ## Recommended defaults by use case
 
-| Use case | Model | Surface | Skill |
+| Use case | Model / Lens | Surface | Skill |
 |---|---|---|---|
 | Operator suggestions / structured JSON output from text state | `Newton::c2_5_8b_260413b723a9ab` | `/query` | [`newton-query-prompting`](../newton-query-prompting/SKILL.md) |
-| Stateless per-window classification (KNN + Omega) | `OmegaEncoder::omega_embeddings_1_4` | `/query` | [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) |
-| Streaming per-window classification with a hosted KNN | `OmegaEncoder::omega_embeddings_01` (prod default) | Machine State Lens | [`newton-machine-state`](../newton-machine-state/SKILL.md) |
-| Batch classification of millions of rows | `omega_1_4_base` | `machine-state-classification` batch pipeline | [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md) |
-| Batch JSONL prompting (many prompts, async) | `Newton::c2_5_8b_260413b723a9ab` | `activity-detection` batch pipeline | [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md) |
 | Image description (single screenshot or chart) | `Newton::c2_5_8b_260413b723a9ab` | `/query` with `file_ids` or `data.base64_img` | [`newton-query-prompting`](../newton-query-prompting/SKILL.md) |
-| Video activity detection / Q&A | Newton vision Lens | Lens session | [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) |
+| Stateless per-window classification (KNN + Omega) | `OmegaEncoder::omega_embeddings_1_4` | `/query` | [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) |
+| Streaming per-window classification with a hosted KNN | Machine State Lens (`lns-1d519091822706e2-…`) — pins `OmegaEncoder::omega_embeddings_01` | Lens session | [`newton-machine-state`](../newton-machine-state/SKILL.md) |
+| Streaming unsupervised anomaly detection | Anomaly Detector Lens — pins `OmegaEncoder::omega_embeddings_1_4` + isolation-forest detector | Lens session | (no dedicated skill yet; new) |
+| Batch classification of millions of rows | `omega_1_4_base` (`model_type`) | `machine-state-classification` batch pipeline | [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md) |
+| Batch JSONL prompting (many prompts, async) | `newton/c:2.5.1-8b-base` (`model_variant`) | `activity-detection` batch pipeline | [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md) |
+| Video activity detection / Q&A (C 2.5, recommended) | Activity Monitor C 2.5 Lens (`lns-1286e5d1d1b84a77-…`) — pins `Newton::c2_5_8b_260413b723a9ab` | Lens session | [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) (referenced lens_id is the C 2.4 variant; migrate to the C 2.5 one for new work) |
+| Video activity detection / Q&A (legacy C 2.4) | Activity Monitor Lens (`lns-fd669361822b07e2-…`) — pins `Newton::c2_4_7b_251215a172f6d7` | Lens session | [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md) |
 
 ## Verification
 
