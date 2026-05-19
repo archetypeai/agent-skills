@@ -15,7 +15,7 @@ description: >
 
 # Newton Machine State Classification (Batch)
 
-Create and monitor asynchronous batch jobs that classify time-series sensor data using the Machine State pipeline. Process large datasets (millions of rows) without maintaining a real-time session. The streaming counterpart is [`newton-machine-state`](../newton-machine-state/SKILL.md) — same encoder + classifier, different orchestration.
+Create and monitor asynchronous batch jobs that classify time-series sensor data using the Machine State pipeline. Process large datasets (millions of rows) without maintaining a real-time session. The streaming counterpart is [`newton-machine-state`](../newton-machine-state/SKILL.md) — same encoder + classifier, different orchestration. For stateless per-window classification with direct access to embeddings (no Lens, no session lifecycle), see [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) — `/query` with the Omega encoder plus local KNN.
 
 ## When to Apply
 
