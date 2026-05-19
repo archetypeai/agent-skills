@@ -76,7 +76,7 @@ The canonical operator-suggestion shape:
   "system_prompt": "<SYSTEM_PROMPT with rules + output shape>",
   "instruction_prompt": "<same as system_prompt>",
   "file_ids": [],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 700,
   "sanitize": false
 }
@@ -102,7 +102,7 @@ curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
 {
   "query": "What is the status field and which sensor has the highest value?",
   "file_ids": ["plant_state.json"],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 250,
   "sanitize": false
 }
@@ -115,7 +115,7 @@ Verified: Newton reads obscure keys correctly (e.g. `alpha_zorlon_cannon: 42.7` 
 ```json
 {
   "query": "What is the status field?\n\n{\"plant\":\"P3\",\"status\":\"attack\",\"sensors\":{\"LIT301\":850}}",
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 200,
   "sanitize": false
 }
@@ -129,7 +129,7 @@ Verified: Newton reads obscure keys correctly (e.g. `alpha_zorlon_cannon: 42.7` 
   "events": [
     { "type": "data.text", "event_data": { "contents": "<full JSON or text>" } }
   ],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 200,
   "sanitize": false
 }
@@ -171,7 +171,7 @@ curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
 ```json
 {
   "query": "Identify the attack rows and report their values:\n\ntimestamp,sensor,value,status\n1000,temp,72.1,normal\n1020,temp,98.7,attack\n1030,temp,99.1,attack",
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 250,
   "sanitize": false
 }
@@ -185,7 +185,7 @@ curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
   "events": [
     { "type": "data.text", "event_data": { "contents": "timestamp,sensor,value,status\n1000,...\n1020,...,attack\n..." } }
   ],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 250,
   "sanitize": false
 }
@@ -209,7 +209,7 @@ curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
 {
   "query": "Describe this dashboard. Identify any stages flagged as anomalous.",
   "file_ids": ["dashboard.png"],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 400,
   "sanitize": false
 }
@@ -228,7 +228,7 @@ curl -s -X POST "$ATAI_API_ENDPOINT/v0.5/files" \
       "event_data": { "contents": "<base64 string>", "mime_type": "image/png" }
     }
   ],
-  "model": "Newton::c2_4_7b_251215a172f6d7",
+  "model": "Newton::c2_5_8b_260413b723a9ab",
   "max_new_tokens": 300,
   "sanitize": false
 }
@@ -505,7 +505,7 @@ const res = await fetch(`${env.ATAI_API_ENDPOINT}/v0.5/query`, {
   body: JSON.stringify({
     query: 'Describe this dashboard.',
     file_ids: [up.file_id],
-    model: 'Newton::c2_4_7b_251215a172f6d7',
+    model: 'Newton::c2_5_8b_260413b723a9ab',
     max_new_tokens: 400,
     sanitize: false
   })

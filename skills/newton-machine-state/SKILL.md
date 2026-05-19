@@ -277,6 +277,8 @@ Canonical shape: the subsystems share the same n-shot focus files (`swat_normal.
 
 `omega_embeddings_1_4` is the current default encoder version for Machine State. Other Omega encoder versions may be available on your account (newer builds, domain-specialized variants) — check with your Newton API contact for the current list, then swap the `model_version` string accordingly.
 
+> **Note on lens-pinned vs override-able defaults.** The platform-mounted Machine State Lens (`lns-1d519091822706e2-…`) is pinned to `OmegaEncoder::omega_embeddings_01` in its base configuration — that's what `GET /v0.5/lens/metadata` reports as the lens's default. When you register a *child* lens via `POST /v0.5/lens/register` with your own `model_parameters` (as in the snippet above), the `model_version` you pass overrides the inherited default. `omega_embeddings_1_4` is what this skill recommends and what most current demos use; the `_01` value in the platform-mounted base is what older sessions inherit if no override is supplied. See [`newton-models`](../newton-models/SKILL.md) for the full catalog of identifiers exposed across `/query`, batch, and Lens surfaces.
+
 Streaming per window fans out too — transpose the current window to channel-first (`[[col1 values], [col2 values], ...]`, not row-major) and `POST /lens/sessions/events/process` to each session in parallel. On the consumer side the browser opens N concurrent `EventSource` connections (one per session) and bucket-sorts incoming `inference.result` events by session ID to update per-subsystem state.
 
 **When to prefer N parallel sessions over 1 shared session:**
