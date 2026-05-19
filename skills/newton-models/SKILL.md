@@ -163,8 +163,43 @@ This skill goes stale. To refresh:
 
 1. Run the verification probes above for each listed identifier — any that now return `400 invalid_model_version` is gone from your account.
 2. Try the latest checkpoint suffix the platform team mentions (e.g. `c2_6_…` if it appears in release notes). If it `200`s on `/query`, add it to the *Newton C* table.
-3. Check the `omega_embeddings_*` series for new versions (after `1_4` the next would be `1_5` or similar). Same probe pattern.
-4. When a `/v0.5/models` endpoint ships, this skill should mostly become a thin pointer at it and the dynamic registry takes over.
-5. Cross-reference with the existing per-capability skills — if a skill's recommended-default identifier disagrees with this catalog, one of them is out of date.
+3. Pull the live batch enums via `GET /v0.5/batch/registry/pipelines/{ppl_id}/schema` for `machine-state-classification` (Omega `model_type`) and `activity-detection` (Newton C `model_variant`) — diff against the catalog tables and add anything new.
+4. Check `GET /v0.5/lens/metadata` for new Lens deployments. Each entry has the lens_id and the pinned `model_version` — surface any new ones in the *Pre-configured Lens deployments* table.
+5. When a `/v0.5/models` endpoint ships, this skill should mostly become a thin pointer at it and the dynamic registry takes over.
+6. Cross-reference with the existing per-capability skills — if a skill's recommended-default identifier disagrees with this catalog, one of them is out of date.
+
+### Checklist: a new C-model or Omega checkpoint is announced
+
+When the platform team announces a new model build, this is the propagation pass across the skills registry. Roughly 30 minutes once the new identifier strings are known.
+
+**New Newton C version (e.g. `c2_6_…`):**
+
+| Skill | What to update | When |
+|---|---|---|
+| `newton-models` | Add to Newton C surface tables + Recommended-defaults; refresh the *Last verified* date | Always — this is the registry |
+| `newton-query-prompting` | Model-families overview paragraph + example identifiers | If the new model is the new default for structured-output reasoning |
+| `newton-activity-detection-batch` | The `newton/c:X.Y.Z-Nb-base` list in the *Tunable knobs* section | When the new variant appears in the batch pipeline schema |
+| `newton-activity-monitor` | Lens IDs table + the Step 4 example's `lens_id` | When a new Activity Monitor lens is mounted that pins the new model |
+
+**New Omega checkpoint (e.g. `omega_1_5_*`):**
+
+| Skill | What to update | When |
+|---|---|---|
+| `newton-models` | Omega surface tables + Recommended-defaults | Always |
+| `newton-machine-state` | Default `model_version`; any normalization caveats | When the new identifier shows up in `/lens/metadata` and is the new prod default |
+| `newton-machine-state-batch` | `model_type` enum in *Available model types* section | When the new variant appears in the batch pipeline schema |
+| `newton-machine-state-direct-query` | Code examples + the recommended-default callout | If a LOO comparison on a real dataset shows the new model meets or beats the previous |
+
+**Pre-promotion verification (either type):**
+
+1. Run the relevant probe script from `newton-swat-demo-direct-query/scripts/` against the candidate identifier — `compare_omega_models.py` or `compare-newton-models.js`. The point is to confirm the new identifier returns 200 on each surface the documentation claims it's on.
+2. For Omega upgrades, rebuild the SWaT KNN library with the new identifier and check that LOO accuracy doesn't regress.
+3. For Newton C upgrades, run the SWaT operator-suggestion prompt and check JSON-card validity + topology compliance.
+
+**External repos that also pin models (worth a refresh, not blocking):**
+
+- [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) — pins both an Omega and a Newton C model.
+- [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo) — pins a Newton C model.
+- [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo) — pins a Newton C model.
 
 Last verified on `api.u1.archetypeai.app` on 2026-05-18.
