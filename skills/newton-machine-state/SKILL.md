@@ -13,7 +13,7 @@ description: >
 
 # Newton Machine State Lens
 
-Classify time-series sensor data using n-shot learning. The Machine State Lens uses labeled CSV examples (focus files) to classify new data streams via KNN over sliding windows.
+Classify time-series sensor data using n-shot learning. The Machine State Lens uses labeled CSV examples (focus files) to classify new data streams via KNN over sliding windows. The batch counterpart is [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md) — same encoder + classifier, asynchronous job. For stateless per-window classification with direct access to embeddings (no Lens, no session lifecycle), see [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) — `/query` with the Omega encoder plus local KNN.
 
 ## When to Apply
 
