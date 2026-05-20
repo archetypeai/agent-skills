@@ -431,7 +431,7 @@ Bump a `CACHE_VERSION` integer baked into the cache key whenever you change the 
 
 ## Building an embedding-viewer frontend
 
-If you're wrapping Omega embeddings in a React/Svelte/etc. UI — playback dashboard, trajectory plot, anomaly browser — **read [`DESIGN.md`](../../DESIGN.md) at the root of this repo before writing any CSS**. The Archetype design system (Tailwind v4 + `@archetypeai/ds-lib-tokens` + Geist sans/mono + OKLCH palette + dark-first) is the expected visual language for these demos. `newton-swat-demo` and `newton-wifi-demo` are the reference implementations — pattern-match them for layout (Menubar, Card, Badge with `good`/`warning`/`critical` variants, mono numbers, sharp 2px radii). Setting this up at the start is much cheaper than retrofitting later.
+If you're wrapping Omega embeddings in a React/Svelte/etc. UI — playback dashboard, trajectory plot, anomaly browser — **read [`DESIGN.md`](../../DESIGN.md) at the root of this repo before writing any CSS**. The Archetype design system (Tailwind v4 + `@archetypeai/ds-lib-tokens` + Geist sans/mono + OKLCH palette + dark-first) is the expected visual language for these demos. `archetypeai-swat-demo` and `archetypeai-wifi-demo` are the reference implementations — pattern-match them for layout (Menubar, Card, Badge with `good`/`warning`/`critical` variants, mono numbers, sharp 2px radii). Setting this up at the start is much cheaper than retrofitting later.
 
 ### Click-to-replay anomaly windows
 

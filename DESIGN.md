@@ -196,7 +196,7 @@ The mono font (`font-mono`) is used deliberately on specific UI elements — nev
 
 ### PlaybackBar (replay / time-scrub control)
 
-Used in any demo that replays a time-indexed dataset — `newton-swat-demo` (10× SWaT replay), `newton-wifi-demo` (per-window walkthrough), `newton-obd2-demo` (1×–20× session playback). A horizontal strip immediately under the Menubar (`border-b px-4 py-2`), with these elements left-to-right:
+Used in any demo that replays a time-indexed dataset — `archetypeai-swat-demo` (10× SWaT replay), `archetypeai-wifi-demo` (per-window walkthrough), `archetypeai-obd2-demo` (1×–20× session playback). A horizontal strip immediately under the Menubar (`border-b px-4 py-2`), with these elements left-to-right:
 
 - **Play / pause icon button** — `Button variant="outline" size="icon"`, swaps a `Play` and `Pause` Lucide icon
 - **Reset icon button** — same `outline icon`, `RotateCcw` Lucide icon
@@ -215,7 +215,7 @@ Separating the bar from the panel grid (own row, own border) keeps temporal cont
 
 ### Schematic Equipment Icons (custom SVG)
 
-For domain hardware that doesn't exist in Lucide — tanks, ultrafiltration units, reverse-osmosis stages, drilling rigs, pumps, dosing skids — use hand-drawn schematic SVGs rather than reaching for a stock library. The convention is consistent across `newton-swat-demo`, `newton-drilling-demo`, and the other Newton demos that visualize physical equipment:
+For domain hardware that doesn't exist in Lucide — tanks, ultrafiltration units, reverse-osmosis stages, drilling rigs, pumps, dosing skids — use hand-drawn schematic SVGs rather than reaching for a stock library. The convention is consistent across `archetypeai-swat-demo`, `archetypeai-drilling-demo`, and the other Newton demos that visualize physical equipment:
 
 ```svelte
 <svg
@@ -271,11 +271,11 @@ When the demo has a clear "raw input | model interpretation" duality — timelin
 - Each pane handles its own internal scroll; the page never scrolls
 - Both data panes are visually weighted equally (`1fr` each) — neither side is "subordinate"
 
-`newton-obd2-demo` uses this for raw OBD-II playback on the left and the Omega embedding trajectory on the right, time-synced through a shared scrubber. The pattern generalizes to any "compare what the sensors saw against what the model concluded" case.
+`archetypeai-obd2-demo` uses this for raw OBD-II playback on the left and the Omega embedding trajectory on the right, time-synced through a shared scrubber. The pattern generalizes to any "compare what the sensors saw against what the model concluded" case.
 
 ### Menubar
 
-Identical across `newton-swat-demo`, `newton-drilling-demo`, `newton-wifi-demo`, `newton-grid-demo`, `newton-wildfire-demo` — treat this as the canonical pattern, copy verbatim rather than re-inventing:
+Identical across `archetypeai-swat-demo`, `archetypeai-drilling-demo`, `archetypeai-wifi-demo`, `archetypeai-grid-demo`, `archetypeai-wildfire-demo` — treat this as the canonical pattern, copy verbatim rather than re-inventing:
 
 ```svelte
 <header class="border-border flex items-center justify-between border-b px-4 py-2">
@@ -303,7 +303,7 @@ Key details:
 
 ### Stage / Pipeline Panel Pattern
 
-When the demo shows a multi-stage physical process (water-treatment stages, drilling-rig subsystems, manufacturing line cells), each stage gets a dedicated `BackgroundCard` laid out as a column of: **stage code + status dot + status badge → schematic SVG → mono stage name → tabular readouts → optional history strip**. The pattern is from `newton-swat-demo`'s `stage-card.svelte` (P1–P6 of the water-treatment plant) and transfers wholesale to any per-subsystem dashboard.
+When the demo shows a multi-stage physical process (water-treatment stages, drilling-rig subsystems, manufacturing line cells), each stage gets a dedicated `BackgroundCard` laid out as a column of: **stage code + status dot + status badge → schematic SVG → mono stage name → tabular readouts → optional history strip**. The pattern is from `archetypeai-swat-demo`'s `stage-card.svelte` (P1–P6 of the water-treatment plant) and transfers wholesale to any per-subsystem dashboard.
 
 ```svelte
 <BackgroundCard class="flex flex-col gap-3 p-4">
@@ -488,11 +488,11 @@ Archetype AI interfaces are primarily designed for **desktop monitoring environm
 
 | Demo | Data Type | Newton API | Repo |
 |------|-----------|------------|------|
-| **Traffic Monitor** | HLS video stream (Caltrans CCTV) | Lens session + `model.query` (vision) | [archetypeai/newton-traffic-demo](https://github.com/archetypeai/newton-traffic-demo) |
-| **Wildfire Watch** | JPEG snapshots (ALERTCalifornia 1,200+ cameras) | Lens session + `model.query` (vision) | [archetypeai/newton-wildfire-demo](https://github.com/archetypeai/newton-wildfire-demo) |
-| **Earthquake Monitor** | USGS earthquake catalog (structured text) | Direct query `/v0.5/query` (reasoning) | [archetypeai/newton-earthquake-demo](https://github.com/archetypeai/newton-earthquake-demo) |
-| **Grid Monitor** | CAISO supply/demand CSVs (5-min intervals) | Direct query `/v0.5/query` (reasoning) | [archetypeai/newton-grid-demo](https://github.com/archetypeai/newton-grid-demo) |
-| **Drilling Monitor** | Volve oil field sensor data (14 wells, North Sea) | Machine State Lens (SSE streaming) | [archetypeai/newton-drilling-demo](https://github.com/archetypeai/newton-drilling-demo) |
-| **WiFi Occupancy** | GHOST-IoT smart-home capture (10 days, 9 WiFi clients, anonymized) | Direct query `/v0.5/query` (reasoning) | [archetypeai/newton-wifi-demo](https://github.com/archetypeai/newton-wifi-demo) |
-| **Water Treatment Plant Monitor** | SWaT dataset (iTrust/SUTD) — 6-stage plant, 7 days normal + 4 days of 36 cyber-physical attacks | Machine State Lens (6 parallel SSE sessions) + `/query` (operator suggestions) | [archetypeai/newton-swat-demo](https://github.com/archetypeai/newton-swat-demo) |
-| **OBD-II Embedding Viewer** | OBD-II logs from a 2020 Lexus RX 450hL (2 sessions × ~50 min, 25 sensors) | Omega 1.3 encoder (local checkpoint, precomputed embeddings) | [archetypeai/newton-obd2-demo](https://github.com/archetypeai/newton-obd2-demo) |
+| **Traffic Monitor** | HLS video stream (Caltrans CCTV) | Lens session + `model.query` (vision) | [archetypeai/archetypeai-traffic-demo](https://github.com/archetypeai/archetypeai-traffic-demo) |
+| **Wildfire Watch** | JPEG snapshots (ALERTCalifornia 1,200+ cameras) | Lens session + `model.query` (vision) | [archetypeai/archetypeai-wildfire-demo](https://github.com/archetypeai/archetypeai-wildfire-demo) |
+| **Earthquake Monitor** | USGS earthquake catalog (structured text) | Direct query `/v0.5/query` (reasoning) | [archetypeai/archetypeai-earthquake-demo](https://github.com/archetypeai/archetypeai-earthquake-demo) |
+| **Grid Monitor** | CAISO supply/demand CSVs (5-min intervals) | Direct query `/v0.5/query` (reasoning) | [archetypeai/archetypeai-grid-demo](https://github.com/archetypeai/archetypeai-grid-demo) |
+| **Drilling Monitor** | Volve oil field sensor data (14 wells, North Sea) | Machine State Lens (SSE streaming) | [archetypeai/archetypeai-drilling-demo](https://github.com/archetypeai/archetypeai-drilling-demo) |
+| **WiFi Occupancy** | GHOST-IoT smart-home capture (10 days, 9 WiFi clients, anonymized) | Direct query `/v0.5/query` (reasoning) | [archetypeai/archetypeai-wifi-demo](https://github.com/archetypeai/archetypeai-wifi-demo) |
+| **Water Treatment Plant Monitor** | SWaT dataset (iTrust/SUTD) — 6-stage plant, 7 days normal + 4 days of 36 cyber-physical attacks | Machine State Lens (6 parallel SSE sessions) + `/query` (operator suggestions) | [archetypeai/archetypeai-swat-demo](https://github.com/archetypeai/archetypeai-swat-demo) |
+| **OBD-II Embedding Viewer** | OBD-II logs from a 2020 Lexus RX 450hL (2 sessions × ~50 min, 25 sensors) | Omega 1.3 encoder (local checkpoint, precomputed embeddings) | [archetypeai/archetypeai-obd2-demo](https://github.com/archetypeai/archetypeai-obd2-demo) |

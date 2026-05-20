@@ -88,7 +88,7 @@ A few notes:
 | Image (PNG / JPG / JPEG) | `file_ids` with the filename, **or** `data.base64_img` event | Vision pipeline activates; latency rises to ~6–8 s. **Use the `file_id` (filename) from the upload response, not the `file_uid` (`fil_…`) — the API filters file types by extension on the file_id string.** |
 | Video (MP4) | `file_ids` of `.mp4` filename | API accepts; both checkpoints currently respond "I can't see videos" in ~2 s (frames don't reach the model). Use the Activity Monitor Lens instead — see [`newton-activity-monitor`](../newton-activity-monitor/SKILL.md). |
 
-For details on the Direct Query call shape, see [`newton-query-prompting`](../newton-query-prompting/SKILL.md). For batch Newton C usage (JSONL prompts at scale), see [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md). Reference apps that exercise these patterns: [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query), [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo), [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo).
+For details on the Direct Query call shape, see [`newton-query-prompting`](../newton-query-prompting/SKILL.md). For batch Newton C usage (JSONL prompts at scale), see [`newton-activity-detection-batch`](../newton-activity-detection-batch/SKILL.md). Reference apps that exercise these patterns: [`archetypeai-swat-demo-direct-query`](https://github.com/archetypeai/archetypeai-swat-demo-direct-query), [`archetypeai-earthquake-demo`](https://github.com/archetypeai/archetypeai-earthquake-demo), [`archetypeai-grid-demo`](https://github.com/archetypeai/archetypeai-grid-demo).
 
 ## Omega input shape (when used via `/query`)
 
@@ -150,7 +150,7 @@ Submit a no-op job with a tiny inference CSV; the response surfaces the validate
 
 ### Compare two identifiers head-to-head
 
-[`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) ships two reusable comparison scripts:
+[`archetypeai-swat-demo-direct-query`](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) ships two reusable comparison scripts:
 
 - `scripts/compare_omega_models.py` — per-phase latency comparison (queue / load / inference / wall) between any two Omega `/query` identifiers, with random or CSV input.
 - `scripts/compare-newton-models.js` — runs the SWaT operator-suggestions prompt against any two Newton C identifiers, validates JSON + topology, reports valid-card counts alongside latency.
@@ -192,14 +192,14 @@ When the platform team announces a new model build, this is the propagation pass
 
 **Pre-promotion verification (either type):**
 
-1. Run the relevant probe script from `newton-swat-demo-direct-query/scripts/` against the candidate identifier — `compare_omega_models.py` or `compare-newton-models.js`. The point is to confirm the new identifier returns 200 on each surface the documentation claims it's on.
+1. Run the relevant probe script from `archetypeai-swat-demo-direct-query/scripts/` against the candidate identifier — `compare_omega_models.py` or `compare-newton-models.js`. The point is to confirm the new identifier returns 200 on each surface the documentation claims it's on.
 2. For Omega upgrades, rebuild the SWaT KNN library with the new identifier and check that LOO accuracy doesn't regress.
 3. For Newton C upgrades, run the SWaT operator-suggestion prompt and check JSON-card validity + topology compliance.
 
 **External repos that also pin models (worth a refresh, not blocking):**
 
-- [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) — pins both an Omega and a Newton C model.
-- [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo) — pins a Newton C model.
-- [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo) — pins a Newton C model.
+- [`archetypeai-swat-demo-direct-query`](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) — pins both an Omega and a Newton C model.
+- [`archetypeai-earthquake-demo`](https://github.com/archetypeai/archetypeai-earthquake-demo) — pins a Newton C model.
+- [`archetypeai-grid-demo`](https://github.com/archetypeai/archetypeai-grid-demo) — pins a Newton C model.
 
 Last verified on `api.u1.archetypeai.app` on 2026-05-18.

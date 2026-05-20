@@ -146,4 +146,4 @@ curl -s -X POST "$BASE_URL/files/uploads/{upload_id}/abort" \
 
 ## Example Code
 
-See [archetype-batch-examples](https://github.com/archetypeai/archetype-batch-examples) for full Python, shell, and curl implementations.
+See [archetypeai-batch-examples-volve](https://github.com/archetypeai/archetypeai-batch-examples-volve) for full Python, shell, and curl implementations.
