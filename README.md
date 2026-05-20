@@ -17,6 +17,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 | [newton-machine-state-batch](skills/newton-machine-state-batch/) | Run the Machine State pipeline as an async batch job (Omega 1.4 by default; millions of rows via n-shot KNN) |
 | [newton-activity-detection-batch](skills/newton-activity-detection-batch/) | Run text-in / text-out batch jobs on the C model via the `activity-detection` pipeline — narratives over large CSV/log datasets, with MapReduce / hierarchical-reduce patterns and quality-cliff guidance |
 | [omega-local](skills/omega-local/) | Run the Omega 1.3 encoder locally from a checkpoint — offline embeddings, custom downstream models (KNN/IF/PCA), windowing & normalization patterns |
+| [omega-preflight](skills/omega-preflight/) | Vet a binary time-series dataset for `omega_1_4_base` + `machine-state-classification` before a full batch run — 10 fast static checks plus an optional held-out pilot against the real API |
 
 ## Quick Start
 
@@ -42,6 +43,7 @@ cp -r skills/* your-project/.claude/skills/
 /newton-machine-state-batch  # Run Machine State as a batch job (async, large datasets)
 /newton-activity-detection-batch  # Batch text generation on the C model (narratives over CSV/log data)
 /omega-local              # Run the Omega encoder locally (offline embeddings)
+/omega-preflight          # Vet a dataset for omega_1_4_base before a full batch run
 ```
 
 ## Architecture
