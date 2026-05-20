@@ -21,7 +21,7 @@ description: >
 
 Predict whether a dataset will clear ~70% accuracy on `omega_1_4_base` + the `machine-state-classification` pipeline **before** spending API budget on a full batch run. Repo: [archetypeai/omega-1-4-preflight](https://github.com/archetypeai/omega-1-4-preflight).
 
-The preflight tool is the cheap upstream sibling of [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md). It looks at the shot files the user is *about* to upload and flags the issues that the cross-repo synthesis of [TEP](https://github.com/archetypeai/archetypeai-batch-examples-tep), [SWaT](https://github.com/archetypeai/archetypeai-batch-examples-swat), [3W](https://github.com/archetypeai/archetypeai-batch-examples-3w), [Pump Sensor](https://github.com/archetypeai/archetypeai-batch-examples-pump-sensor), [NASA Bearing](https://github.com/archetypeai/archetype-batch-examples-nasa-bearing), and [HIGGS](https://github.com/archetypeai/archetypeai-batch-examples-higgs) showed are predictive of a poor full run.
+The preflight tool is the cheap upstream sibling of [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md). It looks at the shot files the user is *about* to upload and flags the issues that the cross-repo synthesis of [TEP](https://github.com/archetypeai/archetypeai-batch-examples-tep), [SWaT](https://github.com/archetypeai/archetypeai-batch-examples-swat), [3W](https://github.com/archetypeai/archetypeai-batch-examples-3w), [Pump Sensor](https://github.com/archetypeai/archetypeai-batch-examples-pump-sensor), [NASA Bearing](https://github.com/archetypeai/archetypeai-batch-examples-nasa-bearing), and [HIGGS](https://github.com/archetypeai/archetypeai-batch-examples-higgs) showed are predictive of a poor full run.
 
 ## When to Apply
 

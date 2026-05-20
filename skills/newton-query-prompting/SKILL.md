@@ -26,10 +26,10 @@ Newton's `/query` endpoint is a multi-modal reasoning path: the model sees a sys
 
 Reference implementations for the text + structured-state pattern (all three demos use the same wire shape — text in `query`, empty `file_ids`, no `events`, `sanitize: false`, duplicated `system_prompt`/`instruction_prompt`):
 
-- [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) — water treatment plant; per-stage NORMAL/ATTACK status with pre-picked z-scored sensor citations.
-- [`newton-earthquake-demo`](https://github.com/archetypeai/newton-earthquake-demo) — seismic event reasoning.
-- [`newton-grid-demo`](https://github.com/archetypeai/newton-grid-demo) — power-grid status reasoning.
-- Predecessor: [`newton-swat-demo`](https://github.com/archetypeai/newton-swat-demo) — same prompt patterns, Lens-based classification underneath.
+- [`archetypeai-swat-demo-direct-query`](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) — water treatment plant; per-stage NORMAL/ATTACK status with pre-picked z-scored sensor citations.
+- [`archetypeai-earthquake-demo`](https://github.com/archetypeai/archetypeai-earthquake-demo) — seismic event reasoning.
+- [`archetypeai-grid-demo`](https://github.com/archetypeai/archetypeai-grid-demo) — power-grid status reasoning.
+- Predecessor: [`archetypeai-swat-demo`](https://github.com/archetypeai/archetypeai-swat-demo) — same prompt patterns, Lens-based classification underneath.
 
 Each ships a near-identical `src/lib/server/newton.js::queryNewton(query)` helper — the only domain-specific bits are the `SYSTEM_PROMPT` content and what gets serialized into `query`.
 
@@ -563,4 +563,4 @@ async function callNewton(state) {
 
 ## Building a frontend on top of this
 
-If you're wrapping `/query` output in a React/Svelte/etc. UI — operator suggestion panel, structured-decision dashboard, AI-reasoning sidebar — **read [`DESIGN.md`](../../DESIGN.md) at the root of this repo before writing any CSS**. The Archetype design system (Tailwind v4 + `@archetypeai/ds-lib-tokens` + Geist sans/mono + OKLCH palette + dark-first) is the expected visual language for these demos. The [`SuggestedActions` panel in `newton-swat-demo`](https://github.com/archetypeai/newton-swat-demo) is the canonical reference for surfacing structured `/query` JSON in an operator-facing UI (per-action card with `good`/`warning`/`critical` Badge, mono numeric thresholds, sharp 2px radii); [`newton-wifi-demo`](https://github.com/archetypeai/newton-wifi-demo) shows the per-window verdict + reason pattern. Setting this up at the start is much cheaper than retrofitting later.
+If you're wrapping `/query` output in a React/Svelte/etc. UI — operator suggestion panel, structured-decision dashboard, AI-reasoning sidebar — **read [`DESIGN.md`](../../DESIGN.md) at the root of this repo before writing any CSS**. The Archetype design system (Tailwind v4 + `@archetypeai/ds-lib-tokens` + Geist sans/mono + OKLCH palette + dark-first) is the expected visual language for these demos. The [`SuggestedActions` panel in `archetypeai-swat-demo`](https://github.com/archetypeai/archetypeai-swat-demo) is the canonical reference for surfacing structured `/query` JSON in an operator-facing UI (per-action card with `good`/`warning`/`critical` Badge, mono numeric thresholds, sharp 2px radii); [`archetypeai-wifi-demo`](https://github.com/archetypeai/archetypeai-wifi-demo) shows the per-window verdict + reason pattern. Setting this up at the start is much cheaper than retrofitting later.

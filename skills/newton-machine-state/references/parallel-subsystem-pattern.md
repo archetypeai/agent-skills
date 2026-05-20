@@ -2,7 +2,7 @@
 
 When a single lens session gives you one verdict for the whole system but you need to know *which* subsystem/component/stage is anomalous, run N parallel sessions — one per subsystem — each filtered to its own column subset of the same wide CSV.
 
-This is the pattern used by [newton-swat-demo](https://github.com/archetypeai/newton-swat-demo) (6-stage water treatment plant: P1–P6) and applies anywhere sensor data is naturally grouped by subsystem: industrial processes with staged flow, multi-zone HVAC, multi-well oil fields, multi-rack data centers.
+This is the pattern used by [archetypeai-swat-demo](https://github.com/archetypeai/archetypeai-swat-demo) (6-stage water treatment plant: P1–P6) and applies anywhere sensor data is naturally grouped by subsystem: industrial processes with staged flow, multi-zone HVAC, multi-well oil fields, multi-rack data centers.
 
 ## When to Apply
 
@@ -197,4 +197,4 @@ await Promise.all(
 ## Related
 
 - [stream-manager-pattern.md](stream-manager-pattern.md) — the single-session singleton variant, for cases where you don't need per-subsystem verdicts.
-- [newton-swat-demo](https://github.com/archetypeai/newton-swat-demo) — full working implementation of this pattern with 6 parallel P1–P6 sessions.
+- [archetypeai-swat-demo](https://github.com/archetypeai/archetypeai-swat-demo) — full working implementation of this pattern with 6 parallel P1–P6 sessions.

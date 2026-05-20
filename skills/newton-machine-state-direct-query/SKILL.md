@@ -19,7 +19,7 @@ description: >
 
 Classify time-series sensor data per window by calling `/query` directly with the Omega encoder, then running KNN locally against a pre-built n-shot embedding library. The streaming counterpart is [`newton-machine-state`](../newton-machine-state/SKILL.md); the batch counterpart is [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md). Same end goal — KNN over Omega embeddings of n-shot examples — different transport: no Lens, no session lifecycle, no SSE, no warmup. Each playback window is a single round-trip to `/query`.
 
-Reference implementation: [`newton-swat-demo-direct-query`](https://github.com/archetypeai/newton-swat-demo-direct-query) — six per-stage classifiers on the SWaT water-treatment dataset, with PCA-2 + UMAP-2 visualization of the live embeddings.
+Reference implementation: [`archetypeai-swat-demo-direct-query`](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) — six per-stage classifiers on the SWaT water-treatment dataset, with PCA-2 + UMAP-2 visualization of the live embeddings.
 
 ## When to Apply
 
@@ -293,7 +293,7 @@ Useful thresholds:
 | Cost per million rows | low | lowest | high (one /query per window) |
 | Right for | live dashboards on a single source | large historical CSVs | per-request handlers, viz panels, custom classifiers |
 
-The newton-swat-demo-direct-query reference cut a ~250-line Lens orchestration layer (session lifecycle, stale-session cleanup, SSE parsing, `pagehide` handlers, `localStorage` orphan tracking) down to a single synchronous POST handler. If your app doesn't actually benefit from the streaming optimization, the simplification is real.
+The archetypeai-swat-demo-direct-query reference cut a ~250-line Lens orchestration layer (session lifecycle, stale-session cleanup, SSE parsing, `pagehide` handlers, `localStorage` orphan tracking) down to a single synchronous POST handler. If your app doesn't actually benefit from the streaming optimization, the simplification is real.
 
 ## Common Errors
 
@@ -318,4 +318,4 @@ The newton-swat-demo-direct-query reference cut a ~250-line Lens orchestration l
 
 ## Example Code
 
-[**archetypeai/newton-swat-demo-direct-query**](https://github.com/archetypeai/newton-swat-demo-direct-query) — full end-to-end Svelte/SvelteKit reference: six per-stage classifiers on the SWaT water-treatment dataset, with the global-scaler + Direct-Query pattern, server-side PCA-2 / UMAP-2 fits, and a live embedding-viz panel that overlays the playback window onto the static library scatter. The build scripts (`scripts/build-scaler.js`, `scripts/build-knn-library.js`, `scripts/build-inference-sample.js`) and the in-process classifier (`src/lib/server/newton.js`, `src/lib/server/projections.js`) are the cleanest reusable parts of this pattern. Includes leave-one-out badges in the UI as the per-stage health diagnostic.
+[**archetypeai/archetypeai-swat-demo-direct-query**](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) — full end-to-end Svelte/SvelteKit reference: six per-stage classifiers on the SWaT water-treatment dataset, with the global-scaler + Direct-Query pattern, server-side PCA-2 / UMAP-2 fits, and a live embedding-viz panel that overlays the playback window onto the static library scatter. The build scripts (`scripts/build-scaler.js`, `scripts/build-knn-library.js`, `scripts/build-inference-sample.js`) and the in-process classifier (`src/lib/server/newton.js`, `src/lib/server/projections.js`) are the cleanest reusable parts of this pattern. Includes leave-one-out badges in the UI as the per-stage health diagnostic.

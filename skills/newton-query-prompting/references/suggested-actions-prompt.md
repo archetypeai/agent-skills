@@ -1,6 +1,6 @@
 # Worked Example: SWaT Suggested Actions
 
-Full `/query` prompt from the [newton-swat-demo](https://github.com/archetypeai/newton-swat-demo) Suggested Actions panel. Turns per-stage anomaly flags into concrete upstream/local/downstream operator actions.
+Full `/query` prompt from the [archetypeai-swat-demo](https://github.com/archetypeai/archetypeai-swat-demo) Suggested Actions panel. Turns per-stage anomaly flags into concrete upstream/local/downstream operator actions.
 
 Every rule in this prompt came from a specific failure during development — the inline comments explain *why* each line is there.
 
@@ -136,4 +136,4 @@ Typical drop rate: 0–1 cards out of 10 on well-formed runs, 2–3 if the model
 
 ## Full reference implementation
 
-[src/lib/suggestions-direct.js](https://github.com/archetypeai/newton-swat-demo/blob/main/src/lib/suggestions-direct.js) in the SWaT demo — includes the z-score ranking, direct browser call, response unwrapping, and topology validation in ~200 lines.
+[src/lib/suggestions-direct.js](https://github.com/archetypeai/archetypeai-swat-demo/blob/main/src/lib/suggestions-direct.js) in the SWaT demo — includes the z-score ranking, direct browser call, response unwrapping, and topology validation in ~200 lines.
