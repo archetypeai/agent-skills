@@ -101,7 +101,7 @@ Holds out 20% of each shot file as labeled pilot data, uploads the remaining 80%
 ### Static-check totals
 
 - **All PASS or PASS + WARN, no FAIL:** safe to run a real batch. WARNs that come up across multiple datasets (feature-scale, class imbalance) are usually accuracy levers worth fixing first.
-- **Any FAIL:** static check refuses to recommend running. The most common FAIL is `nshot_support` (shot files too short) — re-extract longer contiguous runs from the raw labeled CSV. The second-most-common is `timestamp` non-monotonic, which is sometimes a *real* "this is not a time series" signal (HIGGS) and sometimes a shot-file curation artifact (rows shuffled across runs during prep — bumped from FAIL to a strong WARN over time).
+- **Any FAIL:** static check refuses to recommend running. The most common FAIL is `nshot_support` (shot files too short) — re-extract longer contiguous runs from the raw labeled CSV. The second-most-common is `timestamp` non-monotonic, which is sometimes a *real* "this is not a time series" signal (HIGGS) and sometimes a shot-file curation artifact (rows shuffled across runs during prep — bumped from FAIL to a strong WARN over time). **Fix recipe for the curation case:** rewrite the prep to pick one temporally-contiguous block per class instead of `random.sample(...)`. See [`newton-machine-state-batch`'s "Recommended n-shot data prep"](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored) and the four batch-example repos that ship the canonical pattern (3W, NASA Bearing, Pump Sensor, Volve).
 
 ### Pilot verdicts (`--pilot`)
 
@@ -134,7 +134,7 @@ Holds out 20% of each shot file as labeled pilot data, uploads the remaining 80%
 
 ## Recommended Workflow
 
-1. **Prep shot files** (one CSV per class, contiguous numeric timestamp, ≥1,000 rows each per `nshot_support` floor + headroom).
+1. **Prep shot files** following the canonical contiguous + z-scored recipe in [`newton-machine-state-batch/SKILL.md`](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored): one CSV per class, rows pulled as a single temporally-contiguous block (not `random.sample`), monotonic timestamp, ≥1,000 rows each per `nshot_support` floor + headroom.
 2. **Run static preflight.** Fix any FAILs. Triage WARNs:
    - `feature_scale` >3 decades → z-score each column before upload, or switch the downstream call to `--metric cosine` (handled by [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md)).
    - `constant_columns` → drop those columns before upload.
