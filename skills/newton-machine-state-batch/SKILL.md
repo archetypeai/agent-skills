@@ -58,6 +58,27 @@ For new projects pick `omega_1_4_base` — it removes the "exactly 9 sensors" co
 - N-shot files must produce at least `n_neighbors` windows: `(rows − window_size) / step_size ≥ n_neighbors`.
 - For drilling specifically, the `omega_1_3_surface` n-shot labels should come from ACTC rig mode codes, not sensor heuristics — control-system ground truth is more reliable than thresholded readings.
 
+### Recommended n-shot data prep (contiguous + z-scored)
+
+The single biggest performance lever for time-series machine-state jobs is **how the n-shot files are constructed**, not which KNN config is picked. The canonical recipe:
+
+1. **Each shot file is one temporally-contiguous block of a single class.** Pick the longest contiguous run of rows for that class from your raw labeled CSV (or from a single source recording / well / snapshot file) and slice the first N rows. **Never `random.sample()` rows from a class-filtered list** — the resulting shot file has non-monotonic timestamps and zero physical contiguity, and the encoder's sliding window silently glues across the gaps between sampled rows.
+2. **Don't punch random per-row holes in the inference file.** The historical "inference = labeled CSV minus the n-shot rows" pattern is fine *if* the shots came from contiguous blocks (so the holes are a small number of contiguous ranges), but is catastrophic if shots were random-sampled (thousands of single-row gaps). The cleanest pattern is to draw shots from a *different* source recording than inference (e.g., 3W's shots come from `data/raw/3W/dataset/<code>/WELL-*.parquet` while inference is the labeled CSV — they don't overlap).
+3. **Z-score per file (or globally) before upload.** See *Input normalization* below — this is the second half of the same recipe.
+
+**Why it matters.** Across the seven public batch-example repos, contiguous-shot prep moved 3W's full-run accuracy from **15.3% → 41.6% (+26pp)** on the same `omega_1_4_base` model with the same default config — bigger than any move in the 96-combo hyperparameter grid. NASA Bearing, Pump Sensor, and Volve had the same bug and have all merged the same fix; see the cross-repo writeup in [`omega-model-performance`](https://github.com/archetypeai/omega-model-performance) for the empirical pattern.
+
+**Templates to clone from**:
+
+| Dataset | Cadence | Contiguous-prep PR | Notable |
+|---|---|---|---|
+| [3W](https://github.com/archetypeai/archetypeai-batch-examples-3w) | 1 Hz, 9-class | [#1](https://github.com/archetypeai/archetypeai-batch-examples-3w/pull/1) (merged) | Per-class shots from separate WELL-*.parquet files; global z-scoring |
+| [NASA Bearing](https://github.com/archetypeai/archetypeai-batch-examples-nasa-bearing) | 20.48 kHz snapshots | [#2](https://github.com/archetypeai/archetypeai-batch-examples-nasa-bearing/pull/2) | Each shot = 2,000 rows from a single 1-second snapshot file (no z-score; channels already same scale) |
+| [Pump Sensor](https://github.com/archetypeai/archetypeai-batch-examples-pump-sensor) | 1-minute, binary | [#2](https://github.com/archetypeai/archetypeai-batch-examples-pump-sensor/pull/2) (merged) | Split runs on `label change OR delta != 60s` (catches hidden multi-day pauses inside label-contiguous stretches); `N_SHOT` capped at 1,000 to fit the longest clean fault run |
+| [Volve](https://github.com/archetypeai/archetypeai-batch-examples-volve) | ~5 sec, 14 wells | [#1](https://github.com/archetypeai/archetypeai-batch-examples-volve/pull/1) (merged) | `well_id` carried through `volve_to_csv.py` so runs split strictly per-well (avoids interleaved-well runs in the global DATE_TIME sort) |
+
+**Validate the shot files with [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) before upload.** The `timestamp_monotonic` check fails specifically on `random.sample()`-style shots; the `feature_scale` check is the cue for z-scoring.
+
 ### Input normalization
 
 The deployed pipeline runs with `normalize_input=False` and the flag is **not currently exposed in `reader_config`** — so whatever pre-encoder normalization you want has to happen *before* you upload. The encoder sees the raw values from your CSV.
@@ -319,7 +340,7 @@ Fine-tuning via `POST /v0.5/internal/experiment/runner/jobs` is not yet availabl
 ## Best Practices
 
 - **Default to `omega_1_4_base`** — generic, no channel-count constraint, and the model we ship as the recommended starting point. Only fall back to `omega_1_3_*` if you have an existing n-shot library tied to that encoder.
-- **Start with quick tests** — use 200-row samples (contiguous, not random — see TEP `tep_quick_test_200.csv`) to verify the pipeline before launching a multi-hour full run.
+- **Start with quick tests** — use 200-row samples (contiguous, not random — see TEP `tep_quick_test_200.csv`) to verify the pipeline before launching a multi-hour full run. For optimization grids specifically, ship a *class-balanced* slice (e.g., 3W's `3w_opt_slice.csv`, NASA Bearing's `bearing_opt_slice.csv`) rather than a single-class quick test — a pure-class slice gives the grid search no F1 signal because every config that finds the class trivially scores 100%.
 - **Use control-system labels for n-shots when available** — e.g. ACTC rig mode codes for drilling, plant DCS state codes for process plants. More reliable than thresholded-sensor heuristics.
 - **Optimize config first** — grid search over hyperparameters with small data before committing to a multi-hour full run. Both example repos ship an `optimize_config.py`.
 - **Poll status periodically** — jobs can run for minutes to hours depending on data size. Lower `flush_every_n_iteration` if you want mid-job progress visibility.

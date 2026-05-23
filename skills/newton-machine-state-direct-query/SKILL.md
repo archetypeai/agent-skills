@@ -183,6 +183,8 @@ This file is small (a few KB for 40 channels) — commit it. The build script fo
 
 ### Step 2: Build the n-shot KNN library
 
+**Each shot CSV must be a temporally-contiguous block of a single class.** Sliding `window_size`-row windows over a CSV that was built with `random.sample()` (rows scattered across the timeline) gives you embeddings of *fake* signals — adjacent rows in the file are not adjacent in time, so each window concatenates physically distant moments into one input. The Direct-Query path is even more sensitive to this than the batch pipeline because you can produce useless embeddings *silently*; the API has no way to know your rows aren't contiguous. Pick the longest contiguous run per class from your raw labeled CSV before windowing — same recipe documented in [`newton-machine-state-batch/SKILL.md`](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored).
+
 For each stage / class, slide windows over the shot CSV, apply the scaler, send to `/query`, store the flattened embedding with its label.
 
 ```js

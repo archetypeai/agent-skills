@@ -162,6 +162,8 @@ embs = embed_short(lens, batch, normalize=True)                       # (n_windo
 
 A common starting point: `window_size=1024, step_size=512` (50% overlap). For short datasets (a few hundred rows), use smaller windows (e.g. `window_size=60, step_size=10`) with heavy overlap. Batching all windows of a session into one encoder call (as above) is also significantly faster than calling `lens.embed()` per window.
 
+**Input rows must be temporally contiguous.** The encoder treats `sensor_data[i : i + window_size]` as `window_size` consecutive samples at the sensor's native cadence. If the source array was built by row-shuffling or `random.sample` (e.g. concatenating "the 2,000 fault-class rows" pulled from across a multi-day recording), each window concatenates physically distant moments into one input — the embedding describes a signal that doesn't exist. For n-shot library construction specifically, draw each class's rows as a single contiguous block from the raw recording; the cloud-side version of this recipe and the cross-repo evidence (+26pp on 3W from prep alone) is in [`newton-machine-state-batch/SKILL.md`](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored).
+
 ## Normalization Choices
 
 The encoder was trained with instance-normalized inputs (per-window mean 0, std 1). You have two options:
