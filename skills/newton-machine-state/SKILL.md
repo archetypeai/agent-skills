@@ -194,6 +194,21 @@ async function pushPaced(windowIndex) {
 }
 ```
 
+**Warmup also requires a minimum-queued-depth — pushing just 1 window doesn't kick the inference pipeline.** `preWarmSessions(count = 1)` in the swat-demo works for that app (6 parallel sessions), but on 2-session setups we've observed Newton sit idle indefinitely after a single `session.update`. Reproduced with two sessions on the same child lens: push 1 window each → 0 `inference.result` events in 60s+ (no error, no stream end, just heartbeats). Push 5 each → same silence. Push all available windows → first prediction at t≈37s, predictions stream at ~1/s/session thereafter. We didn't isolate the exact threshold between 5 and 102 — until we do, queue *all* windows up front during warmup and let the per-session 1s throttle drain them in the background. The cost is bounded by the existing rate-limit, so over-priming has no downside.
+
+```typescript
+// Warmup: push every window through the throttled queue immediately.
+// NewtonSession's internal 1-pop-per-second cadence keeps the lens runner
+// fed without overflowing the ~20-window buffer.
+async function warmup(session) {
+  for (let i = 0; i < session.nWindows; i++) {
+    enqueue(session, i);  // returns immediately; thread drains at 1/s
+  }
+  // Wait for first non-"unknown" inference.result before showing UI.
+  await session.firstRealVerdict;
+}
+```
+
 ### Step 7: Parse SSE Results
 
 Each `inference.result` event contains a classification for one window:
@@ -450,7 +465,7 @@ The Machine State Lens has at least four ways to **accept a session, reach `SESS
 
 The four fixes compose: working production code uses all of them. Failing in only one mode tends to mask the others.
 
-### Orphan sessions hold lens runners — clean on startup
+### Orphan sessions hold lens runners — clean on every request that creates sessions
 
 Killing a Python process mid-run (Ctrl-C, `pkill`, container restart) doesn't tear down the platform-side lens session — `auto_destroy` only fires through the SDK's normal exit path. Each orphan holds a `lens_service:runner:atai-platform-lens-node-worker-...` slot from a finite pool. Once all slots are occupied, the next `POST /lens/sessions/create` fails:
 
@@ -458,14 +473,43 @@ Killing a Python process mid-run (Ctrl-C, `pkill`, container restart) doesn't te
 {"errors": ["Failed to allocate lens runner - try stopping an older session!"]}
 ```
 
-Cleanup on app startup:
+**Process-startup cleanup is necessary but not sufficient.** Long-running servers (Flask, FastAPI, Svelte hot-reload, etc.) reach the same failure state without ever restarting, because *abandoned client connections* leak runners just as readily as killed processes:
+
+- Browser tab closes mid-stream → SSE generator exits abruptly, `auto_destroy` doesn't fire.
+- `curl --max-time` (or any client-side deadline) terminates the SSE before the server-side teardown runs.
+- Hot-reload re-binds the route handler before the previous handler's `finally` block completes.
+
+A single 30-minute Flask session with 5–10 of these abandonments accumulates enough orphans to starve the next `/lens/sessions/create` call. Move cleanup to the top of every request handler that creates sessions:
 
 ```python
-sessions = client.lens.sessions.get_metadata()
-my_lens_prefix = "lns-" + your_lens_name[:16]  # lens_id encodes first 16 chars of lens_name
-for s in sessions:
-    if (s.get("lens_id") or "").startswith(my_lens_prefix):
-        client.lens.sessions.destroy(s["session_id"])
+def cleanup_orphan_sessions(client, lens_name_prefix):
+    sessions = client.lens.sessions.get_metadata()
+    my_lens_prefix = "lns-" + lens_name_prefix[:16]  # lens_id encodes first 16 chars of lens_name
+    for s in sessions:
+        if (s.get("lens_id") or "").startswith(my_lens_prefix):
+            try:
+                client.lens.sessions.destroy(s["session_id"])
+            except Exception:
+                pass  # already destroyed, race with another handler, etc.
+
+@app.route("/api/replay")
+def replay():
+    cleanup_orphan_sessions(client, "my-app")  # before NewtonSession(...).start()
+    ...
+```
+
+Also wrap the SSE generator body in `try/finally` so your own session-close path always runs on client disconnect:
+
+```python
+@stream_with_context
+def _stream():
+    sessions = {wt: NewtonSession(wt) for wt in turbines}
+    for s in sessions.values(): s.start()
+    try:
+        yield from _stream_body(sessions)
+    finally:
+        for s in sessions.values():
+            s.close()  # auto_destroy → DELETE /lens/sessions/destroy
 ```
 
 `client.lens.sessions.get_metadata()` returns a list of currently-active sessions across your account (not just yours), each with `session_id`, `lens_id`, `session_status`, `session_duration_sec`. Filter by your child-lens prefix before destroying so you don't tear down a coworker's session.
