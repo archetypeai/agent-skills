@@ -147,29 +147,51 @@ const sseResponse = await newtonFetch(
 );
 ```
 
-### Step 6: Set Input Stream
+### Step 6: Push windows via `session.update` (channel-first)
 
-Upload query CSV and set as input:
+**Stream data in via `session.update` events with channel-first numeric arrays — not via `csv_file_reader`.** Both modes were canonical at different points, but on the current platform-mounted Machine State Lens (`lns-1d519091822706e2-…`), pointing `input_stream.set` at a pre-uploaded CSV is accepted (`is_valid: true` for `session.modify` / `input_stream.set` / `output_stream.set`), the session reaches `SESSION_STATUS_RUNNING`, but **zero `inference.result` events ever fire** — only `sse.stream.heartbeat` until the idle timeout (~58s) closes the SSE. Reproduced with a 13,104-row CSV and `window_size=512, step_size=512` against a child lens pinned to `omega_embeddings_1_4`. The same data, same focus files, same lens — switched to `session.update`-push mode — produced 91 of 102 predictions cleanly.
 
 ```typescript
-const queryFileId = await uploadFile("query.csv", csvContent);
+// Channel-first: outer array = channels, inner array = window samples.
+// For a 4-channel × 128-sample window, sensor_data is [[a1...], [a2...], [a3...], [a4...]].
+const windowRows = data.slice(windowStart, windowStart + WINDOW_SIZE);
+const sensorData = COLUMNS.map((col) => windowRows.map((r) => parseFloat(r[col])));
 
 await newtonFetch("/lens/sessions/events/process", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     session_id: sessionId,
-    events: [{
-      kind: "input_stream.set",
-      payload: {
-        streams: [{
-          id: "input-0",
-          source: { type: "csv_file_reader", file_id: queryFileId },
-        }],
+    event: {
+      type: "session.update",
+      event_data: {
+        type: "data.json",
+        event_data: {
+          sensor_data: sensorData,
+          sensor_metadata: {
+            sensor_timestamp: Date.now() / 1000,
+            sensor_id: `window_${windowIndex}`,
+          },
+        },
       },
-    }],
+    },
   }),
 });
+```
+
+The full pattern (per-stage parallel sessions + channel-first transpose) lives in [references/parallel-subsystem-pattern.md](references/parallel-subsystem-pattern.md).
+
+**Throttle pushes — Newton's lens runner drains ~1 inference/s/session and the input buffer is ~20 windows deep.** Push 102 windows back-to-back and you get *exactly* 20 predictions before the runner goes silent (no error, no `sse.stream.end` — just heartbeats until idle timeout). Cap pushes at one per second per session and you get all 102. The buffer-depth limit is per-session; running N parallel sessions multiplies your effective rate by N at the cost of N runner slots.
+
+```typescript
+const MIN_PUSH_INTERVAL_MS = 1000;
+let lastPushTime = 0;
+async function pushPaced(windowIndex) {
+  const wait = MIN_PUSH_INTERVAL_MS - (Date.now() - lastPushTime);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  await pushWindow(windowIndex);
+  lastPushTime = Date.now();
+}
 ```
 
 ### Step 7: Parse SSE Results
@@ -409,16 +431,44 @@ def is_dead_in_focus(col_values, normal_mask, training_mask):
 
 ## Staging Gotchas
 
-### `omega_embeddings_01` may not be available on staging
+### Silent inference: the four observed failure modes
 
-The production-default model version `OmegaEncoder::omega_embeddings_01` is not always exposed on `api.stage.u1.archetypeai.app`. Symptom: lens registration and session creation both succeed, the session reaches `LensSessionStatus.SESSION_STATUS_RUNNING`, but every inference emits:
+The Machine State Lens has at least four ways to **accept a session, reach `SESSION_STATUS_RUNNING`, and then emit zero `inference.result` events** — no error, just SSE heartbeats until the ~58s idle timeout. Diagnosing this in isolation is painful because the SDK calls all return `is_valid: true` and the session metadata shows `RUNNING` the whole time. The fixes:
+
+1. **Use `omega_embeddings_1_4`, not `_01`.** Per [`newton-models`](../newton-models/SKILL.md), the platform-mounted Machine State Lens pins `OmegaEncoder::omega_embeddings_01`. On `api.stage.u1.archetypeai.app` this version has been observed to emit `inference.error` events (and sometimes nothing at all) instead of `inference.result`:
+   ```json
+   {"type": "inference.error",
+    "event_data": {"error_messages": ["query_id: session-modify-qry-XXX failed!"]}}
+   ```
+   The `session-modify-qry-` prefix is Newton's internal naming for *all* lens queries — it does NOT mean a `session.modify` event is broken. Register a child lens with `model_version: "OmegaEncoder::omega_embeddings_1_4"` to fix.
+
+2. **Push via `session.update`, not `csv_file_reader`.** See [Step 6](#step-6-push-windows-via-sessionupdate-channel-first) — file-reader input mode is silently broken on staging today even with `_1_4`.
+
+3. **Throttle pushes to ≤1/s/session.** See Step 6's throttling sub-section. Pushing the SDK's full pre-uploaded CSV in one burst (via `csv_file_reader`) compounds with mode #2; pushing 102 channel-first windows in one second via `session.update` triggers the same buffer-overflow → silent-skip. The runner emits exactly 20 predictions then goes quiet for the rest of the session.
+
+4. **Set config at lens-register time, not in `session.modify`.** Putting `input_n_shot`, `csv_configs`, and `knn_configs` in the `model_parameters` block of `lens/register` (per the [parallel-subsystem pattern](references/parallel-subsystem-pattern.md)) is the route observed-to-work end-to-end. Splitting the same fields between `lens/register` and `session.modify` has produced ambiguous silent runs in the wild — defaults can leak through.
+
+The four fixes compose: working production code uses all of them. Failing in only one mode tends to mask the others.
+
+### Orphan sessions hold lens runners — clean on startup
+
+Killing a Python process mid-run (Ctrl-C, `pkill`, container restart) doesn't tear down the platform-side lens session — `auto_destroy` only fires through the SDK's normal exit path. Each orphan holds a `lens_service:runner:atai-platform-lens-node-worker-...` slot from a finite pool. Once all slots are occupied, the next `POST /lens/sessions/create` fails:
 
 ```json
-{"type": "inference.error",
- "event_data": {"error_messages": ["query_id: session-modify-qry-XXX failed!"]}}
+{"errors": ["Failed to allocate lens runner - try stopping an older session!"]}
 ```
 
-The `session-modify-qry-` prefix is Newton's internal naming for *all* lens queries — it does NOT mean a `session.modify` event is broken. Switch the `model_version` to `OmegaEncoder::omega_embeddings_1_4` and it works.
+Cleanup on app startup:
+
+```python
+sessions = client.lens.sessions.get_metadata()
+my_lens_prefix = "lns-" + your_lens_name[:16]  # lens_id encodes first 16 chars of lens_name
+for s in sessions:
+    if (s.get("lens_id") or "").startswith(my_lens_prefix):
+        client.lens.sessions.destroy(s["session_id"])
+```
+
+`client.lens.sessions.get_metadata()` returns a list of currently-active sessions across your account (not just yours), each with `session_id`, `lens_id`, `session_status`, `session_duration_sec`. Filter by your child-lens prefix before destroying so you don't tear down a coworker's session.
 
 ### KNN ranking is non-deterministic under load
 
