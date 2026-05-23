@@ -329,6 +329,14 @@ Streaming per window fans out too — transpose the current window to channel-fi
 - Subsystems are tightly coupled and the anomaly is usually observable from any sensor
 - Session count matters for cost (most Newton pricing bills by inference count, not session count — but verify for your account)
 
+### One lens per stream — even when the column set is identical
+
+The "share one lens across N sessions" shortcut looks tempting when every stream watches the **same** columns (e.g., a fleet of identical wind turbines, all classified against the same 4 SCADA channels). Resist it. Reproduced against `api.stage.u1.archetypeai.app` on a Penmanshiel turbine demo: one child lens, two `POST /lens/sessions/create` calls a few seconds apart, both reach `SESSION_STATUS_RUNNING`, both consume the same `session.update` push pace — but **only one of the two sessions ever emits `inference.result` events**. The other reaches RUNNING and stays silent for the entire 5-minute run. The lens-runner pool appears to either bind a runner per-lens (not per-session) or some shared state inside the lens serializes inference.
+
+Registering one child lens per turbine (same `model_parameters` apart from `lens_name`) eliminated the silence — both sessions emitted predictions at parallel cadence (33 predictions each in 80s, with first verdicts arriving at t≈46s for both).
+
+Concretely: the parallel-subsystem snippet above already gives you the right shape — keep the `STAGE_COLUMNS` loop even when every stage's columns happen to be the same, and register N lenses with N distinct `lens_name`s. The cost is N extra `lens/register` calls at startup (~2s each) and N cleanup deletions on teardown; the benefit is N independent runners with no cross-session contention.
+
 See [references/parallel-subsystem-pattern.md](references/parallel-subsystem-pattern.md) for the full pattern, including browser-side cleanup on tab close.
 
 ## Multi-Sensor N-Shot (Single Lens, 4 Variates)
