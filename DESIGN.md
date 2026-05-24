@@ -295,7 +295,43 @@ Identical across `archetypeai-swat-demo`, `archetypeai-drilling-demo`, `archetyp
 
 Key details:
 - Full-bleed (`border-b`, no max-width container) — the menubar always spans the viewport.
-- **Wordmark asset:** [`assets/archetype-wordmark.svg`](../../assets/archetype-wordmark.svg) in this repo. Single 190×35 `viewBox`, one `fill="currentColor"` path (~14 KB). The path is achromatic — it renders in whatever `color` the *surrounding* element resolves to, so the same file works on both backgrounds (in dark mode, give it `text-foreground` ≈ near-white; in light mode, `text-foreground` ≈ near-black; the wordmark flips automatically with the theme). **Inline** the SVG (drop the `<svg>` element directly into your JSX/Svelte) so the `currentColor` cascade works — `<img src="…">` and `background-image: url(…)` ignore the parent's `color`, so the wordmark renders as nothing visible. The seven Newton demos in this catalogue (swat, drilling, wifi, grid, wildfire, traffic, earthquake) each hand-inlined this same SVG in their own `src/lib/components/ui/patterns/logo/logo.svelte` — those copies are byte-identical, but the version in `assets/` is now the single source of truth, so future demos should reference *that* file rather than copy from a sibling demo. `@archetypeai/ds-lib-tokens` ships theme/token CSS but does **not** include the wordmark asset.
+- **Wordmark asset:** [`assets/archetype-wordmark.svg`](../../assets/archetype-wordmark.svg) in this repo (single source of truth — raw URL: `https://raw.githubusercontent.com/archetypeai/archetypeai-agent-skills/main/assets/archetype-wordmark.svg`). Single 190×35 `viewBox`, one `fill="currentColor"` path (~14 KB). The path is achromatic — it renders in whatever `color` the *surrounding* element resolves to, so the same file works on both backgrounds (in dark mode, give it `text-foreground` ≈ near-white; in light mode, `text-foreground` ≈ near-black; the wordmark flips automatically with the theme). The seven Newton demos in this catalogue (swat, drilling, wifi, grid, wildfire, traffic, earthquake) each hand-inlined this same SVG in their own `src/lib/components/ui/patterns/logo/logo.svelte` — those copies are byte-identical, but the version in `assets/` is now the canonical source, so future demos should reference *that* file rather than copy from a sibling demo. `@archetypeai/ds-lib-tokens` ships theme/token CSS but does **not** include the wordmark asset.
+
+  **Inlining is mandatory — `<img>` and `background-image` won't work.** The SVG's `fill="currentColor"` only resolves against an enclosing element's CSS `color` property, which `<img src="…">` and `background-image: url(…)` opaquely ignore. Both render as nothing visible on dark and incorrect color on light. Drop the `<svg>` element directly into the page markup; framework choice is irrelevant as long as the SVG ends up in the DOM.
+
+  Recipes for each common framework:
+
+  ```jsx
+  // React / Next.js — import as a component (SVGR / @svgr/webpack) or paste inline.
+  // SVGR turns the file into a JSX component with no runtime overhead.
+  import Wordmark from "@/assets/archetype-wordmark.svg?react";
+  <span className="text-foreground inline-flex"><Wordmark className="h-6 w-auto" /></span>
+  ```
+
+  ```svelte
+  <!-- Svelte / SvelteKit — paste the <svg> verbatim into a logo.svelte component. -->
+  <!-- See any of the existing demos: src/lib/components/ui/patterns/logo/logo.svelte -->
+  <span class="text-foreground inline-flex">
+    <svg viewBox="0 0 190 35" class="h-6 w-auto" fill="none">…</svg>
+  </span>
+  ```
+
+  ```html
+  <!-- Flask / Jinja / plain HTML — copy assets/archetype-wordmark.svg into your -->
+  <!-- templates/ directory as _wordmark.svg, then include it inline.            -->
+  <span class="wordmark" aria-label="Archetype AI" style="color: var(--fg)">
+    {% include '_wordmark.svg' %}
+  </span>
+  ```
+
+  ```css
+  /* Vanilla CSS sizing (no Tailwind). 22–24px height matches the design system's
+     h-6 token used by the Svelte demos. */
+  .wordmark { display: inline-flex; line-height: 0; }
+  .wordmark svg { height: 22px; width: auto; display: block; }
+  ```
+
+  Add `aria-label="Archetype AI"` to the wrapping element so screen readers announce the brand — the SVG itself has no `<title>`.
 - Separator is a Lucide `Minus` icon at `strokeWidth={1}` and `size-6` — *not* a CSS divider or pipe character.
 - Partner branding goes to the right of the separator. When you don't have one, a `<Badge variant="outline">Partner Logo</Badge>` is the standard placeholder so the slot stays visible during development.
 - The dark-mode button is a `Button variant="outline" size="icon"` with Sun/Moon swap, wrapped in `document.startViewTransition` so the canvas crossfades instead of flicker-swapping.

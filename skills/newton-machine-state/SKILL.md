@@ -339,6 +339,83 @@ Concretely: the parallel-subsystem snippet above already gives you the right sha
 
 See [references/parallel-subsystem-pattern.md](references/parallel-subsystem-pattern.md) for the full pattern, including browser-side cleanup on tab close.
 
+### Account runner quota — when even one-lens-per-stream fails
+
+Even with one lens per stream, N parallel sessions assume your account has ≥ N concurrent runner slots in the lens-runner pool. Some staging accounts are provisioned with **just 1 slot**, which means the second `POST /lens/sessions/create` fails immediately with `"Failed to allocate lens runner - try stopping an older session!"` regardless of how long you wait — there is no temporal cooldown that fixes it because the slot stays occupied for the entire lifetime of the first session.
+
+Reproduced on the Penmanshiel turbine demo: `GET /lens/sessions/metadata` showed exactly one active session across the whole account (our own, just created), but the next create-session call still returned the allocation failure. Stretching the inter-session delay from 0s → 5s → 15s changed nothing.
+
+When that happens, route both/all streams **through a single shared session** and route results by FIFO push-tag order:
+
+1. **One lens, one session.** Register a single child lens with the shared `data_columns` / focus files / etc., create a single session on it.
+2. **Interleave pushes.** Round-robin window pushes from each stream into the same `session.update` queue. Tag each push with `sensor_metadata.sensor_id = f"{stream_id}_{window_index}"` for traceability (Newton doesn't echo this back today, but it's good practice and survives future-API changes).
+3. **Route by FIFO tag order.** Keep an in-process FIFO of `(stream_id, window_index)` tags, one entry per push. Pop the front on each `inference.result` to determine which stream this result belongs to. Newton processes pushes serially (~1/s) and SSE events arrive in processing order, so the tag-order ↔ result-order correspondence holds as long as you keep per-stream FIFO at the producer (don't push window N+1 of stream A before window N of stream A lands).
+
+```python
+class MultiplexNewtonSession:
+    def __init__(self, streams):
+        self._frames = {sid: load_frame(wt_id) for sid, wt_id in streams}
+        self._pending_tags = queue.Queue()  # (stream_id, window_index) in push order
+        ...
+
+    def push_next_window(self, stream_id):
+        w_idx = self._pushed[stream_id]
+        self._pushed[stream_id] += 1
+        self._push_queue.put((stream_id, w_idx))
+
+    # In the SSE consumer:
+    def on_inference_result(self, event):
+        stream_id, w_idx = self._pending_tags.get_nowait()
+        emit({"kind": "newton_prediction", "stream_id": stream_id, "window_index": w_idx, ...})
+
+    # In the push loop:
+    def push_loop(self, session_id):
+        while not self._stop.is_set():
+            stream_id, w_idx = self._pushes.get(timeout=1.0)
+            self._pending_tags.put((stream_id, w_idx))
+            client.lens.sessions.process_event(session_id, build_event(stream_id, w_idx))
+            time.sleep(MIN_PUSH_INTERVAL_SEC)
+```
+
+Verified on the same Penmanshiel demo that previously hit the allocation error: switched from two-lens / two-session to one-lens / one-session-with-multiplex, both turbines now stream interleaved verdicts (WT01: 34 predictions, WT09: 33 predictions in 80s) with zero allocation errors. The per-stream prediction throughput halves (since both streams share one ~1/s runner), but for visualization workloads that's typically fine.
+
+**Prefer one-lens-per-stream when your runner pool allows it** — independent runners mean per-stream throughput doesn't degrade as N grows. Multiplexing is the fallback when the pool is undersized; treat it as a quota-shape adapter, not the default.
+
+#### Anomaly debounce when multiplexing
+
+Multiplexing roughly halves per-stream prediction throughput (two streams share one ~1/s runner). At lower throughput the *noise floor of the KNN itself* becomes more visible — the same dataset that produced a usable detect/recover signal under single-session 1-consecutive debouncing now flickers between `fault` and `healthy` on most predictions, because Newton's per-window KNN is genuinely borderline near the fault boundary on small n-shot libraries (~15–20 windows per class).
+
+Two debounce rules we tried and rejected before landing the working one:
+
+| Rule | Result on Penmanshiel demo |
+|---|---|
+| Commit on 2 consecutive same-class verdicts (any margin) | **Zero anomalies in 4 minutes** — the noisy sequence `[healthy, fault, healthy, fault, healthy, healthy, …]` never produced two consecutive faults. |
+| Commit when ≥2 of last 3 verdicts agree (any margin) | **9 anomalies in 60s** — fires on every `[fault, healthy, fault]` window. Too sensitive: just visualizes the KNN flicker. |
+
+The rule that worked, and that we recommend with multiplexing:
+
+```python
+STRONG_MARGIN = 3  # with n_neighbors=5: filters 3-2 ties, keeps 4-1 and 5-0 splits
+
+def consider(prediction):
+    votes = prediction.votes  # e.g. {"fault": 2, "healthy": 3}
+    winner_n = max(votes.values())
+    others_n = max((v for k, v in votes.items() if k != prediction.class_), default=0)
+    if winner_n - others_n < STRONG_MARGIN:
+        return  # weak verdict — drop as inconclusive
+
+    if committed.get(stream_id) != prediction.class_:
+        emit_anomaly_transition(stream_id, from_=committed.get(stream_id), to=prediction.class_)
+        committed[stream_id] = prediction.class_
+```
+
+Why this works:
+- The **vote-margin filter** is the load-bearing one. On a small n-shot library most boundary predictions come back 3-2 (margin = 1); filtering those out leaves ~30% of predictions as "strong" (margin ≥ 3), and those are the windows where the lens is actually confident. Surfacing them is what users mean by "an anomaly Newton is sure about."
+- **First-strong-commit (no further consecutive requirement)** then fires reliably. Two-consecutive-strong would re-introduce the false-negative problem because strong verdicts are scarce — most strong-fault windows are surrounded by strong-healthy windows, never two strong faults in a row.
+- Honest trade-off accepted: some false positives still appear — a single strong-but-wrong verdict on a healthy stream produces a detect/recover pair. The fix is upstream (larger n-shot library, better encoder separation), not in the debounce. Surface vote counts in the per-panel verdict badge so users can see *why* a decision fired and judge for themselves.
+
+Verified on the Penmanshiel demo after the switch: 8 anomalies in 4 minutes across two turbines, including the two detect/recover pairs visible during the WT01 frequency-converter fault window.
+
 ## Multi-Sensor N-Shot (Single Lens, 4 Variates)
 
 Different from parallel-subsystem (N lenses, one per column subset). Here you have **N sibling channels** all watching the same subsystem during the same incident, and you want to use up to 4 of their primary measurements as the **4 variates of a single lens**. Common in benchmarks where each "channel" is one sensor's `.npy` file rather than one column of a wide CSV — e.g. NASA telemanom, where SMAP-E means 13 separate `.npy` files (E-1 through E-13) sampled during the same electrical incident.
