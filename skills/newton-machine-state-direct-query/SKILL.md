@@ -135,6 +135,8 @@ The matching scope discussion lives in the Lens skills under [Input normalizatio
 
 ## Workflow
 
+> **Upstream prep.** If you're building the n-shot library from raw multivariate CSVs with gaps or NaNs, run them through [`newton-data-prep`](../newton-data-prep/SKILL.md) first (`DataPreprocessor` for gap-aware cleanup, `FeaturePreparer` for the joint-state `(X, y)` arrays the KNN library expects). Skip this skill's scaler step in Python by using `FeaturePreparer(normalize='standardize')` instead.
+
 ### Step 1: Compute the global scaler
 
 ```js

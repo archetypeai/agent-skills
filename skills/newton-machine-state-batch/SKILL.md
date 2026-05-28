@@ -60,7 +60,7 @@ For new projects pick `omega_1_4_base` — it removes the "exactly 9 sensors" co
 
 ### Recommended n-shot data prep (contiguous + z-scored)
 
-The single biggest performance lever for time-series machine-state jobs is **how the n-shot files are constructed**, not which KNN config is picked. The canonical recipe:
+The single biggest performance lever for time-series machine-state jobs is **how the n-shot files are constructed**, not which KNN config is picked. For the upstream cleanup step (gap-aware blocking + imputation on the raw source before you slice contiguous shots), use [`newton-data-prep`](../newton-data-prep/SKILL.md)'s `DataPreprocessor`. The canonical n-shot recipe itself:
 
 1. **Each shot file is one temporally-contiguous block of a single class.** Pick the longest contiguous run of rows for that class from your raw labeled CSV (or from a single source recording / well / snapshot file) and slice the first N rows. **Never `random.sample()` rows from a class-filtered list** — the resulting shot file has non-monotonic timestamps and zero physical contiguity, and the encoder's sliding window silently glues across the gaps between sampled rows.
 2. **Don't punch random per-row holes in the inference file.** The historical "inference = labeled CSV minus the n-shot rows" pattern is fine *if* the shots came from contiguous blocks (so the holes are a small number of contiguous ranges), but is catastrophic if shots were random-sampled (thousands of single-row gaps). The cleanest pattern is to draw shots from a *different* source recording than inference (e.g., 3W's shots come from `data/raw/3W/dataset/<code>/WELL-*.parquet` while inference is the labeled CSV — they don't overlap).
