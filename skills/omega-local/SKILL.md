@@ -76,7 +76,7 @@ Omega's `in_channels=1`. **Do not** stack sensors along the channel axis. The su
 
 1. Treat each sensor column as an independent univariate series.
 2. Run the encoder per-sensor per-window → one 768-dim embedding per (sensor, window).
-3. Concatenate embeddings across sensors at the **window** level for the downstream model (joint state).
+3. Concatenate embeddings across sensors at the **window** level for the downstream model (joint state). The canonical code form of this pattern — joint-state concat + optional L2 / standardization / PCA into `(X, y, metadata)` arrays — lives in [`newton-data-prep`](../newton-data-prep/SKILL.md)'s `FeaturePreparer`.
 
 Trying to feed `(B, n_sensors, T)` raises `ValueError: Model only supports single-channel input`.
 
@@ -249,7 +249,7 @@ If your data is **per-block** (e.g. multiple jobs/recordings concatenated, where
 
 The Omega encoder works best on **monotonically increasing timestamps with a roughly constant sampling rate**. Deviations don't always break the pipeline, but they're worth flagging early — and the same checks catch unrelated data issues that *do* break things downstream.
 
-Pattern adapted from [`archetypeai/omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) (that repo targets the cloud `machine-state-job-pipeline` for `omega_1_4_base`; the static checks transfer cleanly to local 1.3 inference). Run once after loading, before any transformations:
+Pattern adapted from [`archetypeai/omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) (that repo targets the cloud `machine-state-job-pipeline` for `omega_1_4_base`; the static checks transfer cleanly to local 1.3 inference). For the *active cleanup* counterpart — same diagnostics but with gap-aware blocking + imputation that produces a cleaned dataframe instead of just a report — see [`newton-data-prep`](../newton-data-prep/SKILL.md)'s `DataPreprocessor`. Run once after loading, before any transformations:
 
 | Check | What it catches | Severity |
 |---|---|---|

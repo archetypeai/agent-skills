@@ -134,7 +134,7 @@ Holds out 20% of each shot file as labeled pilot data, uploads the remaining 80%
 
 ## Recommended Workflow
 
-1. **Prep shot files** following the canonical contiguous + z-scored recipe in [`newton-machine-state-batch/SKILL.md`](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored): one CSV per class, rows pulled as a single temporally-contiguous block (not `random.sample`), monotonic timestamp, ≥1,000 rows each per `nshot_support` floor + headroom.
+1. **Prep shot files** following the canonical contiguous + z-scored recipe in [`newton-machine-state-batch/SKILL.md`](../newton-machine-state-batch/SKILL.md#recommended-n-shot-data-prep-contiguous--z-scored): one CSV per class, rows pulled as a single temporally-contiguous block (not `random.sample`), monotonic timestamp, ≥1,000 rows each per `nshot_support` floor + headroom. If the raw source has gaps or NaNs before you slice the contiguous block, use [`newton-data-prep`](../newton-data-prep/SKILL.md) to do gap-aware blocking + imputation first — preflight is read-only and won't fix the data.
 2. **Run static preflight.** Fix any FAILs. Triage WARNs:
    - `feature_scale` >3 decades → z-score each column before upload, or switch the downstream call to `--metric cosine` (handled by [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md)).
    - `constant_columns` → drop those columns before upload.

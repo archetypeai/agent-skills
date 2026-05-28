@@ -46,7 +46,9 @@ Newton processes CSV data in overlapping windows:
 
 ### Step 1: Prepare Focus CSVs
 
-Create one CSV per class with labeled sensor data. Each CSV should have:
+Create one CSV per class with labeled sensor data. If the raw source has gaps or NaNs, run it through [`newton-data-prep`](../newton-data-prep/SKILL.md)'s `DataPreprocessor` first — gap-aware blocking + imputation keeps the encoder's sliding window from silently gluing across long outages, which otherwise leaks fabricated samples into your shot files.
+
+Each CSV should have:
 - Consistent column names matching your data stream
 - A representative sample of that class (50-200 rows recommended)
 - No header row mismatches between focus files and query data
