@@ -177,8 +177,22 @@ No Newton API key required — this skill is pure local data wrangling.
 ```
 skills/newton-data-prep/
 ├── SKILL.md                              ← this file
-└── references/
-    ├── data_preprocessor.py              ← gap-aware blocking + diagnostics
-    ├── data_splitter.py                  ← OOT / random train/test split
-    └── feature_preparer.py               ← joint-state featurization + PCA
+├── references/
+│   ├── data_preprocessor.py              ← gap-aware blocking + diagnostics
+│   ├── data_splitter.py                  ← OOT / random train/test split
+│   └── feature_preparer.py               ← joint-state featurization + PCA
+└── tests/
+    ├── conftest.py                       ← shared fixtures
+    ├── test_data_preprocessor.py
+    ├── test_data_splitter.py
+    └── test_feature_preparer.py
 ```
+
+## Running the Tests
+
+```bash
+pip install pandas numpy scikit-learn pytest
+pytest skills/newton-data-prep/tests/ -v
+```
+
+CI runs the suite automatically on any PR that touches `skills/newton-data-prep/**` (see `.github/workflows/test-newton-data-prep.yml`).
