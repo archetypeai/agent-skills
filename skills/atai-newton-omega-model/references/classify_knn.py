@@ -39,7 +39,7 @@ import argparse
 import csv
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -94,14 +94,33 @@ def feature(window, mean, std):
     return _embed_resilient(((np.asarray(window, dtype=float) - mean) / std).tolist())
 
 
+def _embed_start(series, s, mean, std):
+    return s, feature(window_at(series, s, WINDOW), mean, std)
+
+
 def features_parallel(series, starts, mean, std, workers):
-    """Embed many windows concurrently. Returns {start: feature} (skips failures)."""
+    """Embed many windows concurrently, with a live progress line. Returns {start: feature}."""
     out: dict[int, np.ndarray] = {}
+    total = len(starts)
+    failures = 0
+    t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        results = ex.map(lambda s: (s, feature(window_at(series, s, WINDOW), mean, std)), starts)
-        for s, feat in results:
+        futures = [ex.submit(_embed_start, series, s, mean, std) for s in starts]
+        for done, fut in enumerate(as_completed(futures), 1):
+            s, feat = fut.result()
             if feat is not None:
                 out[s] = feat
+            else:
+                failures += 1
+            if done % 10 == 0 or done == total:
+                elapsed = time.time() - t0
+                rate = done / elapsed if elapsed else 0
+                eta = (total - done) / rate if rate else 0
+                fail_note = f", {failures} failed" if failures else ""
+                print(f"\r  embedded {done}/{total} ({100 * done // total}%)  "
+                      f"{elapsed:4.0f}s elapsed, ~{eta:4.0f}s left{fail_note}   ",
+                      end="", flush=True)
+    print()  # finish the progress line
     return out
 
 
