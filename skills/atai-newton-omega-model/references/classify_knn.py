@@ -1,7 +1,7 @@
 """
-Machine-state classification on Omega embeddings — client-side KNN, held-out.
+Classification on Omega embeddings — client-side KNN, held-out.
 
-The managed `machine-state-classification` batch pipeline, done over Direct
+The managed batch classification pipeline, done over Direct
 Query: embed short windows with Omega, then KNN against a small n-shot library
 of labelled windows. No batch job, no lens session.
 
@@ -197,7 +197,7 @@ def print_report(truths: list[str], preds: list[str], positive: str = "degraded"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Held-out machine-state eval over Omega embeddings.")
+    parser = argparse.ArgumentParser(description="Held-out classification eval over Omega embeddings.")
     parser.add_argument("--inference", default=str(DEFAULT_INFERENCE), help="test sensor CSV")
     parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
     parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
@@ -206,7 +206,7 @@ def main() -> None:
 
     healthy = read_series(HEALTHY_SHOT)
     degraded = read_series(DEGRADED_SHOT)
-    banner(f"Held-out machine-state eval — Omega embeddings + {K}-NN vs ground truth")
+    banner(f"Held-out classification eval — Omega embeddings + {K}-NN vs ground truth")
 
     # Global per-channel scaler fit on the n-shot pool only (no test leakage).
     mean, std = fit_scaler(np.concatenate([np.asarray(healthy), np.asarray(degraded)], axis=1).tolist())

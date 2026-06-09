@@ -6,7 +6,7 @@ description: >
   send a window of sensor readings, get back a fixed-size vector per
   channel, no batch job and no session. Use this skill when the user wants
   to embed multivariate sensor windows (vibration, flow, pressure,
-  network, etc.) for lightweight downstream ML — KNN machine-state
+  network, etc.) for lightweight downstream ML — KNN
   classification, anomaly scoring, similarity search, or 2D projection —
   done client-side over the embeddings. Covers the request shape (`data.numeric_array`,
   channel-first window), the per-channel 768-d output, the 1024-length
@@ -25,11 +25,11 @@ Omega is a **time-series encoder**: feed it a window of sensor readings, get bac
 
 - Embed multivariate sensor windows (vibration, pressure, flow, network, …) into vectors
 - Build lightweight downstream ML over those vectors **client-side**: KNN classification, anomaly scoring, similarity search, PCA/UMAP projection
-- Prototype machine-state classification without standing up the managed batch pipeline
+- Prototype classification without standing up the managed batch pipeline
 
 **Do not use this skill when:**
 - The input is text, an image, or a video — that's the Newton fusion model (`/query` with `Newton::c2_6_8b_fp8_...`)
-- You need fully-managed, server-side machine-state classification over millions of rows — that's the batch Machine-State pipeline (Files API + batch jobs)
+- You need fully-managed, server-side classification over millions of rows
 
 For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, temporal-order train/test split, the joint-state feature matrix), see [`newton-data-prep`](../newton-data-prep/SKILL.md).
 
@@ -85,9 +85,9 @@ The window goes in a **`data.numeric_array` event** as a **channel-first** matri
 
 See [`embed_query.py`](references/embed_query.py) for the basic call, the padding behavior, and `normalize_input`.
 
-## Downstream pattern — embeddings → KNN machine-state
+## Downstream pattern — embeddings → KNN classification
 
-This is the managed Machine-State batch pipeline, done client-side over `/query` embeddings:
+This is what the managed batch pipeline does, reproduced client-side over `/query` embeddings:
 
 0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window, calling `/query` with `normalize_input=false`. This is the data-prep / preflight convention; vet the shot files first with [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) and prep raw CSVs with [`newton-data-prep`](../newton-data-prep/SKILL.md).
 1. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
@@ -109,9 +109,10 @@ i.e. it caught every degraded window (recall 1.0) at the cost of 54 healthy wind
 | Operation | Observed |
 |-----------|---------:|
 | One window embed (4 channels × 1024) | **~1.1 s** |
-| n-shot KNN library (12 windows) | ~12 embed calls, a few seconds total |
+| n-shot library (8 windows) | ~8 embeds, a few seconds |
+| Held-out eval (1000 windows, 8-way parallel) | **~6–7 min** (~1000 embeds) |
 
-Each embed is an independent stateless call — parallelize across windows if you need throughput.
+Each embed is an independent stateless call, so `classify_knn.py` fans them out with `--workers`; raise it (or lower `--max-windows`) to trade throughput for budget/time.
 
 ## Common Pitfalls
 
@@ -134,7 +135,7 @@ EOF
 
 cd skills/atai-newton-omega-model/references
 python embed_query.py     # embedding basics
-python classify_knn.py    # n-shot KNN machine-state
+python classify_knn.py    # n-shot KNN classification
 ```
 
 The scripts auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` walks up from cwd); otherwise export `ATAI_API_KEY`. `numpy` is required for `classify_knn.py`.
@@ -147,7 +148,7 @@ skills/atai-newton-omega-model/
 ├── references/
 │   ├── _common.py            ← auth, the Omega embed call, CSV/window helpers
 │   ├── embed_query.py        ← embedding basics (call, padding, normalize_input)
-│   ├── classify_knn.py       ← embeddings → n-shot KNN machine-state classification
+│   ├── classify_knn.py       ← embeddings → n-shot KNN classification (held-out eval)
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_data/
 │       ├── bearing_healthy.csv          ← n-shot library: healthy (4 channels)
