@@ -95,7 +95,16 @@ This is the managed Machine-State batch pipeline, done client-side over `/query`
 1. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
 2. **Classify** a new window the same way and take a majority vote over the *k* nearest library features (euclidean).
 
-A few dozen embeddings make a serviceable classifier — no training, no batch job. See [`classify_knn.py`](references/classify_knn.py): it builds the library from the labelled shot files and runs a **genuine held-out evaluation** on windows from `bearing_inference_subset.csv` (timestamps disjoint from the shot files — no leakage), scored against ground-truth labels from `bearing_raw_labeled.csv`. The sample run classifies 6/6 held-out bearing windows healthy/degraded.
+A few dozen labelled embeddings make a serviceable classifier — no training, no batch job. See [`classify_knn.py`](references/classify_knn.py): it builds the library from the labelled shot files and runs a **genuine held-out evaluation** against `bearing_inference.csv` (sensors only — **no `label` column**, and timestamps disjoint from the shot files, so leakage is impossible two ways over), scoring predictions against `bearing_labels.csv`.
+
+It reports a full binary metrics report (`degraded` = positive). On **1000 held-out windows** (500 healthy + 500 degraded), the sample run scored:
+
+```
+accuracy : 0.946  (946/1000)
+precision: 0.903   recall: 1.000   f1: 0.949
+```
+
+i.e. it caught every degraded window (recall 1.0) at the cost of 54 healthy windows flagged as degraded — a realistic operating point for an n-shot vibration classifier. The default run embeds ~1000 windows (~6–7 min, 8-way parallel); use `--max-windows 50` for a ~30 s check.
 
 ## Latency
 
@@ -145,8 +154,8 @@ skills/atai-newton-omega-model/
 │   └── sample_data/
 │       ├── bearing_healthy.csv          ← n-shot library: healthy (4 channels)
 │       ├── bearing_degraded.csv         ← n-shot library: degraded
-│       ├── bearing_inference_subset.csv ← held-out test input (disjoint timestamps, no labels)
-│       ├── bearing_labels_subset.csv    ← ground-truth labels for the test input
+│       ├── bearing_inference.csv        ← held-out test input, sensors only (~1000 windows, NO label column)
+│       ├── bearing_labels.csv           ← ground-truth labels (timestamp,label), scoring only
 │       └── README.md                    ← dataset attribution + held-out layout
 └── tests/
     └── test_references.py    ← network-free unit tests (python -m unittest)

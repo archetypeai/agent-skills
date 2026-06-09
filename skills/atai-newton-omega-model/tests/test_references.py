@@ -142,6 +142,27 @@ class TestScalerAndWindows(unittest.TestCase):
         self.assertEqual(len(ts), 2000)
         self.assertTrue(all(isinstance(t, int) for t in ts[:5]))
 
+    def test_inference_file_has_no_label_column(self):
+        # The shipped test input must not contain a label column (leak-proof).
+        header = open(SAMPLE / "bearing_inference.csv").readline().strip().split(",")
+        self.assertNotIn("label", [h.lower() for h in header])
+        series = _common.read_series(SAMPLE / "bearing_inference.csv")
+        self.assertEqual(len(series), 4)  # 4 bearing channels embedded, nothing else
+
+
+class TestMetrics(unittest.TestCase):
+    def test_perfect(self):
+        m = classify_knn.metrics(["healthy", "degraded"], ["healthy", "degraded"])
+        self.assertEqual((m["accuracy"], m["precision"], m["recall"], m["f1"]), (1.0, 1.0, 1.0, 1.0))
+
+    def test_false_positive_lowers_precision(self):
+        # one healthy window mislabelled degraded -> recall stays 1, precision drops
+        m = classify_knn.metrics(["degraded", "healthy"], ["degraded", "degraded"])
+        self.assertEqual(m["recall"], 1.0)
+        self.assertEqual(m["precision"], 0.5)
+        self.assertEqual(m["tp"], 1)
+        self.assertEqual(m["fp"], 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
