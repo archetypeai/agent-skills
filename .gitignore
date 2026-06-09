@@ -3,3 +3,7 @@
 .env.local
 node_modules/
 *.local.json
+
+# Python artifacts
+__pycache__/
+*.pyc
