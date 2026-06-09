@@ -14,8 +14,7 @@ description: >
   "joint multi-channel state" + KNN pattern. For cleaning / splitting /
   windowing raw sensor CSVs first, see `newton-data-prep`.
   Do NOT use for text / image / video reasoning (that's the Newton fusion
-  model on `/query`). Do NOT use for fully-managed, server-side machine-
-  state classification over millions of rows (that's the batch pipeline).
+  model on `/query`).
 ---
 
 # Newton Omega Encoder — Time-Series Embeddings via `/query`
