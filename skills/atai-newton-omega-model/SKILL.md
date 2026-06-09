@@ -8,8 +8,7 @@ description: >
   to embed multivariate sensor windows (vibration, flow, pressure,
   network, etc.) for lightweight downstream ML — KNN machine-state
   classification, anomaly scoring, similarity search, or 2D projection —
-  done client-side over the embeddings instead of via the managed batch
-  Machine-State pipeline. Covers the request shape (`data.numeric_array`,
+  done client-side over the embeddings. Covers the request shape (`data.numeric_array`,
   channel-first window), the per-channel 768-d output, the 1024-length
   native window and zero-padding behavior, `normalize_input`, and the
   "joint multi-channel state" + KNN pattern. For cleaning / splitting /
