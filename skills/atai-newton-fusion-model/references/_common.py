@@ -90,6 +90,7 @@ def query(
     file_ids: list[str] | None = None,
     max_new_tokens: int = 512,
     sanitize: bool = False,
+    multi_image: bool = False,
     timeout: int = 600,
 ) -> tuple[str, dict[str, Any], int]:
     """
@@ -100,6 +101,10 @@ def query(
     (verified: a directive sent in `system_prompt` alone is ignored, while
     the same directive in `instruction_prompt` is obeyed), so we don't send
     it.
+
+    `multi_image=True` is required when attaching more than one image — it
+    puts the model in multi-image mode (each image is independent, NOT video
+    frames). Without it, a multi-image request fails with 400 query_failed.
     """
     endpoint, headers = client()
     body = {
@@ -110,6 +115,8 @@ def query(
         "max_new_tokens": max_new_tokens,
         "sanitize": sanitize,
     }
+    if multi_image:
+        body["multi_image"] = True
     t0 = time.time()
     r = requests.post(f"{endpoint}/query", headers=headers, json=body, timeout=timeout)
     elapsed_ms = int((time.time() - t0) * 1000)

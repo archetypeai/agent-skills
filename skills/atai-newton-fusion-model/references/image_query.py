@@ -9,9 +9,14 @@ Two paths to attach an image to a /query call:
   (b) Inline base64 in a `data.base64_img` event in the /query body.
       Best for one-shot queries where the upload roundtrip is wasted.
 
-This script demonstrates (a). For (b), see the inline-base64 demo at the
-bottom of this file. Both paths reach the same fusion model and produce
-comparable description quality.
+Both paths reach the same fusion model and produce comparable description
+quality.
+
+Attaching MORE than one image additionally requires `multi_image: true`
+(example 4). That flag puts the model in multi-image mode: each attachment
+is an independent image (before/after, multi-view) — NOT frames of a video.
+Without the flag, a multi-image request fails with 400 query_failed. For
+video, see video_query.py (.mp4 + max_frames).
 
 Usage:
     cp .env.example .env  # then fill in ATAI_API_KEY
@@ -41,7 +46,10 @@ from _common import (
     upload_file,
 )
 
-DEFAULT_IMAGE = Path(__file__).parent / "sample_assets" / "wind-turbines.png"
+ASSETS = Path(__file__).parent / "sample_assets"
+DEFAULT_IMAGE = ASSETS / "wind-turbines.png"
+BEFORE_IMAGE = ASSETS / "assembly_before.png"
+AFTER_IMAGE = ASSETS / "assembly_after.png"
 
 
 def example_file_upload(image_path: Path) -> None:
@@ -118,6 +126,33 @@ def example_structured_extraction(image_path: Path) -> None:
     print(f"[{ms} ms]\n{text}\n")
 
 
+def example_multi_image(before_path: Path, after_path: Path) -> None:
+    """Two independent images in one call: requires `multi_image: true`."""
+    banner(
+        "4. Multiple images via multi_image: true (before/after comparison)\n"
+        f"   {before_path.name} + {after_path.name}"
+    )
+    file_ids = [upload_file(before_path), upload_file(after_path)]
+    print(f"Uploaded → file_ids={file_ids}")
+
+    text, _, ms = query(
+        user_query=(
+            "Image 1 is a workbench BEFORE an assembly task; image 2 is the "
+            "same bench DURING/AFTER. Compare them: what has changed, and "
+            "what is the worker doing in image 2?"
+        ),
+        instruction_prompt=(
+            "You compare two independent photos of a workbench. Answer in "
+            "two short paragraphs: (1) what changed between the images, "
+            "(2) what action is in progress in the second image."
+        ),
+        file_ids=file_ids,
+        max_new_tokens=400,
+        multi_image=True,  # required for >1 image; omitting it → 400 query_failed
+    )
+    print(f"[{ms} ms]\n{text}\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -134,6 +169,8 @@ def main() -> None:
     example_file_upload(image_path)
     example_inline_base64(image_path)
     example_structured_extraction(image_path)
+    if BEFORE_IMAGE.exists() and AFTER_IMAGE.exists():
+        example_multi_image(BEFORE_IMAGE, AFTER_IMAGE)
 
 
 if __name__ == "__main__":

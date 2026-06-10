@@ -8,6 +8,8 @@ network. They lock in the invariants discovered while building this skill:
   * `file_ids` is referenced by filename.
   * The video path is .mp4 + `max_frames`; video bodies never set
     `multi_image` (that flag means multi-image mode, not video).
+  * Multi-image bodies set `multi_image: true` (required for >1 image);
+    single-image bodies omit the key entirely.
   * The image inline path uses a `data.base64_img` event.
   * `extract_text` handles every response shape we've observed.
 
@@ -137,6 +139,20 @@ class TestQueryBody(_Base):
             _common.query("q")
         self.assertEqual(store["json"]["file_ids"], [])
 
+    def test_multi_image_flag(self):
+        self.hermetic_env(ATAI_API_KEY="test-key")
+        store: dict = {}
+        with mock.patch.object(_common.requests, "post", _capturing_post({"response": ["x"]}, store)):
+            _common.query("q", file_ids=["a.png", "b.png"], multi_image=True)
+        self.assertIs(store["json"]["multi_image"], True)
+
+    def test_multi_image_omitted_by_default(self):
+        self.hermetic_env(ATAI_API_KEY="test-key")
+        store: dict = {}
+        with mock.patch.object(_common.requests, "post", _capturing_post({"response": ["x"]}, store)):
+            _common.query("q", file_ids=["a.png"])
+        self.assertNotIn("multi_image", store["json"])
+
 
 class TestUploadFile(_Base):
     def test_missing_file_exits(self):
@@ -180,6 +196,20 @@ class TestImageInlineBase64(_Base):
             self.assertEqual(event["event_data"]["mime_type"], "image/png")
         finally:
             os.unlink(path)
+
+
+class TestMultiImage(_Base):
+    def test_body_sets_multi_image_true(self):
+        self.hermetic_env(ATAI_API_KEY="test-key")
+        store: dict = {}
+        with mock.patch.object(image_query, "upload_file", lambda p: Path(p).name), \
+                mock.patch.object(_common.requests, "post", _capturing_post({"response": ["ok"]}, store)):
+            image_query.example_multi_image(Path("before.png"), Path("after.png"))
+        body = store["json"]
+        self.assertEqual(body["file_ids"], ["before.png", "after.png"])
+        self.assertIs(body["multi_image"], True)  # required for >1 image; else 400
+        self.assertNotIn("system_prompt", body)
+        self.assertNotIn("max_frames", body)  # images, not video
 
 
 class TestVideo(_Base):
