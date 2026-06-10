@@ -167,7 +167,10 @@ X_train, X_test, y_train, y_test, meta_train, meta_test = splitter.split(X, y, m
 ## Local Setup
 
 ```bash
-pip install pandas numpy scikit-learn matplotlib  # plot=True in diagnose() needs matplotlib
+# In a virtualenv (system pythons are often PEP 668 "externally managed"):
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r skills/atai-newton-omega-model-data-prep/references/requirements.txt
+pip install matplotlib  # optional: only for plot=True in diagnose()
 ```
 
 No Newton API key required — this skill is pure local data wrangling.
@@ -191,7 +194,7 @@ skills/atai-newton-omega-model-data-prep/
 ## Running the Tests
 
 ```bash
-pip install pandas numpy scikit-learn pytest
+pip install -r skills/atai-newton-omega-model-data-prep/references/requirements.txt pytest
 pytest skills/atai-newton-omega-model-data-prep/tests/ -v
 ```
 
