@@ -8,6 +8,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 | Skill | Description |
 |-------|-------------|
+| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
 
 ## Quick Start
 
@@ -24,7 +25,7 @@ cp -r skills/* your-project/.claude/skills/
 ### Invoke a Skill
 
 ```
-/<skill-name>  # e.g. /newton-setup once skills are re-added via review
+/atai-newton-fusion-model # Multimodal (text/image/video) queries on the C 2.6 fusion model
 ```
 
 ## Architecture

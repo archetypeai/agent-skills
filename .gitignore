@@ -3,3 +3,11 @@
 .env.local
 node_modules/
 *.local.json
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Scratch output from csv_vs_txt_proof.py
+proof_input.txt
+proof_input.csv
