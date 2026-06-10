@@ -6,9 +6,11 @@ network. They lock in the invariants discovered while building this skill:
   * /query bodies send `instruction_prompt` and NEVER `system_prompt`
     (C 2.6 ignores system_prompt; sending it was the original bug).
   * `file_ids` is referenced by filename.
-  * The video path is .mp4 + `max_frames`; video bodies never set
-    `multi_image` (that flag means multi-image mode, not video).
-  * Multi-image bodies set `multi_image: true` (required for >1 image);
+  * The .mp4 video path uses `max_frames` and never sets `multi_image`.
+  * The frame-list video path sets `multi_image: false` AND carries the
+    `query_metadata` triple (raw_fps / frames_indices / total_num_frames) —
+    without query_metadata that shape 400s.
+  * Multi-image (independent images) bodies set `multi_image: true`;
     single-image bodies omit the key entirely.
   * The image inline path uses a `data.base64_img` event.
   * `extract_text` handles every response shape we've observed.
@@ -229,6 +231,29 @@ class TestVideo(_Base):
         self.assertNotIn("multi_image", body)  # multi_image is multi-image mode, not video
         self.assertNotIn("system_prompt", body)
         self.assertEqual(body["instruction_prompt"], video_query.ASSEMBLY_PROMPT)
+
+    def test_frame_list_body_has_query_metadata(self):
+        self.hermetic_env(ATAI_API_KEY="test-key")
+        store: dict = {}
+        frames = []
+        for color in (b"a", b"b"):
+            f = tempfile.NamedTemporaryFile("wb", suffix=".png", delete=False)
+            f.write(b"\x89PNG-" + color)
+            f.close()
+            frames.append(Path(f.name))
+        self.addCleanup(lambda: [os.unlink(p) for p in frames])
+        with mock.patch.object(_common.requests, "post", _capturing_post({"response": ["ok"]}, store)):
+            video_query.example_frame_list(frames)
+        body = store["json"]
+        self.assertIs(body["multi_image"], False)  # false = frames of ONE video
+        self.assertEqual(len(body["events"]), 2)
+        self.assertEqual(body["events"][0]["type"], "data.base64_img")
+        # The triple that makes the frame-list video path work at all:
+        self.assertEqual(
+            body["query_metadata"],
+            {"raw_fps": 1.0, "frames_indices": [0, 1], "total_num_frames": 2},
+        )
+        self.assertNotIn("system_prompt", body)
 
 
 class TestTextConstants(unittest.TestCase):

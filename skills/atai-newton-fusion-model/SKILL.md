@@ -9,8 +9,10 @@ description: >
   visual context) without managing session lifecycle, or when they need
   the Newton C checkpoint that reasons over video frames via `/query`.
   Covers the request shape per modality, the two image-attachment paths
-  (file_ids vs base64), `.mp4` + `max_frames` for video, JSON-output prompting,
-  latency budgets, and the C 2.6 identifier gotcha.
+  (file_ids vs base64), multi-image mode, both video paths (`.mp4` +
+  `max_frames`, and client-sampled frames + `query_metadata`), generation
+  parameters, JSON-output prompting, latency budgets, and the C 2.6
+  identifier gotcha.
   Do NOT use for streaming / session-based activity monitoring, large
   multi-file batch jobs, or time-series embedding (KNN / anomaly)
   classification.
@@ -127,7 +129,7 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
 }
 ```
 
-**(c) Multiple images — set `multi_image: true`** (required for more than one image; without it the request fails with `400 query_failed` — see the pitfall below). This is *multi-image mode*: each attachment is an **independent** image (before/after, multi-view, "is the same person in these images?"), not frames of a video. Platform limit: **16 images max** per request:
+**(c) Multiple images — set `multi_image: true`** for *multi-image mode*: each attachment is an **independent** image (before/after, multi-view, "is the same person in these images?"), not frames of a video. Platform limit: **16 images max** per request. Without `multi_image: true`, an image list means "frames of one video" and requires `query_metadata` (see the Video section); lacking both, the request fails with `400 query_failed`:
 
 ```json
 {
@@ -145,7 +147,9 @@ See [`image_query.py`](references/image_query.py) for runnable demos of all thre
 
 ### Video
 
-C 2.6 reasons over video on `/query`: pass an `.mp4` by `file_id` with `max_frames`, and GPQ decodes and uniformly samples the clip server-side before the model sees the frames. No client-side video tooling needed. This distinguishes C 2.6 from the C 2.4 / 2.5 text checkpoints, which accept an `.mp4` but ignore the frames and reply *"I can't see videos."*
+C 2.6 reasons over video on `/query` two ways. This distinguishes it from the C 2.4 / 2.5 text checkpoints, which accept an `.mp4` but ignore the frames and reply *"I can't see videos."*
+
+**(a) `.mp4` + `max_frames`** — upload the clip, and GPQ decodes and uniformly samples it server-side before the model sees the frames. No client-side video tooling needed:
 
 ```bash
 curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
@@ -165,12 +169,31 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
 }
 ```
 
+**(b) Client-sampled frames + `query_metadata`** — send the frames yourself (one `data.base64_img` event each, or image `file_ids`), set `multi_image: false`, and include a `query_metadata` block with the video-metadata triple. **The `query_metadata` block is what makes this work** — without it the request fails with `400 query_failed`:
+
+```json
+{
+  "query": "This is a short video. Describe the sequence of actions in order.",
+  "instruction_prompt": "...",
+  "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
+  "multi_image": false,
+  "max_new_tokens": 150,
+  "events": [
+    {"type": "data.base64_img", "event_data": {"contents": "<frame_0 base64>"}},
+    {"type": "data.base64_img", "event_data": {"contents": "<frame_1 base64>"}}
+  ],
+  "query_metadata": {"raw_fps": 1.0, "frames_indices": [0, 1], "total_num_frames": 2}
+}
+```
+
+Both shapes verified live (the `file_ids` variant of (b) works too). Notes:
+
 - **`max_frames`** — frames GPQ samples uniformly from the video before feeding the model. Default 32, **platform max 64**. Increase for longer / higher-detail clips; decrease to cap latency. **Values above 64 fail silently**: the request returns 200, but the video is dropped and the model confabulates a scene from priors (verified: `max_frames: 80` on the assembly clip described "a person holding a smartphone"). Stay at ≤ 64.
 - **Timeout** — set the client request timeout to **at least 600s**. Video latency scales with `max_frames` and clip length; default 30–60s timeouts will trip on non-trivial clips.
 - **`.mp4`-direct on C 2.6 is a recent platform change.** Earlier the `.mp4` path silently dropped the frames for *every* model (a known GPQ bug), so older notes say "video doesn't work on `/query`." On C 2.6 today it does, via `max_frames`.
-- **`multi_image` is not a video knob.** `multi_image: true` switches the model to *multi-image mode* — multiple attached images are treated as **independent** images (e.g. before/after, multi-view), not as video frames. Per the platform docs, the *default* for a list of images (no `multi_image`) is the opposite: they are treated as a video you sub-sampled yourself. **However**, that frame-list-as-video path currently returns `400 query_failed` on the prod endpoint (verified 2026-06-10 at 2/3/8 frames, via `base64_img` events and `file_ids` alike) — so today, send the `.mp4` and let `max_frames` sample it.
+- **`multi_image` selects between video and multi-image mode.** `multi_image: false` (with `query_metadata`) = the attached images are frames of **one video**. `multi_image: true` = *multi-image mode* — the images are **independent** (before/after, multi-view), and `query_metadata` is not needed.
 
-See [`video_query.py`](references/video_query.py) for runnable demos (basic description + a `max_frames` tradeoff) using a worker-assembly PASS/FAIL inspection prompt.
+See [`video_query.py`](references/video_query.py) for runnable demos of both paths (mp4 direct, a `max_frames` tradeoff, and a frame-list demo) using a worker-assembly PASS/FAIL inspection prompt.
 
 ## Generation Parameters
 
@@ -200,6 +223,7 @@ Observed against prod with the sample assets in `references/sample_assets/`:
 | Image via inline base64 | same | **~0.8–2.5 s** | base64 inflates the request; scales with image size |
 | Two images, `multi_image: true` | 2 × ~400 KB PNG | **~2.9 s** | before/after comparison (assembly frames) |
 | Video, mp4 + `max_frames=32` | ~31 s assembly clip | **~2–6 s** | server-side decode/sample |
+| Video, 2 frames + `query_metadata` | 2 × ~400 KB PNG | **~1.9 s** | client-sampled frame-list path |
 
 Numbers are smoke-test order-of-magnitude. Production data may be 5–10× heavier and proportionally slower.
 
@@ -224,7 +248,7 @@ Walk `payload["response"]["response"][0]` as the canonical extraction path. The 
 - **Wrong model identifier.** `c2_6_8b_fp8_260424d7a55d5e` without `Newton::` returns `400 invalid_model_version`. So does the variant without `_fp8_`. Always use the full `Newton::c2_6_8b_fp8_260424d7a55d5e`.
 - **JSON wrapped in markdown fences.** The model sometimes returns <code>```json ... ```</code> even when explicitly told not to. Either parse defensively (`text.strip().removeprefix("```json").removesuffix("```")`) or restate the no-fences rule in the user query as well as `instruction_prompt`.
 - **Video timeout.** Default `requests.post` timeout of 30–60s will fail on anything but trivial clips. Set timeout ≥ 600s.
-- **`multi_image` is multi-image mode, not video.** `multi_image: true` is required to attach more than one image at once (omitting it on a multi-image request → `400 query_failed`, even though platform docs intend the no-flag default to mean "self-sampled video frames"), and it makes the model treat them as **independent** images (before/after, multi-view) — not as a temporal video. Max 16 images. For video, send an `.mp4` with `max_frames`.
+- **Multiple images without `multi_image: true` need the `query_metadata` triple.** A list of images defaults to "frames of one video" — but that path requires `query_metadata: {"raw_fps": ..., "frames_indices": [...], "total_num_frames": N}` in the body; without it the request fails with `400 query_failed` (the error doesn't hint at the missing field). For *independent* images (before/after, multi-view), set `multi_image: true` instead — max 16 images, no `query_metadata` needed.
 - **`max_frames` above 64 fails silently.** The platform max is 64. `max_frames: 80` still returns 200, but the video never reaches the model — it confabulates a scene from priors (same failure mode as the CSV gotcha below). Keep `max_frames` ≤ 64.
 - **"Video doesn't work on `/query`" is stale.** Older notes say C 2.6 (and 2.4/2.5) can't see video. That was a GPQ bug that silently dropped `.mp4` frames before any model. C 2.6 reads video now via `.mp4` + `max_frames` — verified. The 2.4/2.5 *text* checkpoints still ignore frames.
 - **`file_ids` takes the filename, not the `fil_...` uid.** On upload the API returns both `{"file_id": "<filename>", "file_uid": "fil_..."}`. `/query` resolves `file_ids` by the **filename** (the `file_id` value, e.g. `"dashboard.png"`), not the `fil_...` `file_uid`. Passing the `file_uid` fails with a **misleading** `400 unsupported_file_type` ("Found unsupported file type with file: fil_…") — it looks like a content-type problem but is really the wrong identifier. Verified: `file_ids=["wind-turbines.png"]` → 200; `file_ids=["fil_…"]` → 400.
@@ -258,7 +282,7 @@ skills/atai-newton-fusion-model/
 │   ├── _common.py            ← shared auth / upload / extract helpers
 │   ├── text_query.py         ← 3 text patterns (plain, JSON output, .txt flow-log attachment)
 │   ├── image_query.py        ← 4 image patterns (file_ids, base64, JSON extraction, multi-image)
-│   ├── video_query.py        ← 2 video patterns (mp4 direct, max_frames tradeoff)
+│   ├── video_query.py        ← 3 video patterns (mp4 direct, max_frames tradeoff, frame list + query_metadata)
 │   ├── csv_vs_txt_proof.py   ← diagnostic: proves text/csv attachments aren't read, text/plain are
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_assets/

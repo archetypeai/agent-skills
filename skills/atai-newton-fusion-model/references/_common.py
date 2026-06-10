@@ -90,7 +90,9 @@ def query(
     file_ids: list[str] | None = None,
     max_new_tokens: int = 512,
     sanitize: bool = False,
-    multi_image: bool = False,
+    multi_image: bool | None = None,
+    events: list[dict[str, Any]] | None = None,
+    query_metadata: dict[str, Any] | None = None,
     timeout: int = 600,
 ) -> tuple[str, dict[str, Any], int]:
     """
@@ -102,9 +104,11 @@ def query(
     the same directive in `instruction_prompt` is obeyed), so we don't send
     it.
 
-    `multi_image=True` is required when attaching more than one image — it
-    puts the model in multi-image mode (each image is independent, NOT video
-    frames). Without it, a multi-image request fails with 400 query_failed.
+    Multiple images go one of two ways:
+      * `multi_image=True` — multi-image mode: each image is independent.
+      * `multi_image=False` + `query_metadata` (raw_fps / frames_indices /
+        total_num_frames) — the images are frames of ONE video. Without the
+        query_metadata triple this shape fails with 400 query_failed.
     """
     endpoint, headers = client()
     body = {
@@ -115,8 +119,12 @@ def query(
         "max_new_tokens": max_new_tokens,
         "sanitize": sanitize,
     }
-    if multi_image:
-        body["multi_image"] = True
+    if multi_image is not None:
+        body["multi_image"] = multi_image
+    if events:
+        body["events"] = events
+    if query_metadata:
+        body["query_metadata"] = query_metadata
     t0 = time.time()
     r = requests.post(f"{endpoint}/query", headers=headers, json=body, timeout=timeout)
     elapsed_ms = int((time.time() - t0) * 1000)

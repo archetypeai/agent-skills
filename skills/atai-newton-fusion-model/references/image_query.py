@@ -12,11 +12,14 @@ Two paths to attach an image to a /query call:
 Both paths reach the same fusion model and produce comparable description
 quality.
 
-Attaching MORE than one image additionally requires `multi_image: true`
-(example 4). That flag puts the model in multi-image mode: each attachment
-is an independent image (before/after, multi-view) — NOT frames of a video.
-Without the flag, a multi-image request fails with 400 query_failed. For
-video, see video_query.py (.mp4 + max_frames).
+Attaching MORE than one image requires choosing a mode (example 4 here uses
+the first):
+
+  * `multi_image: true` — multi-image mode: each attachment is an
+    independent image (before/after, multi-view). Max 16 images.
+  * `multi_image: false` + a `query_metadata` block — the images are frames
+    of ONE video; see video_query.py. Without query_metadata, a multi-image
+    request fails with 400 query_failed.
 
 Usage:
     cp .env.example .env  # then fill in ATAI_API_KEY
@@ -148,7 +151,7 @@ def example_multi_image(before_path: Path, after_path: Path) -> None:
         ),
         file_ids=file_ids,
         max_new_tokens=400,
-        multi_image=True,  # required for >1 image; omitting it → 400 query_failed
+        multi_image=True,  # independent images; without it the list means "video frames" and needs query_metadata
     )
     print(f"[{ms} ms]\n{text}\n")
 
