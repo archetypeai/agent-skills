@@ -14,6 +14,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 | [newton-sensor-streaming](skills/newton-sensor-streaming/) | Real-time sensor data ingestion patterns (BLE, OBD2, serial, etc.) |
 | [newton-batch-upload](skills/newton-batch-upload/) | Upload large files (> 255 MB) via multipart presigned URLs |
 | [newton-activity-detection-batch](skills/newton-activity-detection-batch/) | Run text-in / text-out batch jobs on the C model via the `activity-detection` pipeline — narratives over large CSV/log datasets, with MapReduce / hierarchical-reduce patterns and quality-cliff guidance |
+| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
 
 ## Quick Start
 
@@ -36,6 +37,7 @@ cp -r skills/* your-project/.claude/skills/
 /newton-sensor-streaming  # Connect hardware sensors
 /newton-batch-upload      # Upload large files (> 255 MB)
 /newton-activity-detection-batch  # Batch text generation on the C model (narratives over CSV/log data)
+/atai-newton-fusion-model # Multimodal (text/image/video) queries on the C 2.6 fusion model
 ```
 
 ## Architecture
