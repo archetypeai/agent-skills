@@ -1,15 +1,15 @@
-name: Test newton-data-prep
+name: Test atai-newton-omega-model-data-prep
 
 on:
   pull_request:
     paths:
-      - 'skills/newton-data-prep/**'
-      - '.github/workflows/test-newton-data-prep.yml'
+      - 'skills/atai-newton-omega-model-data-prep/**'
+      - '.github/workflows/test-atai-newton-omega-model-data-prep.yml'
   push:
     branches: [main]
     paths:
-      - 'skills/newton-data-prep/**'
-      - '.github/workflows/test-newton-data-prep.yml'
+      - 'skills/atai-newton-omega-model-data-prep/**'
+      - '.github/workflows/test-atai-newton-omega-model-data-prep.yml'
 
 jobs:
   test:
@@ -31,4 +31,4 @@ jobs:
           pip install pandas numpy scikit-learn pytest
 
       - name: Run pytest
-        run: pytest skills/newton-data-prep/tests/ -v
+        run: pytest skills/atai-newton-omega-model-data-prep/tests/ -v

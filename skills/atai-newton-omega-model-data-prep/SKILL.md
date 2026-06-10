@@ -1,5 +1,5 @@
 ---
-name: newton-data-prep
+name: atai-newton-omega-model-data-prep
 description: >
   Clean, split, and featurize multivariate time-series data before
   feeding it to a Newton classifier. Bundles three reusable building
@@ -175,7 +175,7 @@ No Newton API key required — this skill is pure local data wrangling.
 ## File Layout
 
 ```
-skills/newton-data-prep/
+skills/atai-newton-omega-model-data-prep/
 ├── SKILL.md                              ← this file
 ├── references/
 │   ├── data_preprocessor.py              ← gap-aware blocking + diagnostics
@@ -192,7 +192,7 @@ skills/newton-data-prep/
 
 ```bash
 pip install pandas numpy scikit-learn pytest
-pytest skills/newton-data-prep/tests/ -v
+pytest skills/atai-newton-omega-model-data-prep/tests/ -v
 ```
 
-CI runs the suite automatically on any PR that touches `skills/newton-data-prep/**` (see `.github/workflows/test-newton-data-prep.yml`).
+CI runs the suite automatically on any PR that touches `skills/atai-newton-omega-model-data-prep/**` (see `.github/workflows/test-atai-newton-omega-model-data-prep.yml`).
