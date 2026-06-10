@@ -211,6 +211,8 @@ All C-model generations via `/query` accept sampling controls in the request bod
 
 For "extract X"-style tasks, `do_sample: false` (or `temperature: 0.0`) plus a tight `max_new_tokens` is the right starting point.
 
+**Reproducibility caveat (verified):** outputs vary run-to-run at default settings — the same assembly-inspection body returned all-PASS on one run and two FAILs on the next. `do_sample: false` reduces but does **not** eliminate this on the current deployment: three greedy text-only runs produced two distinct outputs, and greedy video verdicts still flip between runs (fp8 numerics and server-side frame sampling both sit outside the decoder). Treat borderline judgments (e.g. "was the wrench used correctly?") as unstable across single calls; if a verdict matters, aggregate over a few calls rather than trusting one.
+
 ## Latency Budgets
 
 Observed against prod with the sample assets in `references/sample_assets/`:
