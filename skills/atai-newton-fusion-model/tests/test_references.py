@@ -6,7 +6,8 @@ network. They lock in the invariants discovered while building this skill:
   * /query bodies send `instruction_prompt` and NEVER `system_prompt`
     (C 2.6 ignores system_prompt; sending it was the original bug).
   * `file_ids` is referenced by filename.
-  * The video multi-frame path (A) sets `multi_image: true`.
+  * The video path is .mp4 + `max_frames`; video bodies never set
+    `multi_image` (that flag means multi-image mode, not video).
   * The image inline path uses a `data.base64_img` event.
   * `extract_text` handles every response shape we've observed.
 
@@ -186,9 +187,18 @@ class TestVideo(_Base):
         for token in ("Step 1:", "Step 2:", "Step 3:", "PASS", "FAIL", "Summary:"):
             self.assertIn(token, video_query.ASSEMBLY_PROMPT)
 
-    def test_sample_frames_without_ffmpeg_returns_none(self):
-        with mock.patch.object(video_query.shutil, "which", return_value=None):
-            self.assertIsNone(video_query._sample_frames(Path("nonexistent.mp4")))
+    def test_mp4_body_uses_max_frames_not_multi_image(self):
+        self.hermetic_env(ATAI_API_KEY="test-key")
+        store: dict = {}
+        with mock.patch.object(video_query, "upload_file", lambda p: "clip.mp4"), \
+                mock.patch.object(video_query.requests, "post", _capturing_post({"response": ["ok"]}, store)):
+            video_query.example_mp4_direct(Path("clip.mp4"))
+        body = store["json"]
+        self.assertEqual(body["file_ids"], ["clip.mp4"])
+        self.assertEqual(body["max_frames"], 32)
+        self.assertNotIn("multi_image", body)  # multi_image is multi-image mode, not video
+        self.assertNotIn("system_prompt", body)
+        self.assertEqual(body["instruction_prompt"], video_query.ASSEMBLY_PROMPT)
 
 
 class TestTextConstants(unittest.TestCase):
