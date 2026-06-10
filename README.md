@@ -8,6 +8,12 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 | Skill | Description |
 |-------|-------------|
+| [newton-setup](skills/newton-setup/) | Configure Newton API access, environment setup, and SDK initialization |
+| [newton-query-prompting](skills/newton-query-prompting/) | Prompt-engineering patterns for the `/query` text-reasoning endpoint (structured output, topology validation, contamination avoidance) |
+| [newton-activity-monitor](skills/newton-activity-monitor/) | Vision-based analysis and Q&A using the Activity Monitor Lens |
+| [newton-sensor-streaming](skills/newton-sensor-streaming/) | Real-time sensor data ingestion patterns (BLE, OBD2, serial, etc.) |
+| [newton-batch-upload](skills/newton-batch-upload/) | Upload large files (> 255 MB) via multipart presigned URLs |
+| [newton-activity-detection-batch](skills/newton-activity-detection-batch/) | Run text-in / text-out batch jobs on the C model via the `activity-detection` pipeline — narratives over large CSV/log datasets, with MapReduce / hierarchical-reduce patterns and quality-cliff guidance |
 
 ## Quick Start
 
@@ -24,7 +30,12 @@ cp -r skills/* your-project/.claude/skills/
 ### Invoke a Skill
 
 ```
-/<skill-name>  # e.g. /newton-setup once skills are re-added via review
+/newton-setup             # Set up API access
+/newton-query-prompting   # Engineer /query prompts for structured output
+/newton-activity-monitor  # Analyze visual data
+/newton-sensor-streaming  # Connect hardware sensors
+/newton-batch-upload      # Upload large files (> 255 MB)
+/newton-activity-detection-batch  # Batch text generation on the C model (narratives over CSV/log data)
 ```
 
 ## Architecture
