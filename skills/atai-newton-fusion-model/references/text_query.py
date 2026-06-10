@@ -13,7 +13,7 @@ Demonstrates three patterns:
   3. Reasoning over an attached flow log via file_ids.
 
 Usage:
-    cp .env.example .env  # then fill in ATAI_API_KEY
+    cp .env.example .env  # then fill in ATAI_API_KEY and ATAI_API_ENDPOINT
     python text_query.py
 
 Data attribution:
@@ -36,7 +36,9 @@ import json
 import tempfile
 from pathlib import Path
 
-from _common import banner, query, upload_file
+from archetypeai.api_client import ArchetypeAI
+
+from _common import banner, make_client, query, upload_file
 
 ANALYST = "You are a network security analyst reviewing smart-home WiFi traffic."
 
@@ -48,9 +50,10 @@ FIELD_LEGEND = (
 )
 
 
-def example_plain_text() -> None:
+def example_plain_text(client: ArchetypeAI) -> None:
     banner("1. Plain text Q&A — interpret an inline WiFi flow snippet")
-    text, _, ms = query(
+    text, _, elapsed_ms = query(
+        client,
         user_query=(
             f"{FIELD_LEGEND}\n"
             "2019-10-19T08:14:22Z|aa1101000001|aa1100000001|DNS|17|53|56004|39|39|1|1\n"
@@ -63,12 +66,13 @@ def example_plain_text() -> None:
         ),
         max_new_tokens=256,
     )
-    print(f"[{ms} ms]\n{text}\n")
+    print(f"[{elapsed_ms} ms]\n{text}\n")
 
 
-def example_json_output() -> None:
+def example_json_output(client: ArchetypeAI) -> None:
     banner("2. Structured JSON output — classify a device (the prompt is the schema)")
-    text, _, ms = query(
+    text, _, elapsed_ms = query(
+        client,
         user_query=(
             "Classify the smart-home device with this one-day flow profile: "
             "dominant_protocols=[MQTT, NTP, DNS], total_bytes_up=1.4MB, "
@@ -88,18 +92,18 @@ def example_json_output() -> None:
         ),
         max_new_tokens=400,
     )
-    print(f"[{ms} ms]\n{text}\n")
+    print(f"[{elapsed_ms} ms]\n{text}\n")
     try:
         parsed = json.loads(text)
         print(
             f"Parsed JSON: device_type={parsed.get('device_type')!r} "
             f"confidence={parsed.get('confidence')!r}\n"
         )
-    except json.JSONDecodeError as e:
-        print(f"WARN: model output did not parse as JSON: {e}\n")
+    except json.JSONDecodeError as decode_error:
+        print(f"WARN: model output did not parse as JSON: {decode_error}\n")
 
 
-def example_flow_log_attachment() -> None:
+def example_flow_log_attachment(client: ArchetypeAI) -> None:
     banner("3. Reasoning over an attached device flow log via file_ids")
 
     # Real GHOST-IoT flows: device e323b826aa71 over a ~100-second window on
@@ -139,10 +143,11 @@ def example_flow_log_attachment() -> None:
         tmp_path = tmp.name
 
     try:
-        file_id = upload_file(tmp_path)
+        file_id = upload_file(client, tmp_path)
         print(f"Uploaded → file_id={file_id}")
 
-        text, _, ms = query(
+        text, _, elapsed_ms = query(
+            client,
             user_query=(
                 "Analyze the attached flow log for a single device "
                 "(e323b826aa71) and describe what it did during this capture "
@@ -157,12 +162,13 @@ def example_flow_log_attachment() -> None:
             file_ids=[Path(tmp_path).name],
             max_new_tokens=400,
         )
-        print(f"[{ms} ms]\n{text}\n")
+        print(f"[{elapsed_ms} ms]\n{text}\n")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    example_plain_text()
-    example_json_output()
-    example_flow_log_attachment()
+    shared_client = make_client()
+    example_plain_text(shared_client)
+    example_json_output(shared_client)
+    example_flow_log_attachment(shared_client)

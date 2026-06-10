@@ -59,7 +59,7 @@ Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-Default `ATAI_API_ENDPOINT` is `https://api.u1.archetypeai.app/v0.5` (prod). The same endpoint serves all three modalities below — what changes is the request body.
+**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup instead of silently at query time. Prod is `https://api.u1.archetypeai.app/v0.5`. The same endpoint serves all three modalities below — what changes is the request body.
 
 ## Wire Shapes
 
@@ -71,13 +71,11 @@ Default `ATAI_API_ENDPOINT` is `https://api.u1.archetypeai.app/v0.5` (prod). The
   "instruction_prompt": "You output {\"state\": \"...\", \"confidence\": <0..1>}.",
   "file_ids": [],
   "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
-  "max_new_tokens": 300,
-  "sanitize": false
+  "max_new_tokens": 300
 }
 ```
 
 - Put the system turn in `instruction_prompt`. That is the only field C 2.6 honors — a directive sent in the legacy `system_prompt` field alone is silently ignored (verified against `Newton::c2_6_8b_fp8_260424d7a55d5e`: the same directive is obeyed in `instruction_prompt` and dropped in `system_prompt`), so omit `system_prompt` entirely.
-- `sanitize: false` — leave the model's output as-is. `true` strips some content the C model is already trained to avoid; usually unnecessary here.
 - JSON output: put the schema in `instruction_prompt`, the input in `query`, and **explicitly tell the model not to wrap in markdown fences**. The model otherwise often returns <code>```json ... ```</code>.
 
 For reasoning over an attached text file: upload it as **`text/plain`** (a `.txt` file) via `/v0.5/files`, then put the **filename** in `file_ids`. The model then sees the file contents in its prompt context. **Critical:** this only works for `text/plain`. A file uploaded as `text/csv` (a `.csv`) is accepted and stored byte-identically, but its contents never reach the model on `/query` — it silently confabulates from priors (see the gotcha below and [`csv_vs_txt_proof.py`](references/csv_vs_txt_proof.py)). `application/json` uploads are rejected outright. So put tabular data in a `.txt`, or inline it in `query`.
@@ -102,8 +100,7 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
   "instruction_prompt": "...",
   "file_ids": ["dashboard.png"],
   "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
-  "max_new_tokens": 300,
-  "sanitize": false
+  "max_new_tokens": 300
 }
 ```
 
@@ -116,7 +113,6 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
   "file_ids": [],
   "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
   "max_new_tokens": 200,
-  "sanitize": false,
   "events": [
     {
       "type": "data.base64_img",
@@ -138,8 +134,7 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
   "file_ids": ["assembly_before.png", "assembly_after.png"],
   "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
   "max_new_tokens": 400,
-  "multi_image": true,
-  "sanitize": false
+  "multi_image": true
 }
 ```
 
@@ -164,8 +159,7 @@ curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
   "file_ids": ["clip.mp4"],
   "model": "Newton::c2_6_8b_fp8_260424d7a55d5e",
   "max_new_tokens": 500,
-  "max_frames": 32,
-  "sanitize": false
+  "max_frames": 32
 }
 ```
 
@@ -260,9 +254,10 @@ Walk `payload["response"]["response"][0]` as the canonical extraction path. The 
 ## Local Setup
 
 ```bash
-pip install requests python-dotenv
+pip install archetypeai python-dotenv
 
-# Drop a .env at the repo root (or anywhere up the tree from the run dir):
+# Drop a .env at the repo root (or anywhere up the tree from the run dir).
+# BOTH variables are required — there is no default endpoint:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.u1.archetypeai.app/v0.5
@@ -273,7 +268,7 @@ python skills/atai-newton-fusion-model/references/image_query.py
 python skills/atai-newton-fusion-model/references/video_query.py
 ```
 
-The scripts auto-load `.env` if `python-dotenv` is installed — `find_dotenv()` walks up from cwd so the file works at the repo root, the project root, or inside `references/`. Without `python-dotenv`, the scripts fall back to plain environment variables (`export ATAI_API_KEY=...`).
+The scripts are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`): uploads go through `client.files.local.upload(...)`, base64 encoding through `archetypeai.utils.base64_encode(...)` (utf-8), and each script creates one client and passes it into the helpers. They auto-load `.env` if `python-dotenv` is installed — `find_dotenv()` walks up from cwd so the file works at the repo root, the project root, or inside `references/`. Without `python-dotenv`, the scripts fall back to plain environment variables (`export ATAI_API_KEY=... ATAI_API_ENDPOINT=...`).
 
 ## File Layout
 
@@ -281,7 +276,7 @@ The scripts auto-load `.env` if `python-dotenv` is installed — `find_dotenv()`
 skills/atai-newton-fusion-model/
 ├── SKILL.md                  ← this file
 ├── references/
-│   ├── _common.py            ← shared auth / upload / extract helpers
+│   ├── _common.py            ← shared helpers on the official archetypeai client
 │   ├── text_query.py         ← 3 text patterns (plain, JSON output, .txt flow-log attachment)
 │   ├── image_query.py        ← 4 image patterns (file_ids, base64, JSON extraction, multi-image)
 │   ├── video_query.py        ← 3 video patterns (mp4 direct, max_frames tradeoff, frame list + query_metadata)

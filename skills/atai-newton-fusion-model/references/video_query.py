@@ -25,7 +25,7 @@ The demo uses a worker-assembly PASS/FAIL inspection prompt; ground truth for
 the sample clip (named 1_pass_2_pass_3_pass) is all three steps PASS.
 
 Usage:
-    cp .env.example .env  # then fill in ATAI_API_KEY
+    cp .env.example .env  # then fill in ATAI_API_KEY and ATAI_API_ENDPOINT
     python video_query.py
     # or point at your own .mp4:
     python video_query.py /path/to/your.mp4
@@ -34,14 +34,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import sys
-import time
 from pathlib import Path
 
-import requests
+from archetypeai import utils
+from archetypeai.api_client import ArchetypeAI
 
-from _common import MODEL, banner, client, extract_text, query, upload_file
+from _common import banner, make_client, query, upload_file
 
 ASSETS = Path(__file__).parent / "sample_assets"
 DEFAULT_VIDEO = ASSETS / "1_pass_2_pass_3_pass_B.mp4"
@@ -64,69 +63,55 @@ ASSEMBLY_PROMPT = (
 QUERY = "Evaluate the assembly steps shown in the attached video."
 
 
-def _post_query(body: dict, timeout: int = 600) -> tuple[str, int]:
-    """Single /query POST. Returns (text, elapsed_ms)."""
-    endpoint, headers = client()
-    t0 = time.time()
-    r = requests.post(f"{endpoint}/query", headers=headers, json=body, timeout=timeout)
-    ms = int((time.time() - t0) * 1000)
-    if not r.ok:
-        sys.exit(f"Query failed [{r.status_code}]: {r.text[:400]}")
-    return extract_text(r.json()), ms
-
-
-def example_mp4_direct(video_path: Path) -> None:
+def example_mp4_direct(client: ArchetypeAI, video_path: Path) -> None:
     """Upload the .mp4, let GPQ decode + sample it server-side."""
     banner("1. Video via .mp4 file_id + max_frames (server-side sampling)")
-    file_id = upload_file(video_path)
+    file_id = upload_file(client, video_path)
     print(f"Uploaded → file_id={file_id}")
 
-    body = {
-        "query": QUERY,
-        "instruction_prompt": ASSEMBLY_PROMPT,
-        "file_ids": [file_id],
-        "model": MODEL,
-        "max_new_tokens": 500,
-        "max_frames": 32,  # frames GPQ samples uniformly from the video (default 32)
-        "sanitize": False,
-    }
-    text, ms = _post_query(body)
-    print(f"[{ms} ms]\n{text}\n")
+    text, _, elapsed_ms = query(
+        client,
+        user_query=QUERY,
+        instruction_prompt=ASSEMBLY_PROMPT,
+        file_ids=[file_id],
+        max_new_tokens=500,
+        max_frames=32,  # frames GPQ samples uniformly from the video (default 32, max 64)
+    )
+    print(f"[{elapsed_ms} ms]\n{text}\n")
 
 
-def example_max_frames_tradeoff(video_path: Path) -> None:
+def example_max_frames_tradeoff(client: ArchetypeAI, video_path: Path) -> None:
     """Same clip at two frame budgets — more frames = more temporal detail, more latency."""
     banner("2. max_frames tradeoff (8 vs 32 frames)")
-    file_id = upload_file(video_path)
-    for n_frames in (8, 32):
-        body = {
-            "query": QUERY,
-            "instruction_prompt": ASSEMBLY_PROMPT,
-            "file_ids": [file_id],
-            "model": MODEL,
-            "max_new_tokens": 500,
-            "max_frames": n_frames,
-            "sanitize": False,
-        }
-        text, ms = _post_query(body)
-        print(f"--- max_frames={n_frames:>2}  [{ms} ms] ---\n{text}\n")
+    file_id = upload_file(client, video_path)
+    for frame_budget in (8, 32):
+        text, _, elapsed_ms = query(
+            client,
+            user_query=QUERY,
+            instruction_prompt=ASSEMBLY_PROMPT,
+            file_ids=[file_id],
+            max_new_tokens=500,
+            max_frames=frame_budget,
+        )
+        print(f"--- max_frames={frame_budget:>2}  [{elapsed_ms} ms] ---\n{text}\n")
 
 
-def example_frame_list(frame_paths: list[Path]) -> None:
+def example_frame_list(client: ArchetypeAI, frame_paths: list[Path]) -> None:
     """Client-sampled frames as ONE video: base64 events + query_metadata."""
     banner(
         "3. Video via client-sampled frames (base64 events + query_metadata)\n"
-        f"   {', '.join(p.name for p in frame_paths)}"
+        f"   {', '.join(frame_path.name for frame_path in frame_paths)}"
     )
     events = [
         {
             "type": "data.base64_img",
-            "event_data": {"contents": base64.b64encode(p.read_bytes()).decode("ascii")},
+            "event_data": {"contents": utils.base64_encode(str(frame_path))},
         }
-        for p in frame_paths
+        for frame_path in frame_paths
     ]
-    n = len(events)
-    text, _, ms = query(
+    frame_count = len(events)
+    text, _, elapsed_ms = query(
+        client,
         user_query=(
             "This is a short video of an assembly task. Describe the sequence "
             "of actions in order, in two sentences."
@@ -137,12 +122,12 @@ def example_frame_list(frame_paths: list[Path]) -> None:
         # Required for the frame-list video path; omitting it → 400 query_failed.
         query_metadata={
             "raw_fps": 1.0,
-            "frames_indices": list(range(n)),
-            "total_num_frames": n,
+            "frames_indices": list(range(frame_count)),
+            "total_num_frames": frame_count,
         },
         max_new_tokens=150,
     )
-    print(f"[{ms} ms]\n{text}\n")
+    print(f"[{elapsed_ms} ms]\n{text}\n")
 
 
 def main() -> None:
@@ -158,10 +143,11 @@ def main() -> None:
     if not video_path.exists():
         sys.exit(f"Video not found: {video_path}")
 
-    example_mp4_direct(video_path)
-    example_max_frames_tradeoff(video_path)
-    if all(p.exists() for p in SAMPLE_FRAMES):
-        example_frame_list(SAMPLE_FRAMES)
+    client = make_client()
+    example_mp4_direct(client, video_path)
+    example_max_frames_tradeoff(client, video_path)
+    if all(frame_path.exists() for frame_path in SAMPLE_FRAMES):
+        example_frame_list(client, SAMPLE_FRAMES)
 
 
 if __name__ == "__main__":

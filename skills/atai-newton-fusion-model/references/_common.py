@@ -1,11 +1,13 @@
 """
-Shared helpers for the three /query example scripts.
+Shared helpers for the /query example scripts, built on the official
+Archetype AI python client (https://github.com/archetypeai/python-client).
 
-Keeps each per-modality example single-purpose and readable while still
-deduplicating the auth / upload / extract-response code.
+Each script creates one client via `make_client()` and passes it as the
+first argument to `query()` / `upload_file()`.
 
 Credential lookup order (first hit wins):
-  1. ATAI_API_KEY env var.
+  1. ATAI_API_KEY / ATAI_API_ENDPOINT env vars. BOTH are required — there
+     is no default endpoint, so a wrong-endpoint mistake fails loudly.
   2. python-dotenv `find_dotenv()` walk — starts from cwd and walks up.
      Catches .env at any ancestor (repo root, project root, etc.).
   3. Sibling .env file next to this _common.py (i.e. references/.env).
@@ -20,10 +22,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import requests
+from archetypeai.api_client import ArchetypeAI
 
 MODEL = "Newton::c2_6_8b_fp8_260424d7a55d5e"
-DEFAULT_ENDPOINT = "https://api.u1.archetypeai.app/v0.5"
 
 
 def _try_load_dotenv() -> None:
@@ -41,8 +42,13 @@ def _try_load_dotenv() -> None:
         load_dotenv(sibling, override=False)
 
 
-def client() -> tuple[str, dict[str, str]]:
-    """Resolve credentials + endpoint and return (endpoint, headers)."""
+def make_client() -> ArchetypeAI:
+    """Resolve credentials and return an official ArchetypeAI client.
+
+    Both ATAI_API_KEY and ATAI_API_ENDPOINT are required. The endpoint is
+    deliberately NOT defaulted — pointing at the wrong deployment should
+    fail loudly here, not silently at query time.
+    """
     _try_load_dotenv()
     api_key = os.environ.get("ATAI_API_KEY")
     if not api_key:
@@ -50,50 +56,42 @@ def client() -> tuple[str, dict[str, str]]:
             "ATAI_API_KEY is not set. Either export it, or copy .env.example "
             "to .env (in the cwd or alongside this file) and fill it in."
         )
-    endpoint = os.environ.get("ATAI_API_ENDPOINT", DEFAULT_ENDPOINT).rstrip("/")
-    if not endpoint.endswith("/v0.5"):
-        endpoint = endpoint + "/v0.5"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    return endpoint, headers
+    api_endpoint = os.environ.get("ATAI_API_ENDPOINT")
+    if not api_endpoint:
+        sys.exit(
+            "ATAI_API_ENDPOINT is not set. Export it (e.g. "
+            "https://api.u1.archetypeai.app/v0.5) or add it to your .env — "
+            "there is no default."
+        )
+    api_endpoint = api_endpoint.rstrip("/")
+    if not api_endpoint.endswith("/v0.5"):
+        api_endpoint = api_endpoint + "/v0.5"
+    return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 
-def upload_file(local_path: str | Path, timeout: int = 300) -> str:
-    """POST a file to /v0.5/files. Returns the file_id (== filename)."""
-    endpoint, headers = client()
-    upload_headers = {"Authorization": headers["Authorization"]}  # no Content-Type
+def upload_file(client: ArchetypeAI, local_path: str | Path) -> str:
+    """Upload a file via the official files API. Returns the file_id (== filename)."""
     path = Path(local_path)
     if not path.exists():
         sys.exit(f"File not found: {path}")
-    with path.open("rb") as f:
-        r = requests.post(
-            f"{endpoint}/files",
-            headers=upload_headers,
-            files={"file": (path.name, f)},
-            timeout=timeout,
-        )
-    if not r.ok:
-        sys.exit(f"Upload failed [{r.status_code}]: {r.text[:400]}")
-    data = r.json()
-    file_id = data.get("file_id") or data.get("id")
+    response_data = client.files.local.upload(str(path))
+    file_id = response_data.get("file_id")
     if not file_id:
-        sys.exit(f"No file_id in upload response: {json.dumps(data)[:400]}")
+        sys.exit(f"No file_id in upload response: {json.dumps(response_data)[:400]}")
     return file_id
 
 
 def query(
+    client: ArchetypeAI,
     user_query: str,
     *,
     instruction_prompt: str = "",
     file_ids: list[str] | None = None,
     max_new_tokens: int = 512,
-    sanitize: bool = False,
+    max_frames: int | None = None,
     multi_image: bool | None = None,
     events: list[dict[str, Any]] | None = None,
     query_metadata: dict[str, Any] | None = None,
-    timeout: int = 600,
 ) -> tuple[str, dict[str, Any], int]:
     """
     Single /query call. Returns (text, raw_json, elapsed_ms).
@@ -110,43 +108,45 @@ def query(
         total_num_frames) — the images are frames of ONE video. Without the
         query_metadata triple this shape fails with 400 query_failed.
     """
-    endpoint, headers = client()
-    body = {
+    body: dict[str, Any] = {
         "query": user_query,
         "instruction_prompt": instruction_prompt,
         "file_ids": file_ids or [],
         "model": MODEL,
         "max_new_tokens": max_new_tokens,
-        "sanitize": sanitize,
     }
+    if max_frames is not None:
+        body["max_frames"] = max_frames
     if multi_image is not None:
         body["multi_image"] = multi_image
     if events:
         body["events"] = events
     if query_metadata:
         body["query_metadata"] = query_metadata
-    t0 = time.time()
-    r = requests.post(f"{endpoint}/query", headers=headers, json=body, timeout=timeout)
-    elapsed_ms = int((time.time() - t0) * 1000)
-    if not r.ok:
-        sys.exit(f"Query failed [{r.status_code}]: {r.text[:400]}")
-    payload = r.json()
+
+    start_time = time.time()
+    payload = client.requests_post(
+        f"{client.api_endpoint}/query",
+        data_payload=json.dumps(body),
+        additional_headers={"Content-Type": "application/json"},
+    )
+    elapsed_ms = int((time.time() - start_time) * 1000)
     return extract_text(payload), payload, elapsed_ms
 
 
 def extract_text(payload: dict[str, Any]) -> str:
     """Walk the documented response shape: response.response[0]."""
-    resp = payload.get("response")
-    if isinstance(resp, dict):
-        inner = resp.get("response")
+    response_field = payload.get("response")
+    if isinstance(response_field, dict):
+        inner = response_field.get("response")
         if isinstance(inner, list) and inner:
             return inner[0] or ""
         if isinstance(inner, str):
             return inner
-    if isinstance(resp, list) and resp:
-        return resp[0] or ""
-    if isinstance(resp, str):
-        return resp
+    if isinstance(response_field, list) and response_field:
+        return response_field[0] or ""
+    if isinstance(response_field, str):
+        return response_field
     if isinstance(payload.get("text"), str):
         return payload["text"]
     return ""
