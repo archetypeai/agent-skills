@@ -159,11 +159,11 @@ class DataPreprocessor:
             top = gaps.sort_values(ascending=False).head(top_n_gaps)
             info['gaps']['top'] = [
                 {
-                    'starts_at': ts_sorted.iloc[i - 1],
-                    'ends_at': ts_sorted.iloc[i],
+                    'starts_at': ts_sorted.iloc[gap_index - 1],
+                    'ends_at': ts_sorted.iloc[gap_index],
                     'size': delta,
                 }
-                for i, delta in top.items()
+                for gap_index, delta in top.items()
             ]
         else:
             info['gaps']['top'] = []
@@ -192,11 +192,11 @@ class DataPreprocessor:
             per_column.append(entry)
 
         # Sort by pct_null desc so the worst offenders show up first.
-        per_column.sort(key=lambda x: x['pct_null'], reverse=True)
+        per_column.sort(key=lambda column_stats: column_stats['pct_null'], reverse=True)
 
         return {
             'n_rows': n_rows,
-            'columns_with_nulls': sum(1 for c in per_column if c['n_null'] > 0),
+            'columns_with_nulls': sum(1 for column_stats in per_column if column_stats['n_null'] > 0),
             'per_column': per_column,
         }
 
@@ -253,8 +253,8 @@ class DataPreprocessor:
                 print(f"  threshold      : > {gaps['threshold']}")
                 print(f"  count          : {gaps['count']}")
                 print(f"  total duration : {gaps['total_duration']}")
-                for i, g in enumerate(gaps['top'], 1):
-                    print(f"  #{i}: {g['size']}  ({g['starts_at']}  ->  {g['ends_at']})")
+                for gap_number, gap_info in enumerate(gaps['top'], 1):
+                    print(f"  #{gap_number}: {gap_info['size']}  ({gap_info['starts_at']}  ->  {gap_info['ends_at']})")
 
         nulls = report['nulls']
         print('=' * 60)
@@ -264,13 +264,13 @@ class DataPreprocessor:
         print(f"Columns with nulls         : {nulls['columns_with_nulls']}")
         print('-' * 60)
         print(f"{'column':<25}{'dtype':<12}{'n_null':>10}{'pct_null':>10}{'max_run':>10}")
-        for c in nulls['per_column']:
+        for column_stats in nulls['per_column']:
             print(
-                f"{c['column'][:24]:<25}"
-                f"{c['dtype'][:11]:<12}"
-                f"{c['n_null']:>10}"
-                f"{c['pct_null']:>9.2f}%"
-                f"{c['max_consecutive_null']:>10}"
+                f"{column_stats['column'][:24]:<25}"
+                f"{column_stats['dtype'][:11]:<12}"
+                f"{column_stats['n_null']:>10}"
+                f"{column_stats['pct_null']:>9.2f}%"
+                f"{column_stats['max_consecutive_null']:>10}"
             )
         print('=' * 60)
 
@@ -319,7 +319,7 @@ class DataPreprocessor:
         plt.show()
 
         # --- Plot 2: missingness map ---
-        cols = [c for c in df.columns if c != self.timestamp_col]
+        cols = [column_name for column_name in df.columns if column_name != self.timestamp_col]
         if not cols:
             return
 
@@ -344,12 +344,14 @@ class DataPreprocessor:
 
         # Replace numeric x-axis with timestamp labels at a few positions.
         ts_values = ts.loc[order].reset_index(drop=True)
-        n = len(ts_values)
-        n_ticks = min(6, n)
-        tick_positions = [int(i * (n - 1) / (n_ticks - 1)) for i in range(n_ticks)]
+        value_count = len(ts_values)
+        n_ticks = min(6, value_count)
+        tick_positions = [
+            int(tick_index * (value_count - 1) / (n_ticks - 1)) for tick_index in range(n_ticks)
+        ]
         ax.set_xticks(tick_positions)
         ax.set_xticklabels(
-            [ts_values.iloc[p].strftime('%Y-%m-%d %H:%M') for p in tick_positions],
+            [ts_values.iloc[position].strftime('%Y-%m-%d %H:%M') for position in tick_positions],
             rotation=30, ha='right',
         )
         plt.tight_layout()
@@ -369,7 +371,7 @@ class DataPreprocessor:
         df = df.sort_values(self.timestamp_col).reset_index(drop=True)
 
         # 1. Drop unwanted sensors
-        df = df.drop(columns=[c for c in self.drop_sensors if c in df.columns])
+        df = df.drop(columns=[column_name for column_name in self.drop_sensors if column_name in df.columns])
 
         sensor_cols = self._get_sensor_cols(df)
 
@@ -396,7 +398,10 @@ class DataPreprocessor:
     def _get_sensor_cols(self, df: pd.DataFrame) -> List[str]:
         """Numeric columns excluding timestamp and metadata."""
         exclude = {self.timestamp_col, 'machine_status', 'block_id', 'imputed'}
-        return [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
+        return [
+            column_name for column_name in df.columns
+            if column_name not in exclude and pd.api.types.is_numeric_dtype(df[column_name])
+        ]
 
     def _detect_long_gap_rows(self, df: pd.DataFrame, sensor_cols: List[str]) -> pd.Series:
         """

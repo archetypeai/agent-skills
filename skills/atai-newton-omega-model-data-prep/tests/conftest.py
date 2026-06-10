@@ -51,12 +51,12 @@ def short_nan_df():
     """30 rows of 1-min samples with a 2-row NaN run in sensor_a (rows 10-11),
     short enough to interpolate within a block under gap_threshold_samples=5."""
     ts = pd.date_range("2026-01-01 00:00:00", periods=30, freq="1min")
-    a = np.linspace(0.0, 29.0, 30)
-    a[10:12] = np.nan
+    sensor_a_values = np.linspace(0.0, 29.0, 30)
+    sensor_a_values[10:12] = np.nan
     return pd.DataFrame(
         {
             "timestamp": ts,
-            "sensor_a": a,
+            "sensor_a": sensor_a_values,
             "sensor_b": np.linspace(100.0, 129.0, 30),
         }
     )
@@ -68,12 +68,12 @@ def long_nan_df():
     a gap_threshold_samples=5 setting and should split the dataframe into
     two blocks (with the 7 bad rows dropped)."""
     ts = pd.date_range("2026-01-01 00:00:00", periods=30, freq="1min")
-    a = np.linspace(0.0, 29.0, 30)
-    a[10:17] = np.nan
+    sensor_a_values = np.linspace(0.0, 29.0, 30)
+    sensor_a_values[10:17] = np.nan
     return pd.DataFrame(
         {
             "timestamp": ts,
-            "sensor_a": a,
+            "sensor_a": sensor_a_values,
             "sensor_b": np.linspace(100.0, 129.0, 30),
         }
     )
@@ -87,15 +87,15 @@ def mixed_nan_df():
     Useful for asserting that ANY sensor's long NaN triggers the split.
     """
     ts = pd.date_range("2026-01-01 00:00:00", periods=30, freq="1min")
-    a = np.linspace(0.0, 29.0, 30)
-    a[5:7] = np.nan
-    b = np.linspace(100.0, 129.0, 30)
-    b[20:27] = np.nan
+    sensor_a_values = np.linspace(0.0, 29.0, 30)
+    sensor_a_values[5:7] = np.nan
+    sensor_b_values = np.linspace(100.0, 129.0, 30)
+    sensor_b_values[20:27] = np.nan
     return pd.DataFrame(
         {
             "timestamp": ts,
-            "sensor_a": a,
-            "sensor_b": b,
+            "sensor_a": sensor_a_values,
+            "sensor_b": sensor_b_values,
         }
     )
 

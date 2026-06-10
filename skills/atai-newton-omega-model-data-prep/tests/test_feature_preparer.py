@@ -216,11 +216,11 @@ def test_y_dtype_preserved_with_ints():
         [
             {
                 "sensor": "sensor_a",
-                "read_index": i,
+                "read_index": row_index,
                 "embedding": np.zeros(4, dtype=np.float32),
-                "label": i % 2,
+                "label": row_index % 2,
             }
-            for i in range(4)
+            for row_index in range(4)
         ]
     )
     _, y, _ = FeaturePreparer().prepare(df, label_column="label")
@@ -258,11 +258,11 @@ def test_metadata_omits_timestamp_when_absent():
         [
             {
                 "sensor": "sensor_a",
-                "read_index": i,
+                "read_index": row_index,
                 "embedding": np.zeros(4, dtype=np.float32),
                 "machine_state": "normal",
             }
-            for i in range(3)
+            for row_index in range(3)
         ]
     )
     _, _, metadata = FeaturePreparer().prepare(df, label_column="machine_state")

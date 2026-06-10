@@ -156,8 +156,8 @@ def test_diagnose_top_n_gaps_respects_limit():
         pd.date_range("2026-01-01 00:30:00", periods=5, freq="1min"),  # 6min gap
     ]
     ts = blocks[0]
-    for b in blocks[1:]:
-        ts = ts.append(b)
+    for block in blocks[1:]:
+        ts = ts.append(block)
     df = pd.DataFrame({"timestamp": ts, "sensor_a": np.arange(len(ts), dtype=float)})
 
     report = DataPreprocessor().diagnose(df, top_n_gaps=2)
@@ -208,7 +208,7 @@ def test_diagnose_counts_nulls_per_column(short_nan_df):
     nulls = report["nulls"]
     assert nulls["columns_with_nulls"] == 1
 
-    sensor_a_entry = next(c for c in nulls["per_column"] if c["column"] == "sensor_a")
+    sensor_a_entry = next(entry for entry in nulls["per_column"] if entry["column"] == "sensor_a")
     assert sensor_a_entry["n_null"] == 2
     assert sensor_a_entry["pct_null"] == pytest.approx(2 / 30 * 100)
     assert sensor_a_entry["max_consecutive_null"] == 2
@@ -216,20 +216,20 @@ def test_diagnose_counts_nulls_per_column(short_nan_df):
 
 def test_diagnose_excludes_timestamp_from_nulls(regular_df):
     report = DataPreprocessor().diagnose(regular_df)
-    columns = [c["column"] for c in report["nulls"]["per_column"]]
+    columns = [entry["column"] for entry in report["nulls"]["per_column"]]
     assert "timestamp" not in columns
 
 
 def test_diagnose_sorts_nulls_by_pct_desc(mixed_nan_df):
     report = DataPreprocessor().diagnose(mixed_nan_df)
-    pcts = [c["pct_null"] for c in report["nulls"]["per_column"]]
+    pcts = [entry["pct_null"] for entry in report["nulls"]["per_column"]]
     assert pcts == sorted(pcts, reverse=True)
 
 
 def test_diagnose_max_consecutive_null_long_run(long_nan_df):
     report = DataPreprocessor().diagnose(long_nan_df)
     sensor_a_entry = next(
-        c for c in report["nulls"]["per_column"] if c["column"] == "sensor_a"
+        entry for entry in report["nulls"]["per_column"] if entry["column"] == "sensor_a"
     )
     assert sensor_a_entry["max_consecutive_null"] == 7
 
@@ -279,8 +279,8 @@ def test_build_imputes_short_nan_within_block_linear(short_nan_df):
 
 def test_build_imputes_short_nan_ffill():
     ts = pd.date_range("2026-01-01", periods=10, freq="1min")
-    a = [0.0, 1.0, 2.0, np.nan, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0]
-    df = pd.DataFrame({"timestamp": ts, "sensor_a": a})
+    sensor_values = [0.0, 1.0, 2.0, np.nan, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0]
+    df = pd.DataFrame({"timestamp": ts, "sensor_a": sensor_values})
 
     out = DataPreprocessor(
         gap_threshold_samples=5, imputation_method="ffill"
@@ -292,8 +292,8 @@ def test_build_imputes_short_nan_ffill():
 
 def test_build_imputes_short_nan_bfill():
     ts = pd.date_range("2026-01-01", periods=10, freq="1min")
-    a = [0.0, 1.0, 2.0, np.nan, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0]
-    df = pd.DataFrame({"timestamp": ts, "sensor_a": a})
+    sensor_values = [0.0, 1.0, 2.0, np.nan, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0]
+    df = pd.DataFrame({"timestamp": ts, "sensor_a": sensor_values})
 
     out = DataPreprocessor(
         gap_threshold_samples=5, imputation_method="bfill"

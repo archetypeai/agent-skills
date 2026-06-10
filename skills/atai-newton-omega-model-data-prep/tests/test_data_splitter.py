@@ -40,12 +40,12 @@ def test_valid_modes_construct(mode):
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _make_dataset(n=20, n_features=3, seed=0):
+def _make_dataset(row_count=20, n_features=3, seed=0):
     rng = np.random.default_rng(seed)
-    X = rng.standard_normal((n, n_features))
-    y = np.arange(n) % 2  # alternating 0/1
-    ts = pd.date_range("2026-01-01 00:00:00", periods=n, freq="1min")
-    metadata = pd.DataFrame({"timestamp": ts, "read_index": np.arange(n)})
+    X = rng.standard_normal((row_count, n_features))
+    y = np.arange(row_count) % 2  # alternating 0/1
+    ts = pd.date_range("2026-01-01 00:00:00", periods=row_count, freq="1min")
+    metadata = pd.DataFrame({"timestamp": ts, "read_index": np.arange(row_count)})
     return X, y, metadata
 
 
@@ -54,7 +54,7 @@ def _make_dataset(n=20, n_features=3, seed=0):
 # ---------------------------------------------------------------------------
 
 def test_oot_train_strictly_before_test_in_time():
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     splitter = DataSplitter(mode="oot", test_size=0.3)
     _, _, _, _, meta_train, meta_test = splitter.split(X, y, metadata)
 
@@ -65,7 +65,7 @@ def test_oot_train_strictly_before_test_in_time():
 
 
 def test_oot_test_size_proportions():
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     X_train, X_test, _, _, _, _ = DataSplitter(
         mode="oot", test_size=0.25
     ).split(X, y, metadata)
@@ -76,7 +76,7 @@ def test_oot_test_size_proportions():
 def test_oot_with_unsorted_input_still_chronological():
     """Even if metadata is not in chronological order, OOT split should
     pick the chronologically-latest rows as test."""
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     # Shuffle.
     order = np.random.default_rng(0).permutation(20)
     X = X[order]
@@ -98,7 +98,7 @@ def test_oot_string_timestamps_coerced():
     metadata = pd.DataFrame(
         {
             "timestamp": [
-                f"2026-01-{i + 1:02d}" for i in range(20)
+                f"2026-01-{day_index + 1:02d}" for day_index in range(20)
             ],
         }
     )
@@ -110,7 +110,7 @@ def test_oot_string_timestamps_coerced():
 
 
 def test_oot_missing_timestamp_column_raises():
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     metadata = metadata.drop(columns=["timestamp"])
     with pytest.raises(ValueError, match="OOT mode requires column 'timestamp'"):
         DataSplitter(mode="oot").split(X, y, metadata)
@@ -131,10 +131,10 @@ def test_oot_custom_timestamp_column():
 
 def test_oot_preserves_feature_label_alignment():
     """The y_test labels must still match the rows in X_test after splitting."""
-    n = 20
-    X = np.arange(n).reshape(-1, 1).astype(float)
+    row_count = 20
+    X = np.arange(row_count).reshape(-1, 1).astype(float)
     y = X.flatten()  # label = first feature
-    ts = pd.date_range("2026-01-01", periods=n, freq="1min")
+    ts = pd.date_range("2026-01-01", periods=row_count, freq="1min")
     metadata = pd.DataFrame({"timestamp": ts})
 
     X_train, X_test, y_train, y_test, _, _ = DataSplitter(
@@ -149,7 +149,7 @@ def test_oot_preserves_feature_label_alignment():
 # ---------------------------------------------------------------------------
 
 def test_random_deterministic_with_same_seed():
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     s1 = DataSplitter(mode="random", random_state=123, test_size=0.3)
     s2 = DataSplitter(mode="random", random_state=123, test_size=0.3)
     out1 = s1.split(X, y, metadata)
@@ -159,7 +159,7 @@ def test_random_deterministic_with_same_seed():
 
 
 def test_random_different_seeds_produce_different_splits():
-    X, y, metadata = _make_dataset(n=50)
+    X, y, metadata = _make_dataset(row_count=50)
     s1 = DataSplitter(mode="random", random_state=1, test_size=0.3)
     s2 = DataSplitter(mode="random", random_state=999, test_size=0.3)
     X_train_1, _, _, _, _, _ = s1.split(X, y, metadata)
@@ -169,7 +169,7 @@ def test_random_different_seeds_produce_different_splits():
 
 
 def test_random_proportions():
-    X, y, metadata = _make_dataset(n=100)
+    X, y, metadata = _make_dataset(row_count=100)
     X_train, X_test, _, _, _, _ = DataSplitter(
         mode="random", test_size=0.2
     ).split(X, y, metadata)
@@ -192,18 +192,18 @@ def test_random_does_not_require_timestamp_column():
 # ---------------------------------------------------------------------------
 
 def test_y_none_returns_none_for_both():
-    X, _, metadata = _make_dataset(n=20)
+    X, _, metadata = _make_dataset(row_count=20)
     _, _, y_train, y_test, _, _ = DataSplitter(mode="oot").split(X, None, metadata)
     assert y_train is None
     assert y_test is None
 
 
 def test_y_string_labels_preserved():
-    n = 20
-    X = np.arange(n).reshape(-1, 1).astype(float)
-    y = np.array(["normal" if i < 10 else "fault" for i in range(n)])
+    row_count = 20
+    X = np.arange(row_count).reshape(-1, 1).astype(float)
+    y = np.array(["normal" if row_index < 10 else "fault" for row_index in range(row_count)])
     metadata = pd.DataFrame(
-        {"timestamp": pd.date_range("2026-01-01", periods=n, freq="1min")}
+        {"timestamp": pd.date_range("2026-01-01", periods=row_count, freq="1min")}
     )
     _, _, y_train, y_test, _, _ = DataSplitter(
         mode="oot", test_size=0.5
@@ -218,14 +218,14 @@ def test_y_string_labels_preserved():
 # ---------------------------------------------------------------------------
 
 def test_metadata_columns_preserved():
-    n = 20
-    X = np.arange(n).reshape(-1, 1).astype(float)
-    y = np.arange(n)
+    row_count = 20
+    X = np.arange(row_count).reshape(-1, 1).astype(float)
+    y = np.arange(row_count)
     metadata = pd.DataFrame(
         {
-            "timestamp": pd.date_range("2026-01-01", periods=n, freq="1min"),
-            "read_index": np.arange(n),
-            "well_id": [f"well_{i % 3}" for i in range(n)],
+            "timestamp": pd.date_range("2026-01-01", periods=row_count, freq="1min"),
+            "read_index": np.arange(row_count),
+            "well_id": [f"well_{row_index % 3}" for row_index in range(row_count)],
         }
     )
     _, _, _, _, meta_train, meta_test = DataSplitter(
@@ -236,7 +236,7 @@ def test_metadata_columns_preserved():
 
 
 def test_metadata_index_is_reset():
-    X, y, metadata = _make_dataset(n=20)
+    X, y, metadata = _make_dataset(row_count=20)
     # Pre-set non-default indices.
     metadata.index = range(100, 120)
     _, _, _, _, meta_train, meta_test = DataSplitter(
@@ -253,7 +253,7 @@ def test_metadata_index_is_reset():
 
 def test_test_size_producing_empty_test_raises():
     """test_size=0.01 on 5 samples → n_test=0 → should raise."""
-    X, y, metadata = _make_dataset(n=5)
+    X, y, metadata = _make_dataset(row_count=5)
     splitter = DataSplitter(mode="oot", test_size=0.01)
     with pytest.raises(ValueError, match="empty train or test set"):
         splitter.split(X, y, metadata)
