@@ -254,7 +254,9 @@ Walk `payload["response"]["response"][0]` as the canonical extraction path. The 
 ## Local Setup
 
 ```bash
-pip install archetypeai python-dotenv
+# In a virtualenv (system pythons are often PEP 668 "externally managed"):
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r skills/atai-newton-fusion-model/references/requirements.txt
 
 # Drop a .env at the repo root (or anywhere up the tree from the run dir).
 # BOTH variables are required — there is no default endpoint:
@@ -281,6 +283,7 @@ skills/atai-newton-fusion-model/
 │   ├── image_query.py        ← 4 image patterns (file_ids, base64, JSON extraction, multi-image)
 │   ├── video_query.py        ← 3 video patterns (mp4 direct, max_frames tradeoff, frame list + query_metadata)
 │   ├── csv_vs_txt_proof.py   ← diagnostic: proves text/csv attachments aren't read, text/plain are
+│   ├── requirements.txt      ← runtime deps (pip install -r requirements.txt)
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_assets/
 │       ├── wind-turbines.png ← AI-generated photo (default for image_query.py)
