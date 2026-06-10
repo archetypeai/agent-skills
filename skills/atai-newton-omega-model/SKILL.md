@@ -49,7 +49,7 @@ Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-Same `/query` endpoint as the fusion model; the model id selects the Omega encoder.
+Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. Prod is `https://api.u1.archetypeai.app/v0.5`.
 
 ## Request Shape
 
@@ -125,9 +125,10 @@ Each embed is an independent stateless call, so `classify_knn.py` fans them out 
 ## Local Setup
 
 ```bash
-pip install requests python-dotenv numpy
+pip install archetypeai python-dotenv numpy
 
-# Drop a .env at the repo root (or anywhere up the tree from the run dir):
+# Drop a .env at the repo root (or anywhere up the tree from the run dir).
+# BOTH variables are required — there is no default endpoint:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.u1.archetypeai.app/v0.5
@@ -138,7 +139,7 @@ python embed_query.py     # embedding basics
 python classify_knn.py    # n-shot KNN classification
 ```
 
-The scripts auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` walks up from cwd); otherwise export `ATAI_API_KEY`. `numpy` is required for `classify_knn.py`.
+The scripts are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`): each script creates one client via `make_client()` and passes it into the helpers, and the `/query` POST goes through the client's retrying transport. They auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` walks up from cwd); otherwise export `ATAI_API_KEY` and `ATAI_API_ENDPOINT`. `numpy` is required for `classify_knn.py`.
 
 ## File Layout
 
@@ -146,7 +147,7 @@ The scripts auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` wa
 skills/atai-newton-omega-model/
 ├── SKILL.md                  ← this file
 ├── references/
-│   ├── _common.py            ← auth, the Omega embed call, CSV/window helpers
+│   ├── _common.py            ← official-client setup, the Omega embed call, CSV/window helpers
 │   ├── embed_query.py        ← embedding basics (call, padding, normalize_input)
 │   ├── classify_knn.py       ← embeddings → n-shot KNN classification (held-out eval)
 │   ├── .env.example          ← copy to .env and fill in

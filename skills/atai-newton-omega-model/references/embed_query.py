@@ -11,7 +11,7 @@ Data: a subset of the NASA IMS Bearing dataset (4 accelerometer channels). See
 sample_data/README.md for attribution.
 
 Usage:
-    cp .env.example .env  # then fill in ATAI_API_KEY
+    cp .env.example .env  # then fill in ATAI_API_KEY and ATAI_API_ENDPOINT
     python embed_query.py
     # or point at your own sensor CSV (timestamp column auto-skipped):
     python embed_query.py /path/to/series.csv
@@ -23,42 +23,48 @@ import argparse
 import sys
 from pathlib import Path
 
-from _common import EMBED_DIM, WINDOW, banner, embed, read_series, window_at
+from archetypeai.api_client import ArchetypeAI
+
+from _common import EMBED_DIM, WINDOW, banner, embed, make_client, read_series, window_at
 
 DEFAULT_CSV = Path(__file__).parent / "sample_data" / "bearing_healthy.csv"
 
 
-def example_basic(series: list[list[float]]) -> None:
+def example_basic(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner(f"1. Embed one window — {len(series)} channels x {WINDOW} timesteps")
-    w = window_at(series, start=0, window=WINDOW)
-    embeddings, warnings, ms = embed(w)
-    print(f"[{ms} ms]")
-    print(f"input  : {len(w)} channels x {len(w[0])} timesteps")
+    window_values = window_at(series, start=0, window=WINDOW)
+    embeddings, warnings, elapsed_ms = embed(client, window_values)
+    print(f"[{elapsed_ms} ms]")
+    print(f"input  : {len(window_values)} channels x {len(window_values[0])} timesteps")
     print(f"output : {len(embeddings)} embeddings x {len(embeddings[0])} dims "
           f"(one {EMBED_DIM}-d vector per channel)")
-    print(f"channel 1 embedding[:5]: {[round(x, 4) for x in embeddings[0][:5]]}")
+    print(f"channel 1 embedding[:5]: {[round(value, 4) for value in embeddings[0][:5]]}")
     if warnings:
         print(f"warnings: {warnings}")
     print()
 
 
-def example_padding(series: list[list[float]]) -> None:
+def example_padding(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner("2. Short window (<1024) is zero-padded server-side")
-    short = 256
-    w = window_at(series, start=0, window=short)
-    embeddings, warnings, ms = embed(w)
-    print(f"[{ms} ms] sent {short} timesteps; output still {len(embeddings)} x {len(embeddings[0])}")
+    short_window = 256
+    window_values = window_at(series, start=0, window=short_window)
+    embeddings, warnings, elapsed_ms = embed(client, window_values)
+    print(f"[{elapsed_ms} ms] sent {short_window} timesteps; "
+          f"output still {len(embeddings)} x {len(embeddings[0])}")
     print(f"warnings: {warnings or '(none)'}")
     print("Takeaway: feed WINDOW (1024) timesteps to use the encoder's native "
           "receptive field; shorter inputs work but are padded with zeros.\n")
 
 
-def example_normalize(series: list[list[float]]) -> None:
+def example_normalize(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner("3. normalize_input — PER-WINDOW z-norm (usually NOT what you want)")
-    w = window_at(series, start=0, window=WINDOW)
-    raw, _, _ = embed(w, normalize_input=False)
-    norm, _, _ = embed(w, normalize_input=True)
-    delta = sum(abs(a - b) for a, b in zip(raw[0], norm[0])) / len(raw[0])
+    window_values = window_at(series, start=0, window=WINDOW)
+    raw, _, _ = embed(client, window_values, normalize_input=False)
+    normalized, _, _ = embed(client, window_values, normalize_input=True)
+    delta = sum(
+        abs(raw_value - normalized_value)
+        for raw_value, normalized_value in zip(raw[0], normalized[0])
+    ) / len(raw[0])
     print(f"mean |Δ| on channel 1 embedding (raw vs per-window normalized): {delta:.4f}")
     print(
         "`normalize_input=True` z-normalizes EACH window independently — which\n"
@@ -80,9 +86,10 @@ def main() -> None:
         sys.exit(f"CSV not found: {args.csv}")
     series = read_series(args.csv)
 
-    example_basic(series)
-    example_padding(series)
-    example_normalize(series)
+    client = make_client()
+    example_basic(client, series)
+    example_padding(client, series)
+    example_normalize(client, series)
 
 
 if __name__ == "__main__":
