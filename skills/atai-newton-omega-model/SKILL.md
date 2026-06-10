@@ -125,7 +125,9 @@ Each embed is an independent stateless call, so `classify_knn.py` fans them out 
 ## Local Setup
 
 ```bash
-pip install archetypeai python-dotenv numpy
+# In a virtualenv (system pythons are often PEP 668 "externally managed"):
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r skills/atai-newton-omega-model/references/requirements.txt
 
 # Drop a .env at the repo root (or anywhere up the tree from the run dir).
 # BOTH variables are required — there is no default endpoint:
@@ -150,6 +152,7 @@ skills/atai-newton-omega-model/
 │   ├── _common.py            ← official-client setup, the Omega embed call, CSV/window helpers
 │   ├── embed_query.py        ← embedding basics (call, padding, normalize_input)
 │   ├── classify_knn.py       ← embeddings → n-shot KNN classification (held-out eval)
+│   ├── requirements.txt      ← runtime deps (pip install -r requirements.txt)
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_data/
 │       ├── bearing_healthy.csv          ← n-shot library: healthy (4 channels)
