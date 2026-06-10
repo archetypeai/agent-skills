@@ -181,6 +181,7 @@ No Newton API key required — this skill is pure local data wrangling.
 skills/atai-newton-omega-model-data-prep/
 ├── SKILL.md                              ← this file
 ├── references/
+│   ├── requirements.txt                  ← runtime deps (pip install -r requirements.txt)
 │   ├── data_preprocessor.py              ← gap-aware blocking + diagnostics
 │   ├── data_splitter.py                  ← OOT / random train/test split
 │   └── feature_preparer.py               ← joint-state featurization + PCA
