@@ -30,7 +30,8 @@ from typing import Any
 from archetypeai.api_client import ArchetypeAI
 
 MODEL = "OmegaEncoder::omega_embeddings_1_4"
-WINDOW = 1024  # the encoder's native window length; shorter inputs are zero-padded (with a warning)
+MIN_WINDOW = 16  # shortest signal length the encoder is trained on
+WINDOW = 1024    # longest; inputs > 1024 are truncated to the LAST 1024 points (with a warning)
 EMBED_DIM = 768  # per-channel embedding dimension returned by omega_embeddings_1_4
 
 
@@ -87,8 +88,11 @@ def embed(
     `embeddings` is one ``EMBED_DIM``-length vector per input channel.
 
     The window goes in a `data.numeric_array` event (no `file_ids`, no prompt).
-    Windows shorter than WINDOW are zero-padded server-side and a warning is
-    returned in `warnings`. Raises `archetypeai.ApiError` on a 4xx response.
+    The encoder handles window lengths of MIN_WINDOW (16) to WINDOW (1024)
+    natively — sub-1024 windows are padded AND masked internally, so the
+    accompanying "padding with zeros" warning is informational. Lengths below
+    16 are outside the trained range; lengths above 1024 are truncated to the
+    last 1024 points. Raises `archetypeai.ApiError` on a 4xx response.
     """
     body = {
         "query": "",

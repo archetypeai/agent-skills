@@ -4,7 +4,8 @@ via the cloud Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over /query.
 
 Three patterns:
   1. Embed one multi-channel window (the basic call + output shape).
-  2. Short windows (<1024) are zero-padded — what the warning means.
+  2. Window lengths — the encoder handles 16 to 1024 timesteps natively
+     (padding + mask internally); pick the length that fits your signal.
   3. `normalize_input` — z-norm the input window before encoding.
 
 Data: a subset of the NASA IMS Bearing dataset (4 accelerometer channels). See
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from archetypeai.api_client import ArchetypeAI
 
-from _common import EMBED_DIM, WINDOW, banner, embed, make_client, read_series, window_at
+from _common import EMBED_DIM, MIN_WINDOW, WINDOW, banner, embed, make_client, read_series, window_at
 
 DEFAULT_CSV = Path(__file__).parent / "sample_data" / "bearing_healthy.csv"
 
@@ -44,16 +45,21 @@ def example_basic(client: ArchetypeAI, series: list[list[float]]) -> None:
     print()
 
 
-def example_padding(client: ArchetypeAI, series: list[list[float]]) -> None:
-    banner("2. Short window (<1024) is zero-padded server-side")
-    short_window = 256
-    window_values = window_at(series, start=0, window=short_window)
-    embeddings, warnings, elapsed_ms = embed(client, window_values)
-    print(f"[{elapsed_ms} ms] sent {short_window} timesteps; "
-          f"output still {len(embeddings)} x {len(embeddings[0])}")
-    print(f"warnings: {warnings or '(none)'}")
-    print("Takeaway: feed WINDOW (1024) timesteps to use the encoder's native "
-          "receptive field; shorter inputs work but are padded with zeros.\n")
+def example_window_lengths(client: ArchetypeAI, series: list[list[float]]) -> None:
+    banner(f"2. Window lengths — the encoder is trained for {MIN_WINDOW} to {WINDOW} timesteps")
+    for window_length in (MIN_WINDOW, 256, WINDOW):
+        window_values = window_at(series, start=0, window=window_length)
+        embeddings, warnings, elapsed_ms = embed(client, window_values)
+        warning_note = warnings[0] if warnings else "(no warnings)"
+        print(f"  len={window_length:>4} [{elapsed_ms} ms] -> {len(embeddings)} x {len(embeddings[0])}  {warning_note}")
+    print(
+        f"Takeaway: any length in [{MIN_WINDOW}, {WINDOW}] is handled natively — sub-{WINDOW}\n"
+        "windows are padded AND masked internally, so the 'padding with zeros'\n"
+        "warning is informational. Pick the window length that fits your signal's\n"
+        "dynamics; shorter windows are sometimes more appropriate and more\n"
+        f"performant. Below {MIN_WINDOW} is outside the trained range, and inputs longer\n"
+        f"than {WINDOW} are truncated to the LAST {WINDOW} points.\n"
+    )
 
 
 def example_normalize(client: ArchetypeAI, series: list[list[float]]) -> None:
@@ -88,7 +94,7 @@ def main() -> None:
 
     client = make_client()
     example_basic(client, series)
-    example_padding(client, series)
+    example_window_lengths(client, series)
     example_normalize(client, series)
 
 

@@ -9,8 +9,8 @@ description: >
   network, etc.) for lightweight downstream ML — KNN
   classification, anomaly scoring, similarity search, or 2D projection —
   done client-side over the embeddings. Covers the request shape (`data.numeric_array`,
-  channel-first window), the per-channel 768-d output, the 1024-length
-  native window and zero-padding behavior, `normalize_input`, and the
+  channel-first window), the per-channel 768-d output, the supported
+  16–1024 window-length range, `normalize_input`, and the
   "joint multi-channel state" + KNN pattern. For cleaning / splitting /
   windowing raw sensor CSVs first, see `newton-data-prep`.
   Do NOT use for text / image / video reasoning (that's the Newton fusion
@@ -79,11 +79,11 @@ The window goes in a **`data.numeric_array` event** as a **channel-first** matri
 }
 ```
 
-- **Window length = 1024.** That's the encoder's native receptive field. Feed 1024 timesteps per window. Shorter inputs still work but are **zero-padded server-side**, and you get a `warning_messages` entry per channel: *"Data length 256 is less than 1024, padding with zeros."* Padding dilutes the signal — prefer real 1024-length windows.
+- **Window length: 16–1024 timesteps.** The encoder is trained to handle signal lengths from 16 to 1024. Under the hood, sub-1024 windows are padded **and masked** — the mask tells the model which time samples are real and which are padding, so padding is ignored rather than read as signal. **Don't default to 1024**: pick the window length that matches your signal's dynamics — shorter windows are sometimes more appropriate and more performant. The edges (verified live): any length < 1024 returns an informational `warning_messages` entry per channel (*"Data length N is less than 1024, padding with zeros"* — not a quality alarm within the 16–1024 range); below 16 you get *"the model may not perform well"* (below the trained range); above 1024 the input is **truncated to the last 1024 points** (with a warning).
 - **`normalize_input`** — when `true`, the encoder z-normalizes **each window independently**. That's usually *not* what you want for comparing windows: it erases cross-window amplitude (a low-flow and a high-flow window can look identical). For classification / anomaly / similarity, fit **one** per-channel scaler on your training pool, apply it to every window, and call with `normalize_input=false` (see the downstream pattern below). Reserve `normalize_input=true` for one-off single-window encodes where only within-window shape matters.
 - **Per-channel embeddings.** Omega embeds each channel independently. To get one fingerprint for a multi-channel window, concatenate the per-channel vectors into a **joint multi-channel state** (e.g. 4 channels → a 3072-d feature), optionally L2-normalized. That single vector is what you feed to KNN / anomaly / projection.
 
-See [`embed_query.py`](references/embed_query.py) for the basic call, the padding behavior, and `normalize_input`.
+See [`embed_query.py`](references/embed_query.py) for the basic call, window-length behavior across the 16–1024 range, and `normalize_input`.
 
 ## Downstream pattern — embeddings → KNN classification
 
@@ -120,7 +120,7 @@ Each embed is an independent stateless call, so `classify_knn.py` fans them out 
 - **Drop the timestamp column.** A `timestamp` parses as a number, so naive "use all numeric columns" includes it as a fake channel — and if your class files have disjoint time ranges, a downstream classifier can cheat on it. Exclude time columns (the helper drops `timestamp`/`time`/… by header name).
 - **Temporal contiguity matters.** Omega reads a window as an ordered series; randomly-sampled or gap-spanning rows produce meaningless embeddings. Sample contiguous blocks. (See `newton-data-prep` for gap-aware windowing.)
 - **`OmegaEncoder::` prefix.** The model id is `OmegaEncoder::omega_embeddings_1_4`, not `Newton::...`.
-- **Sub-1024 windows are padded, not rejected.** Check `warning_messages` if you're surprised by weak embeddings on short inputs.
+- **The "padding with zeros" warning is informational, not an error.** Any window in the trained 16–1024 range is handled natively (padding + mask). The warnings to act on are *"less than 16"* (below the trained range) and *"greater than 1024, truncating to the last 1024 points"* (you silently lose everything before the final 1024 samples — window the data yourself instead).
 
 ## Local Setup
 
@@ -150,7 +150,7 @@ skills/atai-newton-omega-model/
 ├── SKILL.md                  ← this file
 ├── references/
 │   ├── _common.py            ← official-client setup, the Omega embed call, CSV/window helpers
-│   ├── embed_query.py        ← embedding basics (call, padding, normalize_input)
+│   ├── embed_query.py        ← embedding basics (call, window lengths, normalize_input)
 │   ├── classify_knn.py       ← embeddings → n-shot KNN classification (held-out eval)
 │   ├── requirements.txt      ← runtime deps (pip install -r requirements.txt)
 │   ├── .env.example          ← copy to .env and fill in
