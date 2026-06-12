@@ -51,7 +51,9 @@ def example_window_lengths(client: ArchetypeAI, series: list[list[float]]) -> No
         window_values = window_at(series, start=0, window=window_length)
         embeddings, warnings, elapsed_ms = embed(client, window_values)
         warning_note = warnings[0] if warnings else "(no warnings)"
+        leading_coords = [round(value, 4) for value in embeddings[0][:5]]
         print(f"  len={window_length:>4} [{elapsed_ms} ms] -> {len(embeddings)} x {len(embeddings[0])}  {warning_note}")
+        print(f"           channel 1 embedding[:5]: {leading_coords}")
     print(
         f"Takeaway: any length in [{MIN_WINDOW}, {WINDOW}] is handled natively — sub-{WINDOW}\n"
         "windows are padded AND masked internally, so the 'padding with zeros'\n"
