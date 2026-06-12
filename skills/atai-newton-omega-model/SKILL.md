@@ -95,16 +95,19 @@ This is what the managed batch pipeline does, reproduced client-side over `/quer
 
 A few dozen labelled embeddings make a serviceable classifier — no training, no batch job. See [`classify_knn.py`](references/classify_knn.py): it builds the library from the labelled shot files and runs a **genuine held-out evaluation** against `bearing_inference.csv` (sensors only — **no `label` column**, and timestamps disjoint from the shot files, so leakage is impossible two ways over), scoring predictions against `bearing_labels.csv`.
 
-It reports a full binary metrics report (`degraded` = positive). On **1000 held-out windows** (500 healthy + 500 degraded), the sample run scored:
+It reports a full binary metrics report (`degraded` = positive), and `--window-size` accepts one or more lengths — each runs as a separate full eval (library and test windows re-windowed together at that length), with a comparison table at the end. On **1000 held-out windows** (500 healthy + 500 degraded) per length, the full sweep `--window-size 16 256 1024` scored:
 
 ```
-accuracy : 0.946  (946/1000)
-precision: 0.903   recall: 1.000   f1: 0.949
+ window  library  windows  accuracy  precision  recall     f1
+-------------------------------------------------------------
+     16       16     1000     0.672      0.858   0.412  0.557
+    256       14     1000     0.972      0.947   1.000  0.973
+   1024        8     1000     0.946      0.903   1.000  0.949
 ```
 
-i.e. it caught every degraded window (recall 1.0) at the cost of 54 healthy windows flagged as degraded — a realistic operating point for an n-shot vibration classifier. The default run embeds ~1000 windows (~6–7 min, 8-way parallel); use `--max-windows 50` for a ~30 s check.
+The shape of that table is the lesson. At 16, the window is shorter than the bearing defect's impulse signature, so recall collapses — most degraded windows genuinely contain no evidence at that zoom. At 256 the signature fits: every degraded window caught, and the fewest false alarms (28 healthy windows flagged). At 1024 recall holds but precision drops (54 false alarms) — the extra context dilutes the defect rather than sharpening it. **256 — a quarter of the data per window — beats 1024 on this dataset**, which is the empirical case for the window-length guidance above: don't default to 1024; sweep a few lengths and let held-out F1 pick.
 
-`--window-size` accepts one or more lengths (e.g. `--window-size 16 256 1024`): each runs as a separate full eval — library and test windows re-windowed together at that length — and with several values a comparison table is printed at the end. That's the cheap way to test whether a shorter window is more performant on your data (it sometimes is — the encoder handles any length in 16–1024 natively).
+Each leg embeds ~1000 windows (~7 min, 8-way parallel); use `--max-windows 50` for a ~30 s preview per length.
 
 ## Latency
 
