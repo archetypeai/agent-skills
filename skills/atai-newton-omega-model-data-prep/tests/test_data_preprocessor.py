@@ -383,3 +383,29 @@ def test_build_imputed_flag_only_where_original_was_nan(short_nan_df):
     expected_imputed_rows = {10, 11}
     actual_imputed_rows = set(out.index[out["imputed"]].tolist())
     assert actual_imputed_rows == expected_imputed_rows
+
+
+def test_non_sensor_columns_customizable():
+    """A custom non-sensor column is excluded from imputation/blocking."""
+    ts = pd.date_range("2026-01-01", periods=10, freq="1min")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "sensor_a": np.arange(10, dtype=float),
+            "status_flag": np.ones(10),  # numeric but not a sensor
+        }
+    )
+    preprocessor = DataPreprocessor(non_sensor_columns=["status_flag"])
+    assert preprocessor._get_sensor_cols(df) == ["sensor_a"]
+
+
+def test_non_sensor_columns_default_excludes_machine_status():
+    ts = pd.date_range("2026-01-01", periods=10, freq="1min")
+    df = pd.DataFrame(
+        {
+            "timestamp": ts,
+            "sensor_a": np.arange(10, dtype=float),
+            "machine_status": np.ones(10),
+        }
+    )
+    assert DataPreprocessor()._get_sensor_cols(df) == ["sensor_a"]

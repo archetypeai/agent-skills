@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+# Default non-sensor columns excluded from imputation/blocking (overridable
+# via the `non_sensor_columns` constructor argument).
+NON_SENSOR_COLUMNS = ['machine_status']
+
 
 class DataPreprocessor:
     def __init__(
@@ -23,6 +27,7 @@ class DataPreprocessor:
         drop_sensors: Optional[List[str]] = None,
         imputation_method: str = 'linear',
         imputation_kwargs: Optional[Dict[str, Any]] = None,
+        non_sensor_columns: Optional[List[str]] = None,
     ):
         """
         Args:
@@ -35,6 +40,9 @@ class DataPreprocessor:
                 'time') or the special value 'ffill' / 'bfill'.
             imputation_kwargs: extra keyword args forwarded to .interpolate(),
                 e.g. {'order': 3} for spline/polynomial. Ignored for ffill/bfill.
+            non_sensor_columns: numeric columns that are NOT sensors (labels,
+                status flags, ...) and must be excluded from imputation and
+                blocking. Defaults to NON_SENSOR_COLUMNS.
         """
         self.timestamp_col = timestamp_col
         self.sampling_rate_minutes = sampling_rate_minutes
@@ -42,6 +50,9 @@ class DataPreprocessor:
         self.drop_sensors = drop_sensors or []
         self.imputation_method = imputation_method
         self.imputation_kwargs = imputation_kwargs or {}
+        self.non_sensor_columns = (
+            list(non_sensor_columns) if non_sensor_columns is not None else list(NON_SENSOR_COLUMNS)
+        )
 
     # ------------------------------------------------------------------ #
     # Diagnostics
@@ -397,7 +408,8 @@ class DataPreprocessor:
 
     def _get_sensor_cols(self, df: pd.DataFrame) -> List[str]:
         """Numeric columns excluding timestamp and metadata."""
-        exclude = {self.timestamp_col, 'machine_status', 'block_id', 'imputed'}
+        # block_id / imputed are this class's own output columns.
+        exclude = {self.timestamp_col, 'block_id', 'imputed', *self.non_sensor_columns}
         return [
             column_name for column_name in df.columns
             if column_name not in exclude and pd.api.types.is_numeric_dtype(df[column_name])

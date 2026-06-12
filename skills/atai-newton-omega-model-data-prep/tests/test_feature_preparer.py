@@ -309,3 +309,23 @@ def test_three_sensors_concat():
     df = pd.DataFrame(records)
     X, _, _ = FeaturePreparer().prepare(df, label_column="machine_state")
     assert X.shape == (4, 12)  # 4 windows × 3 sensors × 4 dims
+
+
+def test_custom_schema_column_names():
+    """The input schema column names are constructor parameters."""
+    df = pd.DataFrame(
+        [
+            {
+                "snr": "sensor_a",
+                "win": row_index,
+                "vec": np.zeros(4, dtype=np.float32),
+            }
+            for row_index in range(3)
+        ]
+    )
+    X, y, metadata = FeaturePreparer(
+        read_index_column="win", sensor_column="snr", embedding_column="vec"
+    ).prepare(df)
+    assert X.shape == (3, 4)
+    assert y is None
+    assert list(metadata["win"]) == [0, 1, 2]

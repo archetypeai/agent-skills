@@ -22,6 +22,11 @@ class FeaturePreparer:
         normalize: 'l2', 'standardize', or None.
         reduce_dim: number of PCA components, or None to skip PCA.
         sensor_order: order of sensors when concatenating (None = alphabetical).
+        read_index_column: column identifying the window (default 'read_index').
+        sensor_column: column identifying the sensor (default 'sensor').
+        embedding_column: column holding the embedding vector (default 'embedding').
+        timestamp_column: optional timestamp column to carry into metadata
+            (default 'timestamp'; skipped if absent).
 
     Example:
         >>> preparer = FeaturePreparer(normalize='l2', reduce_dim=50)
@@ -33,6 +38,10 @@ class FeaturePreparer:
         normalize: Optional[str] = None,
         reduce_dim: Optional[int] = None,
         sensor_order: Optional[List[str]] = None,
+        read_index_column: str = 'read_index',
+        sensor_column: str = 'sensor',
+        embedding_column: str = 'embedding',
+        timestamp_column: str = 'timestamp',
     ):
         if normalize not in (None, 'l2', 'standardize'):
             raise ValueError(
@@ -41,6 +50,10 @@ class FeaturePreparer:
         self.normalize = normalize
         self.reduce_dim = reduce_dim
         self.sensor_order = sensor_order
+        self.read_index_column = read_index_column
+        self.sensor_column = sensor_column
+        self.embedding_column = embedding_column
+        self.timestamp_column = timestamp_column
 
     def prepare(
         self,
@@ -61,11 +74,11 @@ class FeaturePreparer:
             y: array of shape (N_windows,) with labels, or None if label_column was None.
             metadata: DataFrame with read_index, label (if any), and timestamp (if available).
         """
-        sensor_order = self.sensor_order or sorted(df_emb['sensor'].unique())
+        sensor_order = self.sensor_order or sorted(df_emb[self.sensor_column].unique())
         num_sensors = len(sensor_order)
 
         # --- Validate that every window has all sensors ---
-        sensors_per_window = df_emb.groupby('read_index')['sensor'].nunique()
+        sensors_per_window = df_emb.groupby(self.read_index_column)[self.sensor_column].nunique()
         bad_windows = sensors_per_window[sensors_per_window != num_sensors].index.tolist()
         if bad_windows:
             raise ValueError(
@@ -74,7 +87,9 @@ class FeaturePreparer:
             )
 
         # --- Pivot and concatenate embeddings ---
-        pivot = df_emb.pivot(index='read_index', columns='sensor', values='embedding')
+        pivot = df_emb.pivot(
+            index=self.read_index_column, columns=self.sensor_column, values=self.embedding_column
+        )
         pivot = pivot[sensor_order]  # enforce consistent column ordering
 
         X = np.stack([np.concatenate(row) for row in pivot.values])
@@ -86,7 +101,7 @@ class FeaturePreparer:
                 raise ValueError(f"label_column '{label_column}' not found in df_emb.")
 
             # Validate label consistency across sensors of the same window
-            label_consistency = df_emb.groupby('read_index')[label_column].nunique()
+            label_consistency = df_emb.groupby(self.read_index_column)[label_column].nunique()
             inconsistent = label_consistency[label_consistency > 1].index.tolist()
             if inconsistent:
                 raise ValueError(
@@ -95,7 +110,7 @@ class FeaturePreparer:
                 )
 
             y = (
-                df_emb.groupby('read_index')[label_column]
+                df_emb.groupby(self.read_index_column)[label_column]
                 .first()
                 .reindex(pivot.index)
                 .values
@@ -142,25 +157,25 @@ class FeaturePreparer:
         print(f"PCA: cumulative explained variance = {pca.explained_variance_ratio_.sum():.2%}")
         return X_reduced
 
-    @staticmethod
     def _build_metadata(
+        self,
         df_emb: pd.DataFrame,
         pivot: pd.DataFrame,
         label_column: Optional[str],
         y: Optional[np.ndarray],
     ) -> pd.DataFrame:
-        metadata_dict = {'read_index': pivot.index.values}
+        metadata_dict = {self.read_index_column: pivot.index.values}
 
         if label_column is not None and y is not None:
             metadata_dict[label_column] = y
 
-        if 'timestamp' in df_emb.columns:
+        if self.timestamp_column in df_emb.columns:
             timestamps = (
-                df_emb.groupby('read_index')['timestamp']
+                df_emb.groupby(self.read_index_column)[self.timestamp_column]
                 .first()
                 .reindex(pivot.index)
                 .values
             )
-            metadata_dict['timestamp'] = timestamps
+            metadata_dict[self.timestamp_column] = timestamps
 
         return pd.DataFrame(metadata_dict)
