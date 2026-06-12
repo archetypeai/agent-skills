@@ -92,11 +92,11 @@ def feature(client, window, mean, std):
     return _embed_resilient(client, ((np.asarray(window, dtype=float) - mean) / std).tolist())
 
 
-def _embed_start(client, series, start, mean, std):
-    return start, feature(client, window_at(series, start, WINDOW), mean, std)
+def _embed_start(client, series, start, mean, std, window_size):
+    return start, feature(client, window_at(series, start, window_size), mean, std)
 
 
-def features_parallel(client, series, starts, mean, std, workers):
+def features_parallel(client, series, starts, mean, std, workers, window_size):
     """Embed many windows concurrently, with a live progress line. Returns {start: feature}."""
     features_by_start: dict[int, np.ndarray] = {}
     total = len(starts)
@@ -104,7 +104,7 @@ def features_parallel(client, series, starts, mean, std, workers):
     start_time = time.time()
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(_embed_start, client, series, start, mean, std) for start in starts
+            executor.submit(_embed_start, client, series, start, mean, std, window_size) for start in starts
         ]
         for done, future in enumerate(as_completed(futures), 1):
             start, joint_feature = future.result()
@@ -233,25 +233,30 @@ def main() -> None:
     parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
     parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
     parser.add_argument("--workers", type=int, default=8, help="concurrent /query embeds")
+    parser.add_argument("--window-size", type=int, default=WINDOW,
+                        help=f"timesteps per window, applied to BOTH the n-shot library and the test\n"
+                             f"windows (mixing lengths would invalidate KNN distances). The encoder's\n"
+                             f"trained range is 16-{WINDOW} (default {WINDOW})")
     args = parser.parse_args()
 
     client = make_client()
     healthy = read_series(HEALTHY_SHOT)
     degraded = read_series(DEGRADED_SHOT)
-    banner(f"Held-out classification eval — Omega embeddings + {K_NEIGHBORS}-NN vs ground truth")
+    banner(f"Held-out classification eval — Omega embeddings + {K_NEIGHBORS}-NN vs ground truth "
+           f"(window_size={args.window_size})")
 
     # Global per-channel scaler fit on the n-shot pool only (no test leakage).
     mean, std = fit_scaler(np.concatenate([np.asarray(healthy), np.asarray(degraded)], axis=1).tolist())
 
     print("Building n-shot library from shot files (scaled, normalize_input=false)...")
-    healthy_starts = list(range(0, len(healthy[0]) - WINDOW + 1, LIB_STRIDE))
-    degraded_starts = list(range(0, len(degraded[0]) - WINDOW + 1, LIB_STRIDE))
+    healthy_starts = list(range(0, len(healthy[0]) - args.window_size + 1, LIB_STRIDE))
+    degraded_starts = list(range(0, len(degraded[0]) - args.window_size + 1, LIB_STRIDE))
     library = [
-        (feature(client, window_at(healthy, start, WINDOW), mean, std), "healthy")
+        (feature(client, window_at(healthy, start, args.window_size), mean, std), "healthy")
         for start in healthy_starts
     ]
     library += [
-        (feature(client, window_at(degraded, start, WINDOW), mean, std), "degraded")
+        (feature(client, window_at(degraded, start, args.window_size), mean, std), "degraded")
         for start in degraded_starts
     ]
     library = [(joint_feature, label) for joint_feature, label in library if joint_feature is not None]
@@ -261,14 +266,14 @@ def main() -> None:
 
     print(f"Loading test series {Path(args.inference).name} ...")
     timestamps, inference = read_series_and_time(args.inference)
-    all_starts = contiguous_starts(timestamps)
+    all_starts = contiguous_starts(timestamps, args.window_size)
     starts = even_subsample(all_starts, args.max_windows)
     print(f"{len(all_starts)} non-overlapping contiguous windows available; "
           f"evaluating {len(starts)} (max-windows={args.max_windows}, {args.workers}-way parallel)")
     truth_by_timestamp = load_labels(Path(args.labels), needed={timestamps[start] for start in starts})
 
     start_time = time.time()
-    features_by_start = features_parallel(client, inference, starts, mean, std, args.workers)
+    features_by_start = features_parallel(client, inference, starts, mean, std, args.workers, args.window_size)
     truths, preds = [], []
     for start in starts:
         if start not in features_by_start or timestamps[start] not in truth_by_timestamp:

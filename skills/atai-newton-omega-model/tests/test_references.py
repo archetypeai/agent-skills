@@ -143,6 +143,39 @@ class TestReadSeries(unittest.TestCase):
             _common.window_at(series, start=1999, window=1024)
 
 
+class TestWindowSizeThreading(_Base):
+    def test_embed_start_sends_window_of_requested_length(self):
+        # --window-size must control the actual window sliced and sent to the
+        # API (for BOTH library and test windows); a regression here would
+        # silently embed wrong-length windows.
+        client = self.hermetic_client()
+        store: dict = {}
+        payload = {"response": {"response": [[0.1] * 8, [0.2] * 8], "warning_messages": []}}
+        series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
+        mean = np.zeros((2, 1))
+        std = np.ones((2, 1))
+        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
+            start, joint_feature = classify_knn._embed_start(client, series, 0, mean, std, 64)
+        contents = store["json"]["events"][0]["event_data"]["contents"]
+        self.assertEqual(start, 0)
+        self.assertEqual(len(contents), 2)  # channels preserved
+        self.assertEqual(len(contents[0]), 64)  # exactly the requested window length
+        self.assertEqual(joint_feature.shape, (16,))  # 2 channels x 8 dims, concatenated
+
+    def test_embed_start_window_offset(self):
+        client = self.hermetic_client()
+        store: dict = {}
+        payload = {"response": {"response": [[0.1] * 8, [0.2] * 8], "warning_messages": []}}
+        series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
+        mean = np.zeros((2, 1))
+        std = np.ones((2, 1))
+        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
+            classify_knn._embed_start(client, series, 100, mean, std, 32)
+        contents = store["json"]["events"][0]["event_data"]["contents"]
+        self.assertEqual(len(contents[0]), 32)
+        self.assertEqual(contents[0][0], 100.0)  # slice starts at the requested offset
+
+
 class TestKnn(unittest.TestCase):
     def test_majority_vote(self):
         library = np.array([[0.0, 0.0], [0.1, 0.0], [9.0, 9.0]])
