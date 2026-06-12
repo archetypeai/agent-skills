@@ -33,7 +33,7 @@ DEFAULT_CSV = Path(__file__).parent / "sample_data" / "bearing_healthy.csv"
 
 def example_basic(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner(f"1. Embed one window — {len(series)} channels x {WINDOW} timesteps")
-    window_values = window_at(series, start=0, window=WINDOW)
+    window_values = window_at(series, start=0, window_size=WINDOW)
     embeddings, warnings, elapsed_ms = embed(client, window_values)
     print(f"[{elapsed_ms} ms]")
     print(f"input  : {len(window_values)} channels x {len(window_values[0])} timesteps")
@@ -48,7 +48,7 @@ def example_basic(client: ArchetypeAI, series: list[list[float]]) -> None:
 def example_window_lengths(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner(f"2. Window lengths — the encoder is trained for {MIN_WINDOW} to {WINDOW} timesteps")
     for window_length in (MIN_WINDOW, 256, WINDOW):
-        window_values = window_at(series, start=0, window=window_length)
+        window_values = window_at(series, start=0, window_size=window_length)
         embeddings, warnings, elapsed_ms = embed(client, window_values)
         warning_note = warnings[0] if warnings else "(no warnings)"
         leading_coords = [round(value, 4) for value in embeddings[0][:5]]
@@ -66,7 +66,7 @@ def example_window_lengths(client: ArchetypeAI, series: list[list[float]]) -> No
 
 def example_normalize(client: ArchetypeAI, series: list[list[float]]) -> None:
     banner("3. normalize_input — PER-WINDOW z-norm (usually NOT what you want)")
-    window_values = window_at(series, start=0, window=WINDOW)
+    window_values = window_at(series, start=0, window_size=WINDOW)
     raw, _, _ = embed(client, window_values, normalize_input=False)
     normalized, _, _ = embed(client, window_values, normalize_input=True)
     delta = sum(

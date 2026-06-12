@@ -2,8 +2,9 @@
 
 Mocks the official archetypeai client's transport, so these run with NO
 credentials and NO network. They lock in the verified invariants:
-  * embed() posts a `data.numeric_array` event with the channel-first window
-    and model OmegaEncoder::omega_embeddings_1_4 (no file_ids, no prompt).
+  * embed() fans out ONE `data.numeric_array` call per channel, in parallel
+    (caps payload size for high channel counts); single-channel responses
+    arrive flat and are normalized back to per-channel vectors.
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
     endpoint.
   * read_series drops the timestamp column (channels = sensors only).
@@ -38,12 +39,19 @@ SAMPLE = REF / "sample_data"
 
 
 def _capturing_post(payload: dict, store: dict):
-    """Return a fake ArchetypeAI.requests_post that records its args and returns `payload`."""
+    """Return a fake ArchetypeAI.requests_post that records its args and returns `payload`.
+
+    `store["json"]` holds the most recent body; `store["bodies"]` accumulates
+    every body (embed() makes one call per channel, so multi-channel embeds
+    produce several).
+    """
 
     def _requests_post(self, api_endpoint, data_payload, additional_headers={}):
+        body = json.loads(data_payload)
+        store.setdefault("bodies", []).append(body)
         store.update(
             url=api_endpoint,
-            json=json.loads(data_payload),
+            json=body,
             headers={**self.auth_headers, **additional_headers},
         )
         return payload
@@ -89,25 +97,35 @@ class TestMakeClient(_Base):
 
 
 class TestEmbedBody(_Base):
-    def test_embed_request_shape(self):
+    def test_embed_fans_out_one_call_per_channel(self):
+        # The recommended pattern (per Nick's review): one API call per
+        # channel, in parallel — caps payload size for high channel counts.
         client = self.hermetic_client()
         window = [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]  # 2 channels x 3 timesteps
         store: dict = {}
-        payload = {"response": {"response": [[0.1] * 768, [0.2] * 768], "warning_messages": ["w"]}}
+        # A single-channel response carries the vector FLAT (verified live).
+        payload = {"response": {"response": [0.1] * 768, "warning_messages": ["w"]}}
         with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
             embeddings, warnings, _elapsed_ms = _common.embed(client, window, normalize_input=True)
-        body = store["json"]
-        self.assertEqual(body["model"], "OmegaEncoder::omega_embeddings_1_4")
-        self.assertTrue(body["normalize_input"])
-        self.assertEqual(body["events"][0]["type"], "data.numeric_array")
-        self.assertEqual(body["events"][0]["event_data"]["contents"], window)  # channel-first, passed through
-        self.assertNotIn("file_ids", body)
-        self.assertNotIn("sanitize", body)
+        bodies = store["bodies"]
+        self.assertEqual(len(bodies), 2)  # one call per channel
+        sent_channels = []
+        for body in bodies:
+            self.assertEqual(body["model"], "OmegaEncoder::omega_embeddings_1_4")
+            self.assertTrue(body["normalize_input"])
+            self.assertEqual(body["events"][0]["type"], "data.numeric_array")
+            contents = body["events"][0]["event_data"]["contents"]
+            self.assertEqual(len(contents), 1)  # exactly one channel per request
+            sent_channels.append(contents[0])
+            self.assertNotIn("file_ids", body)
+            self.assertNotIn("sanitize", body)
+        # all channels sent exactly once (parallel order may vary)
+        self.assertEqual(sorted(sent_channels), sorted(window))
         self.assertTrue(store["url"].endswith("/query"))
         self.assertEqual(store["headers"]["Authorization"], "Bearer test-key")
-        self.assertEqual(len(embeddings), 2)
+        self.assertEqual(len(embeddings), 2)  # reassembled in channel order
         self.assertEqual(len(embeddings[0]), 768)
-        self.assertEqual(warnings, ["w"])
+        self.assertEqual(warnings, ["w", "w"])  # per-channel warnings collected
 
 
 class TestExtractEmbeddings(unittest.TestCase):
@@ -136,11 +154,11 @@ class TestReadSeries(unittest.TestCase):
 
     def test_window_at_shape_and_bounds(self):
         series = _common.read_series(SAMPLE / "bearing_healthy.csv")
-        window_values = _common.window_at(series, start=0, window=128)
+        window_values = _common.window_at(series, start=0, window_size=128)
         self.assertEqual(len(window_values), 4)
         self.assertEqual(len(window_values[0]), 128)
         with self.assertRaises(SystemExit):
-            _common.window_at(series, start=1999, window=1024)
+            _common.window_at(series, start=1999, window_size=1024)
 
 
 class TestWindowSizeThreading(_Base):
@@ -150,22 +168,24 @@ class TestWindowSizeThreading(_Base):
         # silently embed wrong-length windows.
         client = self.hermetic_client()
         store: dict = {}
-        payload = {"response": {"response": [[0.1] * 8, [0.2] * 8], "warning_messages": []}}
+        payload = {"response": {"response": [0.1] * 8, "warning_messages": []}}
         series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
         mean = np.zeros((2, 1))
         std = np.ones((2, 1))
         with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
             start, joint_feature = classify_knn._embed_start(client, series, 0, mean, std, 64)
-        contents = store["json"]["events"][0]["event_data"]["contents"]
         self.assertEqual(start, 0)
-        self.assertEqual(len(contents), 2)  # channels preserved
-        self.assertEqual(len(contents[0]), 64)  # exactly the requested window length
+        self.assertEqual(len(store["bodies"]), 2)  # one call per channel
+        for body in store["bodies"]:
+            contents = body["events"][0]["event_data"]["contents"]
+            self.assertEqual(len(contents), 1)  # one channel per request
+            self.assertEqual(len(contents[0]), 64)  # exactly the requested window length
         self.assertEqual(joint_feature.shape, (16,))  # 2 channels x 8 dims, concatenated
 
     def test_embed_start_window_offset(self):
         client = self.hermetic_client()
         store: dict = {}
-        payload = {"response": {"response": [[0.1] * 8, [0.2] * 8], "warning_messages": []}}
+        payload = {"response": {"response": [0.1] * 8, "warning_messages": []}}
         series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
         mean = np.zeros((2, 1))
         std = np.ones((2, 1))
@@ -203,7 +223,7 @@ class TestScalerAndWindows(unittest.TestCase):
     def test_contiguous_starts_skips_gap(self):
         # two contiguous blocks of 4, with a big jump between -> window=4 yields starts 0 and 4, not 2
         timestamps = [0, 1, 2, 3, 1000, 1001, 1002, 1003]
-        self.assertEqual(classify_knn.contiguous_starts(timestamps, window=4), [0, 4])
+        self.assertEqual(classify_knn.contiguous_starts(timestamps, window_size=4), [0, 4])
 
     def test_read_series_and_time(self):
         timestamps, series = _common.read_series_and_time(SAMPLE / "bearing_healthy.csv")

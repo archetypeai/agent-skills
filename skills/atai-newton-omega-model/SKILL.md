@@ -53,7 +53,7 @@ Same `/query` endpoint as the fusion model; the model id selects the Omega encod
 
 ## Request Shape
 
-The window goes in a **`data.numeric_array` event** as a **channel-first** matrix — `contents[channel][t]`, a list of `channels` lists each `window` long. No `file_ids`, no prompt.
+**Recommended: one request per channel, fanned out in parallel.** Each request carries a **`data.numeric_array` event** with a single channel — `contents` is `[[/* one channel: w floats */]]`. No `file_ids`, no prompt. Per-channel requests cap the request/response payload size (a single request carrying many channels eventually exceeds REST payload limits and corrupts in transit), and a thread-pool / async fan-out keeps wall-clock close to a single call — see `embed()` in [`_common.py`](references/_common.py).
 
 ```json
 {
@@ -61,19 +61,21 @@ The window goes in a **`data.numeric_array` event** as a **channel-first** matri
   "model": "OmegaEncoder::omega_embeddings_1_4",
   "normalize_input": false,
   "events": [
-    { "type": "data.numeric_array", "event_data": { "contents": [[/* channel 1: w floats */], [/* channel 2 */]] } }
+    { "type": "data.numeric_array", "event_data": { "contents": [[/* one channel: w floats */]] } }
   ]
 }
 ```
 
+(The API also accepts all channels in one request — `contents[channel][t]` — but don't, for the payload reason above. And **don't mix the two conventions in one downstream model**: per-channel and all-in-one embeddings of the same data differ slightly, ~2e-2 per coordinate measured, so a KNN library built one way can't score windows embedded the other way.)
+
 ## Response — one 768-d vector per channel
 
-`response.response` is `[channels x 768]` — one embedding per input channel. A 4-channel window in → four 768-d vectors out.
+A single-channel request returns its 768-d vector **flat** in `response.response`; reassemble per-channel results in channel order client-side (a multi-channel request returns `[channels x 768]` instead — another shape difference between the two conventions).
 
 ```json
 {
   "response": {
-    "response": [[0.45, -0.32, ...768...], [...], [...], [...]],
+    "response": [0.45, -0.32, ...768...],
     "warning_messages": []
   }
 }
@@ -113,7 +115,7 @@ Each leg embeds ~1000 windows (~7 min, 8-way parallel); use `--max-windows 50` f
 
 | Operation | Observed |
 |-----------|---------:|
-| One window embed (4 channels × 1024) | **~1.1 s** |
+| One window embed (4 channels × 1024, per-channel parallel) | **~2 s** |
 | n-shot library (8 windows) | ~8 embeds, a few seconds |
 | Held-out eval (1000 windows, 8-way parallel) | **~6–7 min** (~1000 embeds) |
 
@@ -122,9 +124,10 @@ Each embed is an independent stateless call, so `classify_knn.py` fans them out 
 ## Common Pitfalls
 
 - **Channel-first, not row-major.** `contents` is `[channels x timesteps]` (one list per sensor), not `[timesteps x channels]`. Transposing gives garbage embeddings.
-- **Drop the timestamp column.** A `timestamp` parses as a number, so naive "use all numeric columns" includes it as a fake channel — and if your class files have disjoint time ranges, a downstream classifier can cheat on it. Exclude time columns (the helper drops `timestamp`/`time`/… by header name).
+- **Drop the timestamp column.** A `timestamp` parses as a number, so naive "use all numeric columns" includes it as a fake channel — and if your class files have disjoint time ranges, a downstream classifier can cheat on it. Exclude time columns (the helper drops `timestamp`/`time`/… by header name; pass your own `time_columns` set if your data names them differently).
 - **Temporal contiguity matters.** Omega reads a window as an ordered series; randomly-sampled or gap-spanning rows produce meaningless embeddings. Sample contiguous blocks. (See `newton-data-prep` for gap-aware windowing.)
 - **`OmegaEncoder::` prefix.** The model id is `OmegaEncoder::omega_embeddings_1_4`, not `Newton::...`.
+- **One embedding convention per model.** Per-channel requests (recommended) and all-channels-in-one-request produce slightly different vectors (~2e-2 per coordinate) for the same data. Build the n-shot library and embed inference windows the same way, or KNN distances are subtly wrong with no error anywhere.
 - **The "padding with zeros" warning is informational, not an error.** Any window in the trained 16–1024 range is handled natively (padding + mask). The warnings to act on are *"less than 16"* (below the trained range) and *"greater than 1024, truncating to the last 1024 points"* (you silently lose everything before the final 1024 samples — window the data yourself instead).
 
 ## Local Setup

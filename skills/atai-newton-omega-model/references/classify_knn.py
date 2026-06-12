@@ -127,20 +127,20 @@ def features_parallel(client, series, starts, mean, std, workers, window_size):
     return features_by_start
 
 
-def contiguous_starts(timestamps: list[int], window: int = WINDOW) -> list[int]:
+def contiguous_starts(timestamps: list[int], window_size: int = WINDOW) -> list[int]:
     """Non-overlapping window starts that do NOT span a timestamp gap (step != 1)."""
     series_length = len(timestamps)
     starts: list[int] = []
     start = 0
-    while start + window <= series_length:
-        if timestamps[start + window - 1] - timestamps[start] == window - 1:
+    while start + window_size <= series_length:
+        if timestamps[start + window_size - 1] - timestamps[start] == window_size - 1:
             starts.append(start)
-            start += window
+            start += window_size
         else:
             gap_index = next(
                 (
                     row_index
-                    for row_index in range(start + 1, start + window)
+                    for row_index in range(start + 1, start + window_size)
                     if timestamps[row_index] - timestamps[row_index - 1] != 1
                 ),
                 None,
@@ -157,25 +157,32 @@ def even_subsample(items: list, target_count: int) -> list:
     return [items[index] for index in sorted(set(int(index) for index in spread))]
 
 
-def load_labels(path: Path, needed: set[int] | None = None) -> dict[int, str]:
+def load_labels(
+    path: Path, needed: set[int] | None = None, label_column: str = "label"
+) -> dict[int, str]:
+    """Load {timestamp: label} from a ground-truth CSV.
+
+    `label_column` names the column holding the labels (default "label");
+    falls back to the last column if the name is not found.
+    """
     labels: dict[int, str] = {}
     with open(path, newline="") as file_handle:
         reader = csv.reader(file_handle)
         header = next(reader, []) or []
-        label_column = next(
+        label_index = next(
             (
                 column_index
                 for column_index, column_name in enumerate(header)
-                if column_name.strip().lower() == "label"
+                if column_name.strip().lower() == label_column.lower()
             ),
             len(header) - 1,
         )
         for row in reader:
-            if len(row) <= label_column:
+            if len(row) <= label_index:
                 continue
             timestamp = int(float(row[0]))
             if needed is None or timestamp in needed:
-                labels[timestamp] = row[label_column].strip()
+                labels[timestamp] = row[label_index].strip()
     return labels
 
 
@@ -261,7 +268,9 @@ def run_eval(client, args, window_size: int, healthy, degraded, mean, std) -> di
     starts = even_subsample(all_starts, args.max_windows)
     print(f"{len(all_starts)} non-overlapping contiguous windows available; "
           f"evaluating {len(starts)} (max-windows={args.max_windows}, {args.workers}-way parallel)")
-    truth_by_timestamp = load_labels(Path(args.labels), needed={timestamps[start] for start in starts})
+    truth_by_timestamp = load_labels(
+        Path(args.labels), needed={timestamps[start] for start in starts}, label_column=args.label_column
+    )
 
     start_time = time.time()
     features_by_start = features_parallel(client, inference, starts, mean, std, args.workers, window_size)
@@ -294,6 +303,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Held-out classification eval over Omega embeddings.")
     parser.add_argument("--inference", default=str(DEFAULT_INFERENCE), help="test sensor CSV")
     parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
+    parser.add_argument("--label-column", default="label", help="name of the label column in --labels (default 'label')")
     parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
     parser.add_argument("--workers", type=int, default=8, help="concurrent /query embeds")
     parser.add_argument("--window-size", type=int, nargs="+", default=[WINDOW],
