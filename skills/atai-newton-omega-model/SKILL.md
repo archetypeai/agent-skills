@@ -102,14 +102,14 @@ It reports a full binary metrics report (`degraded` = positive), and `--window-s
 ```
  window  library  windows  accuracy  precision  recall     f1
 -------------------------------------------------------------
-     16       16     1000     0.672      0.858   0.412  0.557
-    256       14     1000     0.972      0.947   1.000  0.973
-   1024        8     1000     0.946      0.903   1.000  0.949
+     16       16     1000     0.671      0.858   0.410  0.555
+    256       14     1000     0.973      0.949   1.000  0.974
+   1024        8     1000     0.944      0.899   1.000  0.947
 ```
 
-The shape of that table is the lesson. At 16, the window is shorter than the bearing defect's impulse signature, so recall collapses — most degraded windows genuinely contain no evidence at that zoom. At 256 the signature fits: every degraded window caught, and the fewest false alarms (28 healthy windows flagged). At 1024 recall holds but precision drops (54 false alarms) — the extra context dilutes the defect rather than sharpening it. **256 — a quarter of the data per window — beats 1024 on this dataset**, which is the empirical case for the window-length guidance above: don't default to 1024; sweep a few lengths and let held-out F1 pick.
+The shape of that table is the lesson. At 16, the window is shorter than the bearing defect's impulse signature, so recall collapses — most degraded windows genuinely contain no evidence at that zoom. At 256 the signature fits: every degraded window caught, and the fewest false alarms (27 healthy windows flagged). At 1024 recall holds but precision drops (56 false alarms) — the extra context dilutes the defect rather than sharpening it. **256 — a quarter of the data per window — beats 1024 on this dataset**, which is the empirical case for the window-length guidance above: don't default to 1024; sweep a few lengths and let held-out F1 pick.
 
-Each leg embeds ~1000 windows (~7 min, 8-way parallel); use `--max-windows 50` for a ~30 s preview per length.
+Each leg embeds ~1000 windows — ~4000 per-channel API calls, ~26 min at the default 8-way window fan-out; use `--max-windows 50` for a fast preview per length.
 
 ## Latency
 
@@ -117,7 +117,7 @@ Each leg embeds ~1000 windows (~7 min, 8-way parallel); use `--max-windows 50` f
 |-----------|---------:|
 | One window embed (4 channels × 1024, per-channel parallel) | **~2 s** |
 | n-shot library (8 windows) | ~8 embeds, a few seconds |
-| Held-out eval (1000 windows, 8-way parallel) | **~6–7 min** (~1000 embeds) |
+| Held-out eval (1000 windows, 8-way parallel) | **~26 min** (~4000 per-channel calls) |
 
 Each embed is an independent stateless call, so `classify_knn.py` fans them out with `--workers`; raise it (or lower `--max-windows`) to trade throughput for budget/time.
 
