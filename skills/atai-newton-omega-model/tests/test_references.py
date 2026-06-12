@@ -219,6 +219,30 @@ class TestScalerAndWindows(unittest.TestCase):
         self.assertEqual(len(series), 4)  # 4 bearing channels embedded, nothing else
 
 
+class TestComparisonTable(unittest.TestCase):
+    def test_formats_one_row_per_run(self):
+        rows = [
+            {"window_size": 16, "n_library": 16, "n_windows": 1000,
+             "accuracy": 0.91, "precision": 0.88, "recall": 1.0, "f1": 0.936},
+            {"window_size": 1024, "n_library": 8, "n_windows": 1000,
+             "accuracy": 0.946, "precision": 0.903, "recall": 1.0, "f1": 0.949},
+        ]
+        table = classify_knn.comparison_table(rows)
+        lines = table.splitlines()
+        self.assertEqual(len(lines), 4)  # header + rule + 2 rows
+        self.assertIn("window", lines[0])
+        self.assertIn("f1", lines[0])
+        self.assertIn("16", lines[2])
+        self.assertIn("0.936", lines[2])
+        self.assertIn("1024", lines[3])
+        self.assertIn("0.949", lines[3])
+
+    def test_print_report_returns_metrics(self):
+        report = classify_knn.print_report(["degraded", "healthy"], ["degraded", "healthy"])
+        self.assertEqual(report["f1"], 1.0)
+        self.assertEqual(report["accuracy"], 1.0)
+
+
 class TestMetrics(unittest.TestCase):
     def test_perfect(self):
         report = classify_knn.metrics(["healthy", "degraded"], ["healthy", "degraded"])

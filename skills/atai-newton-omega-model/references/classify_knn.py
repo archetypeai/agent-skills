@@ -27,6 +27,9 @@ at 8-way parallel. Dial it down for a quick check, or point at your own data:
     # quick check (50 windows, ~30s)
     python classify_knn.py --max-windows 50
 
+    # compare window lengths (one full eval each + a comparison table at the end)
+    python classify_knn.py --window-size 16 256 1024
+
     # your own data
     python classify_knn.py --inference my.csv --labels my_labels.csv --workers 8
 
@@ -214,7 +217,7 @@ def metrics(truths: list[str], preds: list[str], positive: str = "degraded") -> 
             "precision": precision, "recall": recall, "f1": f1}
 
 
-def print_report(truths: list[str], preds: list[str], positive: str = "degraded") -> None:
+def print_report(truths: list[str], preds: list[str], positive: str = "degraded") -> dict:
     report = metrics(truths, preds, positive)
     total = len(truths)
     print(f"\nEvaluated {total} held-out windows "
@@ -225,38 +228,26 @@ def print_report(truths: list[str], preds: list[str], positive: str = "degraded"
     print(f"  precision: {report['precision']:.3f}")
     print(f"  recall   : {report['recall']:.3f}")
     print(f"  f1       : {report['f1']:.3f}")
+    return report
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Held-out classification eval over Omega embeddings.")
-    parser.add_argument("--inference", default=str(DEFAULT_INFERENCE), help="test sensor CSV")
-    parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
-    parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
-    parser.add_argument("--workers", type=int, default=8, help="concurrent /query embeds")
-    parser.add_argument("--window-size", type=int, default=WINDOW,
-                        help=f"timesteps per window, applied to BOTH the n-shot library and the test\n"
-                             f"windows (mixing lengths would invalidate KNN distances). The encoder's\n"
-                             f"trained range is 16-{WINDOW} (default {WINDOW})")
-    args = parser.parse_args()
+def run_eval(client, args, window_size: int, healthy, degraded, mean, std) -> dict:
+    """One full library-build + held-out eval at a single window length.
 
-    client = make_client()
-    healthy = read_series(HEALTHY_SHOT)
-    degraded = read_series(DEGRADED_SHOT)
+    Returns the metrics dict plus run context for the comparison table.
+    """
     banner(f"Held-out classification eval — Omega embeddings + {K_NEIGHBORS}-NN vs ground truth "
-           f"(window_size={args.window_size})")
-
-    # Global per-channel scaler fit on the n-shot pool only (no test leakage).
-    mean, std = fit_scaler(np.concatenate([np.asarray(healthy), np.asarray(degraded)], axis=1).tolist())
+           f"(window_size={window_size})")
 
     print("Building n-shot library from shot files (scaled, normalize_input=false)...")
-    healthy_starts = list(range(0, len(healthy[0]) - args.window_size + 1, LIB_STRIDE))
-    degraded_starts = list(range(0, len(degraded[0]) - args.window_size + 1, LIB_STRIDE))
+    healthy_starts = list(range(0, len(healthy[0]) - window_size + 1, LIB_STRIDE))
+    degraded_starts = list(range(0, len(degraded[0]) - window_size + 1, LIB_STRIDE))
     library = [
-        (feature(client, window_at(healthy, start, args.window_size), mean, std), "healthy")
+        (feature(client, window_at(healthy, start, window_size), mean, std), "healthy")
         for start in healthy_starts
     ]
     library += [
-        (feature(client, window_at(degraded, start, args.window_size), mean, std), "degraded")
+        (feature(client, window_at(degraded, start, window_size), mean, std), "degraded")
         for start in degraded_starts
     ]
     library = [(joint_feature, label) for joint_feature, label in library if joint_feature is not None]
@@ -266,14 +257,14 @@ def main() -> None:
 
     print(f"Loading test series {Path(args.inference).name} ...")
     timestamps, inference = read_series_and_time(args.inference)
-    all_starts = contiguous_starts(timestamps, args.window_size)
+    all_starts = contiguous_starts(timestamps, window_size)
     starts = even_subsample(all_starts, args.max_windows)
     print(f"{len(all_starts)} non-overlapping contiguous windows available; "
           f"evaluating {len(starts)} (max-windows={args.max_windows}, {args.workers}-way parallel)")
     truth_by_timestamp = load_labels(Path(args.labels), needed={timestamps[start] for start in starts})
 
     start_time = time.time()
-    features_by_start = features_parallel(client, inference, starts, mean, std, args.workers, args.window_size)
+    features_by_start = features_parallel(client, inference, starts, mean, std, args.workers, window_size)
     truths, preds = [], []
     for start in starts:
         if start not in features_by_start or timestamps[start] not in truth_by_timestamp:
@@ -281,7 +272,54 @@ def main() -> None:
         truths.append(truth_by_timestamp[timestamps[start]])
         preds.append(knn_classify(features_by_start[start], lib_feats, lib_labels))
     print(f"Embedded + classified {len(preds)} windows in {time.time() - start_time:.1f}s")
-    print_report(truths, preds, positive="degraded")
+    report = print_report(truths, preds, positive="degraded")
+    print()
+    return {"window_size": window_size, "n_windows": len(preds),
+            "n_library": lib_feats.shape[0], **report}
+
+
+def comparison_table(rows: list) -> str:
+    """Format per-window-size eval results as an aligned comparison table."""
+    header = f"{'window':>7} {'library':>8} {'windows':>8} {'accuracy':>9} {'precision':>10} {'recall':>7} {'f1':>6}"
+    lines = [header, "-" * len(header)]
+    for row in rows:
+        lines.append(
+            f"{row['window_size']:>7} {row['n_library']:>8} {row['n_windows']:>8} "
+            f"{row['accuracy']:>9.3f} {row['precision']:>10.3f} {row['recall']:>7.3f} {row['f1']:>6.3f}"
+        )
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Held-out classification eval over Omega embeddings.")
+    parser.add_argument("--inference", default=str(DEFAULT_INFERENCE), help="test sensor CSV")
+    parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
+    parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
+    parser.add_argument("--workers", type=int, default=8, help="concurrent /query embeds")
+    parser.add_argument("--window-size", type=int, nargs="+", default=[WINDOW],
+                        help=f"one or more window lengths to evaluate (each applied to BOTH the\n"
+                             f"n-shot library and the test windows — mixing lengths within one eval\n"
+                             f"would invalidate KNN distances). With several values, each runs as a\n"
+                             f"separate full eval and a comparison table is printed at the end.\n"
+                             f"The encoder's trained range is 16-{WINDOW} (default {WINDOW})")
+    args = parser.parse_args()
+
+    client = make_client()
+    healthy = read_series(HEALTHY_SHOT)
+    degraded = read_series(DEGRADED_SHOT)
+
+    # Global per-channel scaler fit on the n-shot pool only (no test leakage).
+    # Window-length independent, so fit once for all runs.
+    mean, std = fit_scaler(np.concatenate([np.asarray(healthy), np.asarray(degraded)], axis=1).tolist())
+
+    rows = [
+        run_eval(client, args, window_size, healthy, degraded, mean, std)
+        for window_size in args.window_size
+    ]
+
+    if len(rows) > 1:
+        banner("Window-size comparison")
+        print(comparison_table(rows))
 
 
 if __name__ == "__main__":

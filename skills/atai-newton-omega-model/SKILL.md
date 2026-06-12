@@ -104,6 +104,8 @@ precision: 0.903   recall: 1.000   f1: 0.949
 
 i.e. it caught every degraded window (recall 1.0) at the cost of 54 healthy windows flagged as degraded — a realistic operating point for an n-shot vibration classifier. The default run embeds ~1000 windows (~6–7 min, 8-way parallel); use `--max-windows 50` for a ~30 s check.
 
+`--window-size` accepts one or more lengths (e.g. `--window-size 16 256 1024`): each runs as a separate full eval — library and test windows re-windowed together at that length — and with several values a comparison table is printed at the end. That's the cheap way to test whether a shorter window is more performant on your data (it sometimes is — the encoder handles any length in 16–1024 natively).
+
 ## Latency
 
 | Operation | Observed |
