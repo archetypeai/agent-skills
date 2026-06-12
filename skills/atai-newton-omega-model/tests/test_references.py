@@ -221,7 +221,7 @@ class TestScalerAndWindows(unittest.TestCase):
         self.assertAlmostEqual(float(std[1, 0]), 1e-9, places=6)  # constant channel -> ~floor
 
     def test_contiguous_starts_skips_gap(self):
-        # two contiguous blocks of 4, with a big jump between -> window=4 yields starts 0 and 4, not 2
+        # two contiguous blocks of 4, with a big jump between -> window_size=4 yields starts 0 and 4, not 2
         timestamps = [0, 1, 2, 3, 1000, 1001, 1002, 1003]
         self.assertEqual(classify_knn.contiguous_starts(timestamps, window_size=4), [0, 4])
 
