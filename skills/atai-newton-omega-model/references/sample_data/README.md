@@ -24,9 +24,7 @@ scripts drop `timestamp` and embed the four vibration channels.
 
 `bearing_inference.csv` holds ~1000 non-overlapping 1024-step windows (500
 healthy + 500 degraded). Its sensor values are identical to the dataset's
-`bearing_inference.csv` for the same timestamps; labels follow
-`bearing_raw_labeled.csv` (a single clean transition: healthy for
-ts < 18,432,000, degraded after).
+`bearing_inference.csv` for the same timestamps.
 
 ## Attribution
 
