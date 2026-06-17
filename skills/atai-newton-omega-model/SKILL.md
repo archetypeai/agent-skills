@@ -12,7 +12,7 @@ description: >
   channel-first window), the per-channel 768-d output, the supported
   16–1024 window-length range, `normalize_input`, and the
   "joint multi-channel state" + KNN pattern. For cleaning / splitting /
-  windowing raw sensor CSVs first, see `newton-data-prep`.
+  windowing raw sensor CSVs first, see `atai-newton-omega-model-data-prep`.
   Do NOT use for text / image / video reasoning (that's the Newton fusion
   model on `/query`).
 ---
@@ -31,7 +31,7 @@ Omega is a **time-series encoder**: feed it a window of sensor readings, get bac
 - The input is text, an image, or a video — that's the Newton fusion model (`/query` with `Newton::c2_6_8b_fp8_...`)
 - You need fully-managed, server-side classification over millions of rows
 
-For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, temporal-order train/test split, the joint-state feature matrix), see [`newton-data-prep`](../newton-data-prep/SKILL.md).
+For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, temporal-order train/test split, the joint-state feature matrix), see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
 
 ## The Model
 
@@ -91,7 +91,7 @@ See [`embed_query.py`](references/embed_query.py) for the basic call, window-len
 
 This is what the managed batch pipeline does, reproduced client-side over `/query` embeddings:
 
-0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window, calling `/query` with `normalize_input=false`. This is the data-prep / preflight convention; vet the shot files first with [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) and prep raw CSVs with [`newton-data-prep`](../newton-data-prep/SKILL.md).
+0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window, calling `/query` with `normalize_input=false`. This is the data-prep / preflight convention; vet the shot files first with [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) and prep raw CSVs with [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
 1. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
 2. **Classify** a new window the same way and take a majority vote over the *k* nearest library features (euclidean).
 
@@ -125,7 +125,7 @@ Each embed is an independent stateless call, so `classify_knn.py` fans them out 
 
 - **Channel-first, not row-major.** `contents` is `[channels x timesteps]` (one list per sensor), not `[timesteps x channels]`. Transposing gives garbage embeddings.
 - **Drop the timestamp column.** A `timestamp` parses as a number, so naive "use all numeric columns" includes it as a fake channel — and if your class files have disjoint time ranges, a downstream classifier can cheat on it. Exclude time columns (the helper drops `timestamp`/`time`/… by header name; pass your own `time_columns` set if your data names them differently).
-- **Temporal contiguity matters.** Omega reads a window as an ordered series; randomly-sampled or gap-spanning rows produce meaningless embeddings. Sample contiguous blocks. (See `newton-data-prep` for gap-aware windowing.)
+- **Temporal contiguity matters.** Omega reads a window as an ordered series; randomly-sampled or gap-spanning rows produce meaningless embeddings. Sample contiguous blocks. (See `atai-newton-omega-model-data-prep` for gap-aware windowing.)
 - **`OmegaEncoder::` prefix.** The model id is `OmegaEncoder::omega_embeddings_1_4`, not `Newton::...`.
 - **One embedding convention per model.** Per-channel requests (recommended) and all-channels-in-one-request produce slightly different vectors (~2e-2 per coordinate) for the same data. Build the n-shot library and embed inference windows the same way, or KNN distances are subtly wrong with no error anywhere.
 - **The "padding with zeros" warning is informational, not an error.** Any window in the trained 16–1024 range is handled natively (padding + mask). The warnings to act on are *"less than 16"* (below the trained range) and *"greater than 1024, truncating to the last 1024 points"* (you silently lose everything before the final 1024 samples — window the data yourself instead).
