@@ -11,3 +11,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Scratch output from csv_vs_txt_proof.py
+proof_input.txt
+proof_input.csv
