@@ -2,42 +2,41 @@
 name: atai-newton-omega-model-data-prep
 description: >
   Clean, split, and featurize multivariate time-series data before
-  feeding it to a Newton classifier. Bundles three reusable building
+  embedding it with the Omega model. Bundles three reusable building
   blocks: `DataPreprocessor` (diagnose timestamp regularity, gaps, and
   nulls; build continuous gap-aware temporal blocks with imputation),
   `DataSplitter` (out-of-time or random train/test split that respects
   temporal order), and `FeaturePreparer` (pivot per-sensor embeddings
   into a "joint state" (X, y, metadata) matrix with optional L2 /
   standardization / PCA). Use this skill when the user is preparing raw
-  sensor CSVs for `newton-machine-state-direct-query`, `omega-local`, or
-  `newton-machine-state-batch`, when training data has gaps and they're
-  unsure whether to drop / impute / split, or when an n-shot CSV looks
-  noisy and they want a principled cleanup pipeline.
-  Do NOT use this skill to actually run inference (use newton-machine-state*).
-  Do NOT use for vet-before-run static checks (use omega-preflight — it's
-  the complementary read-only gate; this skill mutates and reshapes data).
-  Do NOT use for video / text data — time-series only.
+  sensor CSVs for the Omega model (`atai-newton-omega-model`), when
+  training data has gaps and they're unsure whether to drop / impute /
+  split, or when an n-shot CSV looks noisy and they want a principled
+  cleanup pipeline.
+  Do NOT use this skill to run inference or produce embeddings (use
+  `atai-newton-omega-model`).
+  Do NOT use for video / image / text data (use `atai-newton-fusion-model`)
+  — time-series only.
 ---
 
 # Newton Data Prep — Clean → Split → Featurize
 
-A pre-modeling pipeline for time-series sensor data. Three composable building blocks that take a raw multivariate dataframe and hand back the `(X, y, metadata)` arrays a downstream KNN / Isolation Forest / Newton Lens call expects.
+A pre-modeling pipeline for time-series sensor data. Three composable building blocks that take a raw multivariate dataframe and hand back the `(X, y, metadata)` arrays a downstream KNN / Isolation Forest classifier expects.
 
 > **Origin.** The three vendored scripts originated from work by Lucas (Solutions Engineering) and have been used end-to-end in real prep pipelines. The repo copy is the source of truth — ping Lucas if you need to pull in a newer revision.
 
 ## When to Apply
 
-- User has raw multivariate sensor CSVs (1+ sensors, irregular timestamps, NaN gaps) and is about to run [`newton-machine-state`](../newton-machine-state/SKILL.md), [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md), [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md), or [`omega-local`](../omega-local/SKILL.md), and needs to clean the data first.
+- User has raw multivariate sensor CSVs (1+ sensors, irregular timestamps, NaN gaps) and is about to embed them with [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md), and needs to clean the data first.
 - User asks "should I drop rows with NaNs?" / "how do I handle gaps?" / "what's a good train/test split for time-series?"
 - User's classifier is suspiciously good or suspiciously bad and you suspect temporal leakage — `DataSplitter(mode='oot')` is the fix.
-- User has per-sensor embeddings (from the local Omega encoder) and needs to fold them into a single feature matrix for KNN — that's `FeaturePreparer`.
-- User wants the "joint state" pattern described in [`omega-local`](../omega-local/SKILL.md) in code form.
+- User has per-sensor embeddings (from the Omega model) and needs to fold them into a single feature matrix for KNN — that's `FeaturePreparer`.
+- User wants the "joint state" pattern described in [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) in code form.
 
-**Use [`omega-preflight`](../omega-preflight/SKILL.md) instead when**: you want a *read-only go/no-go gate* before a batch run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
+**Use the external [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) checks instead when**: you want a *read-only go/no-go gate* before committing to a run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
 
 **Do not use this skill when**:
-- The task is video / vision (use `newton-activity-monitor`).
-- The task is text-in / text-out (use `newton-activity-detection-batch`).
+- The task is video, image, or text (use [`atai-newton-fusion-model`](../atai-newton-fusion-model/SKILL.md)).
 - Data is already pristine (regular sampling, no NaNs, no leakage risk) — the pipeline becomes a no-op and you can hand the dataframe directly to the downstream skill.
 
 ## The Three Building Blocks
@@ -113,7 +112,7 @@ preparer = FeaturePreparer(
 )
 
 # df_emb is the output of an Omega embedding step
-# (see omega-local for how to produce it).
+# (see atai-newton-omega-model for how to produce it).
 X, y, metadata = preparer.prepare(df_emb, label_column='machine_state')
 ```
 
@@ -131,7 +130,7 @@ prep = DataPreprocessor(timestamp_col='timestamp', sampling_rate_minutes=1, gap_
 report = prep.diagnose(df_raw, verbose=True)
 df_clean = prep.build(df_raw)
 
-# 2. Embed (see omega-local) — one row per (sensor, window) with an embedding column.
+# 2. Embed (see atai-newton-omega-model) — one row per (sensor, window) with an embedding column.
 df_emb = embedding_generator.generate(
     df_clean, data_columns=['sensor_a', 'sensor_b'], label_columns=['machine_state'],
 )
@@ -144,17 +143,15 @@ X, y, metadata = preparer.prepare(df_emb, label_column='machine_state')
 splitter = DataSplitter(mode='oot', test_size=0.3)
 X_train, X_test, y_train, y_test, meta_train, meta_test = splitter.split(X, y, metadata)
 
-# 5. Hand to your classifier of choice (KNN / IsolationForest / Newton Lens).
+# 5. Hand to your classifier of choice (KNN / IsolationForest).
 ```
 
 ## Composing with Other Skills
 
 | Skill | Relationship |
 |-------|--------------|
-| [`omega-preflight`](../omega-preflight/SKILL.md) | **Upstream gate** — read-only static checks. Run *before* this skill to decide whether to bother cleaning. |
-| [`omega-local`](../omega-local/SKILL.md) | **Sibling** — the embedding step between `DataPreprocessor.build()` and `FeaturePreparer.prepare()`. This skill is its on-ramp (clean) and off-ramp (featurize). |
-| [`newton-machine-state-direct-query`](../newton-machine-state-direct-query/SKILL.md) | **Downstream consumer** — uses the resulting `(X, y, metadata)` for stateless per-window KNN against the `/query` Omega embedding. |
-| [`newton-machine-state`](../newton-machine-state/SKILL.md) / [`newton-machine-state-batch`](../newton-machine-state-batch/SKILL.md) | **Downstream consumer** — n-shot CSVs (focus / shot files) should go through `DataPreprocessor` first so gap-induced label confusion doesn't degrade KNN. |
+| [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) | **Sibling + downstream** — the Omega embedding step that sits between `DataPreprocessor.build()` and `FeaturePreparer.prepare()`, then consumes the resulting `(X, y, metadata)` for per-window KNN against the `/query` Omega embedding. This skill is its on-ramp (clean) and off-ramp (featurize). |
+| [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) | **Upstream gate (external repo)** — read-only static checks. Run *before* this skill to decide whether the dataset is worth cleaning. |
 
 ## Common Pitfalls
 
