@@ -1,0 +1,9 @@
+# Runtime dependencies for the reference scripts.
+#   pip install -r requirements.txt
+numpy
+pandas
+scikit-learn
+
+# Optional — only needed for DataPreprocessor.diagnose(plot=True) charts
+# (imported lazily; everything else works without it):
+# matplotlib

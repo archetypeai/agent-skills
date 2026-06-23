@@ -4,9 +4,13 @@
 node_modules/
 *.local.json
 
-# Python artifacts
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
 
 # Scratch output from csv_vs_txt_proof.py
 proof_input.txt
