@@ -1,11 +1,5 @@
 # Archetype AI Design System
 
-> **This document was refactored into an invokable skill.**
-> The design system is no longer described here in prose — it is a set of
-> published, versioned npm packages plus a scaffolding CLI. Documenting it by
-> hand (transcribed OKLCH tokens, copy-paste component markup, an ad-hoc agent
-> prompt guide) duplicated a source of truth that drifts. Use the system itself.
-
 ## Build a front-end
 
 → **[`skills/atai-design-system/SKILL.md`](skills/atai-design-system/SKILL.md)** — when and how to use it.
