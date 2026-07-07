@@ -32,7 +32,7 @@ There is a real, published, MIT-licensed design system on npm. Front-ends are **
 **Do not use this skill when:**
 - The task is Newton API / model work — text·image·video reasoning, embeddings, KNN, data prep. Use the `atai-newton-fusion-model`, `atai-newton-omega-model`, or `atai-newton-omega-model-data-prep` skills ([source](https://github.com/archetypeai/agent-skills/tree/main/skills)).
 
-## The System (v0.8.x, MIT)
+## The System (MIT)
 
 Four packages under the `@archetypeai/` scope:
 
@@ -52,6 +52,8 @@ This is how a front-end is assembled. Prefer it over manual installation.
 **Always invoke the CLI with the `@latest` tag** (`npx @archetypeai/ds-cli@latest …`). Without it, `npx` silently reuses whatever `ds-cli` version it has cached, which can scaffold against stale packages, an outdated `ds-manifest.json`, or a superseded `layerchart` pin. `@latest` forces npx to resolve the newest published CLI on every run.
 
 **Confirm the scaffold location before running `create`.** `ds create <name>` creates a **new folder named `<name>` in the current working directory** — it does not prompt for placement. Before running it, check the cwd and confirm the parent directory and project name with the user, so the app doesn't land somewhere unexpected (e.g. inside a skills directory or another repo). For adding the system to an existing project, `cd` into that project first and use `init`, not `create`.
+
+**Ask about brand fonts before scaffolding.** The brand typeface (PP Neue Montreal + PP Neue Montreal Mono) is licensed and NOT shipped on npm — the CLI only installs it when passed `--fonts <path-to-font-files>` (copied into `static/fonts/`, where the tokens' `fonts.css` expects them). Without the files, the app silently renders in system-font fallbacks and the brand look is noticeably degraded. Ask the user whether they have the licensed font files and pass their folder via `--fonts`; use `--no-fonts` only when they don't have them, and tell them the visual consequence. Never download or substitute the fonts yourself.
 
 ```bash
 # New project: SvelteKit (TS) + Tailwind v4 + tokens + console + labs + a demo page
@@ -96,6 +98,7 @@ Every UI is **Svelte 5 + SvelteKit + Tailwind v4 + bits-ui** with the DS package
 - **Always the Svelte stack.** Build the UI with the `ds-ui-svelte-*` primitives on SvelteKit; don't target another framework or hand-roll markup against the raw tokens.
 - **Always pin `@latest` on the CLI.** Run `npx @archetypeai/ds-cli@latest …`, never bare `npx @archetypeai/ds-cli`. Bare npx reuses a cached CLI and can scaffold against stale packages, manifest, or the wrong `layerchart` pin.
 - **Confirm where you scaffold.** `ds create <name>` drops a new `<name>/` folder into the current working directory without prompting. Check the cwd and confirm the parent dir + project name with the user first; use `init` (after `cd`-ing in) to add the system to an existing project.
+- **Don't skip fonts silently.** Scaffolding with `--no-fonts` means the licensed brand typeface never loads (`fonts.css` requests `/fonts/PPNeueMontreal-*` from `static/fonts/`) and the UI falls back to system fonts. If a scaffolded app looks off-brand, check `static/fonts/` first — and always tell the user when they're in fallback-font mode.
 
 ## File Layout
 
