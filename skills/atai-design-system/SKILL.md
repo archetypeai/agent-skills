@@ -49,17 +49,19 @@ Import subpaths are per-component, e.g. `import { Button } from "@archetypeai/ds
 
 This is how a front-end is assembled. Prefer it over manual installation.
 
+**Always invoke the CLI with the `@latest` tag** (`npx @archetypeai/ds-cli@latest …`). Without it, `npx` silently reuses whatever `ds-cli` version it has cached, which can scaffold against stale packages, an outdated `ds-manifest.json`, or a superseded `layerchart` pin. `@latest` forces npx to resolve the newest published CLI on every run.
+
 ```bash
 # New project: SvelteKit (TS) + Tailwind v4 + tokens + console + labs + a demo page
-npx @archetypeai/ds-cli create my-app --codeagent claude
+npx @archetypeai/ds-cli@latest create my-app --codeagent claude
 
 # Existing SvelteKit project: add the system in place (no demo page)
-cd my-existing-app && npx @archetypeai/ds-cli init --codeagent claude
+cd my-existing-app && npx @archetypeai/ds-cli@latest init --codeagent claude
 
 # Granular adds
-npx @archetypeai/ds-cli add ds-ui-svelte          # editable component SOURCE (modify workflow)
-npx @archetypeai/ds-cli add ds-lib-tokens         # tokens + CSS imports only
-npx @archetypeai/ds-cli add ds-config-codeagent --claude   # (re)install agent config only
+npx @archetypeai/ds-cli@latest add ds-ui-svelte          # editable component SOURCE (modify workflow)
+npx @archetypeai/ds-cli@latest add ds-lib-tokens         # tokens + CSS imports only
+npx @archetypeai/ds-cli@latest add ds-config-codeagent --claude   # (re)install agent config only
 ```
 
 `create` does the full job: scaffolds the SvelteKit app, patches `svelte.config.js` so Svelte 5 runes work inside third-party packages, installs all three DS packages + peers (pinning `layerchart` to the exact prerelease the labs charts need), initializes `components.json` + `src/lib/utils.ts` (one `cn` in the tree), writes the order-critical `src/routes/layout.css`, installs the agent config, and writes a demo `+page.svelte`.
@@ -90,6 +92,7 @@ Every UI is **Svelte 5 + SvelteKit + Tailwind v4 + bits-ui** with the DS package
 - **Don't transcribe tokens, fonts, or component styles by hand.** They live in the packages and `ds-manifest.json`. A hand-copied second source of truth silently drifts. Read the manifest; install the package.
 - **Prefer the CLI to manual installs.** It applies the `svelte.config.js` runes patch, pins `layerchart` to the exact prerelease, and keeps a single `cn` in the tree — replicate all three if you install by hand or the package components won't compile / charts break.
 - **Always the Svelte stack.** Build the UI with the `ds-ui-svelte-*` primitives on SvelteKit; don't target another framework or hand-roll markup against the raw tokens.
+- **Always pin `@latest` on the CLI.** Run `npx @archetypeai/ds-cli@latest …`, never bare `npx @archetypeai/ds-cli`. Bare npx reuses a cached CLI and can scaffold against stale packages, manifest, or the wrong `layerchart` pin.
 
 ## Reference Implementations
 
