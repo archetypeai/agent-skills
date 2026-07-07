@@ -30,7 +30,7 @@ There is a real, published, MIT-licensed design system on npm. Front-ends are **
 - User wants branded components: menubar, logo, cards, badges, tables, dialogs, sensor/scatter/area charts, a video player, a code block, toasts
 
 **Do not use this skill when:**
-- The task is Newton API / model work — text·image·video reasoning, embeddings, KNN, data prep. Use [`atai-newton-fusion-model`](../atai-newton-fusion-model/SKILL.md), [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md), [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
+- The task is Newton API / model work — text·image·video reasoning, embeddings, KNN, data prep. Use the `atai-newton-fusion-model`, `atai-newton-omega-model`, or `atai-newton-omega-model-data-prep` skills ([source](https://github.com/archetypeai/agent-skills/tree/main/skills)).
 
 ## The System (v0.8.x, MIT)
 
@@ -51,6 +51,8 @@ This is how a front-end is assembled. Prefer it over manual installation.
 
 **Always invoke the CLI with the `@latest` tag** (`npx @archetypeai/ds-cli@latest …`). Without it, `npx` silently reuses whatever `ds-cli` version it has cached, which can scaffold against stale packages, an outdated `ds-manifest.json`, or a superseded `layerchart` pin. `@latest` forces npx to resolve the newest published CLI on every run.
 
+**Confirm the scaffold location before running `create`.** `ds create <name>` creates a **new folder named `<name>` in the current working directory** — it does not prompt for placement. Before running it, check the cwd and confirm the parent directory and project name with the user, so the app doesn't land somewhere unexpected (e.g. inside a skills directory or another repo). For adding the system to an existing project, `cd` into that project first and use `init`, not `create`.
+
 ```bash
 # New project: SvelteKit (TS) + Tailwind v4 + tokens + console + labs + a demo page
 npx @archetypeai/ds-cli@latest create my-app --codeagent claude
@@ -66,7 +68,7 @@ npx @archetypeai/ds-cli@latest add ds-config-codeagent --claude   # (re)install 
 
 `create` does the full job: scaffolds the SvelteKit app, patches `svelte.config.js` so Svelte 5 runes work inside third-party packages, installs all three DS packages + peers (pinning `layerchart` to the exact prerelease the labs charts need), initializes `components.json` + `src/lib/utils.ts` (one `cn` in the tree), writes the order-critical `src/routes/layout.css`, installs the agent config, and writes a demo `+page.svelte`.
 
-The CLI is **agent-aware**: with no TTY or `--defaults` it lists the options it still needs (`--pm`, `--fonts`/`--no-fonts`, `--codeagent`) and exits, so you ask the user before proceeding rather than guessing.
+The CLI is **agent-aware**: with no TTY or `--defaults` it lists the options it still needs (`--pm`, `--fonts`/`--no-fonts`, `--codeagent`) and exits, so you ask the user before proceeding rather than guessing. Fold the target directory / project name into that same confirmation.
 
 ### Two install models
 
@@ -93,10 +95,7 @@ Every UI is **Svelte 5 + SvelteKit + Tailwind v4 + bits-ui** with the DS package
 - **Prefer the CLI to manual installs.** It applies the `svelte.config.js` runes patch, pins `layerchart` to the exact prerelease, and keeps a single `cn` in the tree — replicate all three if you install by hand or the package components won't compile / charts break.
 - **Always the Svelte stack.** Build the UI with the `ds-ui-svelte-*` primitives on SvelteKit; don't target another framework or hand-roll markup against the raw tokens.
 - **Always pin `@latest` on the CLI.** Run `npx @archetypeai/ds-cli@latest …`, never bare `npx @archetypeai/ds-cli`. Bare npx reuses a cached CLI and can scaffold against stale packages, manifest, or the wrong `layerchart` pin.
-
-## Reference Implementations
-
-The Newton demos that consume this system are catalogued in the repo [README](../../README.md#example-apps) — Traffic, Wildfire, SWaT, Wind-Turbine. Use the SvelteKit ones as worked examples of the patterns above.
+- **Confirm where you scaffold.** `ds create <name>` drops a new `<name>/` folder into the current working directory without prompting. Check the cwd and confirm the parent dir + project name with the user first; use `init` (after `cd`-ing in) to add the system to an existing project.
 
 ## File Layout
 
