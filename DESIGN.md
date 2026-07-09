@@ -9,13 +9,14 @@ the CLI installs; the skill only gets you to the scaffold.
 Quick start:
 
 ```bash
-npx @archetypeai/ds-cli create my-app --codeagent claude   # new SvelteKit app, fully wired
-cd existing-app && npx @archetypeai/ds-cli init --codeagent claude   # add to an existing app
+npx @archetypeai/ds-cli@latest create my-app --codeagent claude   # new SvelteKit app, fully wired
+cd existing-app && npx @archetypeai/ds-cli@latest init --codeagent claude   # add to an existing app
 ```
 
 `--codeagent claude` installs the design system's own agent configuration into your
-project — `ds-manifest.json` (the machine-readable component catalog) plus its skills and
-rules — which is the source of truth for component usage once scaffolded.
+project — `CLAUDE.md` (how to consume the system) plus `ds-manifest.json` (the
+machine-readable component catalog with per-component usage recipes) — which is the
+source of truth for component usage once scaffolded.
 
 ## The packages (npm, `@archetypeai/`, MIT)
 
