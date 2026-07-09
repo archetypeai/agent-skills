@@ -15,6 +15,12 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 More skills are in review and will be added to this table as they land.
 
+## Building with the Design System
+
+When starting a new demo front-end, don't hand-roll the UI — scaffold with the [atai-design-system](skills/atai-design-system/) skill and build on top of what it generates. The `ds` CLI stands up a SvelteKit + Tailwind v4 project wired to the published Archetype AI Design System packages (branded tokens, fonts, and Svelte 5 primitives), and writes an agent config (`CLAUDE.md`/`AGENTS.md` + `ds-manifest.json`) that documents every available component, its usage recipes, and variant axes.
+
+Use that scaffolded project as the baseline for your demo: the tokens, brand styling, and component library are already in place, so you can focus on the Newton integration (fusion or Omega calls via the model skills) and the demo-specific views.
+
 ## Example apps
 
 End-to-end demos built on these skills, on the Direct Query API (SvelteKit unless noted):
