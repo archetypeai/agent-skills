@@ -11,6 +11,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
+| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agent API — bundle the canonical `osm` blueprint with a fitted classifier artifact, run one agent per input CSV, poll, and download per-window state predictions |
 
 More skills are in review and will be added to this table as they land.
 
