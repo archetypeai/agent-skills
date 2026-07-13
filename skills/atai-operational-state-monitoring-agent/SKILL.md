@@ -50,7 +50,16 @@ Agent API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. If your `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending `/agents`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint. The canonical `osm` blueprint currently lives on the Dev deployment (`https://api.dev.u1.archetypeai.app`).
+The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. If your `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending `/agents`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint.
+
+> **⚠️ Dev-only for now.** Everything in this skill is verified against the
+> **Dev** deployment (`https://api.dev.u1.archetypeai.app`) — the canonical
+> `osm` blueprint, the Agent API surface, the published default classifier
+> artifact, and the runtime numbers below. The underlying
+> [OSM example](https://github.com/archetypeai/operational-state-monitoring-agent-example)
+> has not yet been validated on Staging or Prod; until it is, don't point
+> this skill at those deployments and expect the blueprint or the pinned
+> `s3://` classifier to resolve.
 
 The full Agent API surface (blueprints, bundles, instances, events, logs, results, pause/resume/cancel, node registry) is specified in [`references/openapi.yaml`](references/openapi.yaml); [`references/agent-cli`](references/agent-cli) wraps every endpoint for interactive use.
 
