@@ -13,8 +13,8 @@ description: >
   (or `AGENTS.md` for Cursor) plus `ds-manifest.json` at the project
   root — which is the source of truth for
   component usage, fonts, fallback behavior, and styling once scaffolded;
-  this skill's only job is to get you there. The UI is always built on the
-  Svelte stack — Svelte 5 + SvelteKit + Tailwind v4 + the DS packages.
+  this skill's only job is to get you there. Components currently ship
+  for Svelte 5; a React port is in progress.
   Do NOT use for Newton API / backend work (see the `atai-newton-*` skills).
 ---
 
@@ -22,7 +22,7 @@ description: >
 
 There is a real, published, MIT-licensed design system on npm. Front-ends are **assembled by installing it**, not by transcribing tokens or copy-pasting component markup. The `ds` CLI scaffolds a SvelteKit + Tailwind v4 project, installs the packages, wires the order-critical CSS, and drops the design system's own agent configuration (`CLAUDE.md`/`AGENTS.md` + `ds-manifest.json`) into your repo. After that, **defer to that shipped config** — it owns components, fonts, fallback behavior, and styling. This file only gets you to the scaffold.
 
-**Every UI built with this skill targets the Svelte stack** — Svelte 5 + SvelteKit + Tailwind v4 + the DS packages, exactly what `ds create` scaffolds. Build Newton demo front-ends there; don't reach for React, Vue, or server-rendered templates.
+**The packaged components currently ship for Svelte 5** — Svelte 5 + SvelteKit + Tailwind v4 + the DS packages, exactly what `ds create` scaffolds; a React port is in progress. Prefer that stack for Newton demo front-ends. On any other stack (React, Flask, plain HTML), `@archetypeai/ds-lib-tokens` is pure CSS and usable from any framework — tokens and base styles only, no components.
 
 ## When to Apply
 
@@ -89,13 +89,13 @@ Composite demo pieces that are **not** standalone primitives — a replay/scrubb
 
 ## The Stack
 
-Every UI is **Svelte 5 + SvelteKit + Tailwind v4 + bits-ui** with the DS packages on top — the stack `ds create` scaffolds. Build Newton demo front-ends here; don't target another framework, and use the published primitives rather than hand-building against the raw tokens or copying assets into the repo. Everything the demos need (logo, charts, menubar, …) ships as a primitive.
+The packaged components currently ship for **Svelte 5 + SvelteKit + Tailwind v4 + bits-ui** — the stack `ds create` scaffolds — with a React port in progress. Prefer this stack for Newton demo front-ends, and use the published primitives rather than hand-building against the raw tokens or copying assets into the repo. Everything the demos need (logo, charts, menubar, …) ships as a primitive. On non-Svelte stacks, `@archetypeai/ds-lib-tokens` still applies — it's pure CSS and works with any framework.
 
 ## Common Pitfalls
 
 - **Don't transcribe tokens, fonts, or component styles by hand.** They live in the packages and `ds-manifest.json`. A hand-copied second source of truth silently drifts. Read the manifest; install the package.
 - **Prefer the CLI to manual installs.** It applies the `svelte.config.js` runes patch, pins `layerchart` to the exact prerelease, and keeps a single `cn` in the tree — replicate all three if you install by hand or the package components won't compile / charts break.
-- **Always the Svelte stack.** Build the UI with the `ds-ui-svelte-*` primitives on SvelteKit; don't target another framework or hand-roll markup against the raw tokens.
+- **Prefer the Svelte stack.** The primitives currently ship for Svelte 5 (a React port is in progress) — build with the `ds-ui-svelte-*` primitives on SvelteKit rather than hand-rolling markup. On other stacks, use `ds-lib-tokens` (pure CSS, framework-agnostic) instead of transcribing tokens.
 - **Always pin `@latest` on the CLI.** Run `npx @archetypeai/ds-cli@latest …`, never bare `npx @archetypeai/ds-cli`. Bare npx reuses a cached CLI and can scaffold against stale packages, manifest, or the wrong `layerchart` pin.
 - **Confirm where you scaffold.** `ds create <name>` drops a new `<name>/` folder into the current working directory without prompting. Check the cwd and confirm the parent dir + project name with the user first; use `init` (after `cd`-ing in) to add the system to an existing project.
 - **Don't skip fonts silently.** Scaffolding with `--no-fonts` means the licensed brand typeface never loads (`fonts.css` requests `/fonts/PPNeueMontreal-*` from `static/fonts/`) and the UI falls back to system fonts. If a scaffolded app looks off-brand, check `static/fonts/` first — and always tell the user when they're in fallback-font mode.
