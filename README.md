@@ -1,5 +1,7 @@
 # Archetype AI Agent Skills
 
+[![skills.sh](https://www.skills.sh/b/archetypeai/agent-skills)](https://www.skills.sh/archetypeai/agent-skills)
+
 Agent skills for building applications with [Archetype AI's Newton](https://www.archetypeai.io/) — a real-time sensor intelligence platform that understands physical world data through foundation models.
 
 Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
@@ -38,7 +40,19 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 
 ## Quick Start
 
-### Claude Code
+### Any coding agent (recommended)
+
+Install via the [skills.sh](https://www.skills.sh/) CLI — it detects your coding agents (Claude Code, Cursor, Codex, Copilot, and 20+ others) and installs to the right location for each:
+
+```bash
+# Install into the current project
+npx skills add archetypeai/agent-skills
+
+# Or install globally (available in all projects)
+npx skills add archetypeai/agent-skills -g
+```
+
+### Manual (Claude Code)
 
 ```bash
 # Add as global skills (available in all projects)
