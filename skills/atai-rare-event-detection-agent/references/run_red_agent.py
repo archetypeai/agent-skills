@@ -194,6 +194,11 @@ def download_results(agent_id: str, out_path: str) -> str | None:
 
 
 BLUEPRINT_KEY = "red"
+# The model name the `red` blueprint declares, and so the key its bundle
+# `artifacts` map must use. Was `rad-classifier` until a typo fix on
+# 2026-07-28; the old key is accepted at bundle creation and fails ~30s
+# into the run with "repeated failures polling JOS job".
+ARTIFACT_KEY = "red-classifier"
 # Class names are NOT hardcoded: `normal` is the conventional baseline label and
 # the rare-event class is inferred from the label sidecar, so this runner works
 # for any catalog. Override with --normal-class / --fault-class.
@@ -402,7 +407,7 @@ def main() -> None:
         "blueprint": BLUEPRINT_KEY,
         "name": args.name,
         "values": values,
-        "artifacts": {"rad-classifier": args.classifier},
+        "artifacts": {ARTIFACT_KEY: args.classifier},
     })
     print(f"  bundle_id={bundle['id']}  status={bundle.get('status')}")
 

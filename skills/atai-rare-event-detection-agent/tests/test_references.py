@@ -4,7 +4,7 @@ Mocks urllib at the request boundary, so these run with NO credentials and NO
 network. They lock in the invariants verified against dev:
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default endpoint.
   * The bundle body pins the `red` blueprint and keys the artifact map by
-    `rad-classifier` (NOT `red-classifier`, which fails), and the run body binds
+    `red-classifier` (renamed from `rad-classifier` on 2026-07-28), and the run body binds
     the source connector to the upload's file_id (the filename), not the fil_ uid.
   * `step_size` is the only value sent: window_size/data_columns/timestamp_column
     are inherited from the classifier's own `parameters` metadata.
@@ -192,11 +192,15 @@ class SampleDataTests(unittest.TestCase):
 
 
 class BundleShapeTests(unittest.TestCase):
-    def test_artifact_key_is_rad_classifier(self):
-        """`red-classifier` fails: the key is the model name `red` declares."""
+    def test_artifact_key_is_red_classifier(self):
+        """The key is the model name `red` declares. Renamed 2026-07-28.
+
+        The old `rad-classifier` spelling is still accepted at bundle creation and
+        only fails ~30s into the run, so a wrong key here is expensive to notice.
+        """
         src = (REF / "run_red_agent.py").read_text()
-        self.assertIn('"rad-classifier"', src)
-        self.assertNotIn('"red-classifier"', src)
+        self.assertIn('ARTIFACT_KEY = "red-classifier"', src)
+        self.assertNotIn('"rad-classifier": args.classifier', src)
 
     def test_blueprint_key_and_step_size_only(self):
         src = (REF / "run_red_agent.py").read_text()

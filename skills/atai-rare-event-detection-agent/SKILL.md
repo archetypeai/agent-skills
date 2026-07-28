@@ -9,7 +9,7 @@ description: >
   examples of a *named* rare fault (as few as one incident), plus normal-
   operation data, and wants fully-managed server-side detection of that
   fault recurring — equipment breakdowns, process excursions, undesirable
-  well events. Covers the bundle request shape (the `rad-classifier`
+  well events. Covers the bundle request shape (the `red-classifier`
   artifact slot, `step_size`), the fit path via the `red-fitting` blueprint
   with `strategy: centroid`, the run/poll/results lifecycle, the output CSV
   schema (`timestamp, predicted_state, invalid, p_<class>…`), and why
@@ -116,15 +116,20 @@ curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: applicat
     "blueprint": "red",
     "name": "pump breakdown detector",
     "values": {"step_size": 1},
-    "artifacts": {"rad-classifier": "s3://bucket/path/fit-classifier.safetensors"}
+    "artifacts": {"red-classifier": "s3://bucket/path/fit-classifier.safetensors"}
   }'
 ```
 
-**The artifact key is `rad-classifier`.** That string is the model name the
-`red` blueprint declares (`models.classifier: "rad-classifier"`), so it is what
-the `artifacts` map must be keyed by — `red-classifier` fails. "rad" is an
-internal name for the same agent; the blueprints' source files are `rad.yaml`
-and `rad_fitting.yaml`.
+**The artifact key is `red-classifier`.** That string is the model name the
+`red` blueprint declares (`models.classifier: "red-classifier"`), so it is what
+the `artifacts` map must be keyed by.
+
+> ⚠️ Until **2026-07-28** this key was `rad-classifier`, a typo since fixed. The
+> old key still returns **HTTP 201 `status: ready`** at bundle creation and only
+> fails ~30 s into the run with `repeated failures polling JOS job` — with no
+> mention of the artifact. Bundles created before the fix must be recreated.
+> `red-fitting`'s `output` value still defaults to the old spelling, which is
+> harmless only because the runner ignores it (below).
 
 `step_size` is normally the only value worth setting. Everything else —
 `window_size`, `data_columns`, `timestamp_column`, `encoder_model` — is
@@ -208,7 +213,7 @@ from the blueprint's API response:
 - **`states` is not a blueprint value.** The runner strips it and uses it as the
   class vocabulary for that filename matching.
 - **`output` does not name the file.** The blueprint defaults to
-  `rad-classifier.safetensors`, but the runner writes
+  `rad-classifier.safetensors` — the pre-typo-fix spelling — but the runner writes
   **`fit-classifier.safetensors`** regardless. Read the real filename off
   `/results`; building an `s3://` URI from the requested name points at nothing
   and the inference run then fails at artifact load.
