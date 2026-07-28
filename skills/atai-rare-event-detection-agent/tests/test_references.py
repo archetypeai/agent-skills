@@ -12,8 +12,9 @@ network. They lock in the invariants verified against dev:
     INVALID_STATE windows, reports the false-alarm rate only over windows with
     zero fault rows, and reports incident-level detection separately — a slice
     can score high accuracy while missing its incident entirely.
-  * The synthetic sample generator produces a strictly regular cadence, which is
-    what the blueprint's timestamp validation requires.
+  * The shipped slices satisfy what the blueprint validates: a strictly regular
+    cadence, monotonic timestamps, a sidecar aligned row-for-row, and shot files
+    that are single-class and unlabelled (the class comes from the filename).
 
 Run:
     python -m unittest discover -s skills/atai-rare-event-detection-agent/tests
@@ -40,7 +41,7 @@ sys.path.insert(0, str(REF))
 import run_red_agent  # noqa: E402
 
 SAMPLE = REF / "sample_data"
-FAULT = "excursion"
+FAULT = "pump_breakdown"   # the class name in the shipped sample data
 
 
 class EnvTests(unittest.TestCase):
@@ -132,48 +133,62 @@ class ScoringTests(unittest.TestCase):
 
 
 class SampleDataTests(unittest.TestCase):
-    def test_generator_is_deterministic_and_regularly_sampled(self):
-        gen = SAMPLE / "make_sample_data.py"
-        self.assertTrue(gen.exists(), "sample generator is missing")
-        with tempfile.TemporaryDirectory() as d:
-            dst = Path(d) / "make_sample_data.py"
-            dst.write_text(gen.read_text())
-            subprocess.run([sys.executable, str(dst)], cwd=d, check=True,
-                           capture_output=True)
-            inf = Path(d) / "red_sample_inference.csv"
-            lab = Path(d) / "red_sample_inference_labels.csv"
-            self.assertTrue(inf.exists() and lab.exists())
+    """The shipped slices must satisfy what the blueprint validates."""
 
-            rows = list(csv.DictReader(open(inf)))
-            labels = list(csv.DictReader(open(lab)))
-            self.assertEqual(len(rows), len(labels),
-                             "slice and sidecar must line up row-for-row")
+    INFERENCE = SAMPLE / "pump_eval_inc04.csv"
+    LABELS = SAMPLE / "pump_eval_inc04_labels.csv"
+    SHOTS = {
+        "pump_nshot_normal.csv": "normal",
+        "pump_nshot_pump_breakdown_inc01.csv": "pump_breakdown",
+        "pump_nshot_pump_breakdown_inc02.csv": "pump_breakdown",
+    }
 
-            ts = [int(r["timestamp"]) for r in rows]
-            deltas = {b - a for a, b in zip(ts, ts[1:])}
-            self.assertEqual(deltas, {60},
-                             "cadence must be strictly regular or the blueprint "
-                             "marks every window INVALID_STATE")
+    @staticmethod
+    def _read(path):
+        with open(path, newline="") as f:
+            return list(csv.DictReader(f))
 
-            kinds = {r["label"] for r in labels}
-            self.assertEqual(kinds, {"normal", FAULT})
+    def test_slice_and_sidecar_line_up(self):
+        rows = self._read(self.INFERENCE)
+        labels = self._read(self.LABELS)
+        self.assertEqual(len(rows), len(labels))
+        self.assertEqual([r["timestamp"] for r in rows],
+                         [l["timestamp"] for l in labels])
 
-    def test_shot_files_are_single_class(self):
-        """The fitting runner labels a whole file by its filename."""
-        with tempfile.TemporaryDirectory() as d:
-            dst = Path(d) / "make_sample_data.py"
-            dst.write_text((SAMPLE / "make_sample_data.py").read_text())
-            subprocess.run([sys.executable, str(dst)], cwd=d, check=True,
-                           capture_output=True)
-            for name in ("red_sample_shots_normal.csv",
-                         f"red_sample_shots_{FAULT}.csv"):
-                path = Path(d) / name
-                self.assertTrue(path.exists(), f"{name} missing")
-                header = open(path).readline().strip().split(",")
-                self.assertEqual(header[0], "timestamp")
-                self.assertNotIn("label", header,
-                                 "shot files carry no label column — the class "
-                                 "comes from the filename")
+    def test_cadence_is_strictly_regular(self):
+        """Irregular timestamps make the blueprint emit INVALID_STATE."""
+        ts = [int(r["timestamp"]) for r in self._read(self.INFERENCE)]
+        self.assertEqual({b - a for a, b in zip(ts, ts[1:])}, {60})
+        self.assertEqual(ts, sorted(ts), "timestamps must be monotonic")
+
+    def test_slice_carries_both_classes_and_normal_context(self):
+        labels = [r["label"] for r in self._read(self.LABELS)]
+        self.assertEqual(set(labels), {"normal", FAULT})
+        # normal context on both sides is what makes a false-alarm rate meaningful
+        self.assertEqual(labels[0], "normal")
+        self.assertEqual(labels[-1], "normal")
+        self.assertLess(labels.count(FAULT) / len(labels), 0.10,
+                        "the fault class should be rare — that is the point")
+
+    def test_shot_files_are_single_class_and_unlabelled(self):
+        """The fitting runner takes each file's class from its FILENAME."""
+        for name, cls in self.SHOTS.items():
+            path = SAMPLE / name
+            self.assertTrue(path.exists(), f"{name} missing")
+            with open(path) as f:
+                header = f.readline().strip().split(",")
+            self.assertEqual(header[0], "timestamp")
+            self.assertNotIn("label", header,
+                             "shot files carry no label column")
+            self.assertIn(cls, name,
+                          "the class name must appear in the filename")
+
+    def test_filename_class_match_is_unambiguous(self):
+        """Longest match wins, so 'normal' must not also match a fault file."""
+        classes = sorted(set(self.SHOTS.values()), key=len, reverse=True)
+        for name, expected in self.SHOTS.items():
+            hits = [c for c in classes if c.lower() in name.lower()]
+            self.assertEqual(max(hits, key=len), expected, name)
 
 
 class BundleShapeTests(unittest.TestCase):

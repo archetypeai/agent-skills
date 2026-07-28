@@ -306,10 +306,21 @@ Two structural facts follow from majority labelling:
 - `references/run_red_agent.py` — stdlib-only end-to-end runner: upload →
   bundle → run → poll → download → score, with the three scoring views above.
 - `references/.env.example` — the two required environment variables.
-- `references/sample_data/` — a synthetic generator, plus how to obtain the
-  real pump dataset. See its README for data attribution.
+- `references/sample_data/` — prepared pump slices: three single-class shot
+  files for fitting and a held-out slice with a ground-truth sidecar for running
+  and scoring. See its README for full data attribution.
 
 The full seven-stage build (raw CSV → preflight → prep → grid search → fit →
 run → evaluate), including the channel-leakage audits this data requires, lives
 in the
 [RED example repo](https://github.com/archetypeai/rare-event-detection-agent-example).
+
+## Data attribution
+
+The sample data derives from the **`pump_sensor_data`** dataset published by the
+Kaggle user [`nphantawee`](https://www.kaggle.com/nphantawee):
+**https://www.kaggle.com/datasets/nphantawee/pump-sensor-data** — 220,320 rows,
+52 sensor channels, 1-minute cadence, seven breakdown episodes. Credit for the
+underlying data belongs to the operations team who shared it. Kaggle declares no
+licence for it, so treat it as research/study/development use. Full attribution
+and provenance in `references/sample_data/README.md`.
