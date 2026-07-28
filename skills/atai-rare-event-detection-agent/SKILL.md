@@ -212,11 +212,13 @@ from the blueprint's API response:
   rows of its own class.
 - **`states` is not a blueprint value.** The runner strips it and uses it as the
   class vocabulary for that filename matching.
-- **`output` does not name the file.** The blueprint defaults to
-  `rad-classifier.safetensors` — the pre-typo-fix spelling — but the runner writes
-  **`fit-classifier.safetensors`** regardless. Read the real filename off
-  `/results`; building an `s3://` URI from the requested name points at nothing
-  and the inference run then fails at artifact load.
+- **The fitted artifact is always `fit-classifier.safetensors`.** The `output`
+  value is accepted and then ignored, so no artifact is ever named what you asked
+  for. (The blueprint's own default is the stale `rad-classifier.safetensors`,
+  which is harmless precisely because it never reaches disk.) Read the real
+  filename off `/results`; building an `s3://` URI from the requested name points
+  at nothing, and the inference run then fails at artifact load with
+  `repeated failures polling JOS job` — naming the poller, not the missing file.
 - **`red-fitting` is not canonical** (`is_canonical: false`), so it is org-scoped
   and an org **admin** must register it once before anyone can fit. The `red`
   inference blueprint *is* canonical and needs no setup.
