@@ -15,3 +15,4 @@ venv/
 # Scratch output from csv_vs_txt_proof.py
 proof_input.txt
 proof_input.csv
+skills/atai-rare-event-detection-agent/references/sample_data/red_sample_*.csv
