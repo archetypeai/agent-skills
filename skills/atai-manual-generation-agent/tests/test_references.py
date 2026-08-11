@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import tokenize
 import unittest
 
@@ -82,11 +83,14 @@ class TestWiredValueDetection(unittest.TestCase):
     API returns 201 either way.
     """
 
+    # Mirrors the canonical blueprint as of 2026-08-11 (blp_5wtsdwmp2q9hm87pabye2h9c1a):
+    # max_new_tokens is wired now; prompt still is not.
     ACTIVE = {"document": {
-        "values": {"max_frames": 16, "size": 224},
+        "values": {"max_frames": 16, "size": 224, "max_new_tokens": 2048},
         "nodes": {"video_reader": {"config": {"max_frames": "${values.max_frames}",
                                               "size": "${values.size}"}},
-                  "fusion": {"config": {"model": "${models.fusion}"}}},
+                  "fusion": {"config": {"model": "${models.fusion}",
+                                        "max_new_tokens": "${values.max_new_tokens}"}}},
         "connectors": {"source": {"config": {
             "default_text": "Generate a concise, ordered list of distinct steps "
                             "with 10 steps or less.", "text_extensions": []}}}}}
@@ -98,15 +102,26 @@ class TestWiredValueDetection(unittest.TestCase):
                                         "max_new_tokens": "${values.max_new_tokens}"}}},
         "connectors": {"source": {"config": {"default_text": "${values.prompt}"}}}}}
 
-    def test_active_blueprint_ignores_generation_values(self):
+    def test_active_blueprint_still_ignores_prompt(self):
+        """PLDEV-1730: the instruction is hardcoded and caps the manual at ~10 steps."""
         ignored = mga.inert_values(
-            self.ACTIVE, {"max_frames": 64, "max_new_tokens": 2048, "prompt": "x"})
-        self.assertEqual(sorted(ignored), ["max_new_tokens", "prompt"])
+            self.ACTIVE, {"max_frames": 64, "max_new_tokens": 4096, "prompt": "x"})
+        self.assertEqual(ignored, ["prompt"])
 
-    def test_active_blueprint_honours_max_frames(self):
-        self.assertEqual(mga.inert_values(self.ACTIVE, {"max_frames": 64}), [])
+    def test_active_blueprint_honours_max_frames_and_max_new_tokens(self):
+        self.assertEqual(
+            mga.inert_values(self.ACTIVE, {"max_frames": 64, "max_new_tokens": 4096}),
+            [])
 
-    def test_superseded_blueprint_honours_all_three(self):
+    def test_hardcoded_prompt_is_what_caps_the_step_count(self):
+        text = self.ACTIVE["document"]["connectors"]["source"]["config"]
+        self.assertIn("10 steps or less", text["default_text"])
+        self.assertEqual(text["text_extensions"], [],
+                         "text inputs disabled, so default_text cannot be overridden")
+
+    def test_superseded_blueprint_honoured_all_three(self):
+        """Historic: this shape is how `prompt` used to be reachable. It no longer
+        resolves — kept so inert_values is exercised against a wired prompt."""
         self.assertEqual(mga.inert_values(
             self.WITH_PARAMS,
             {"max_frames": 64, "max_new_tokens": 2048, "prompt": "x"}), [])
@@ -255,6 +270,23 @@ class TestRequestShapes(unittest.TestCase):
         """A format-specifying prompt makes the parser return zero steps."""
         for token in ("markdown", "##", "###", "json", "format:"):
             self.assertNotIn(token, mga.DEFAULT_PROMPT.lower())
+
+    def test_default_blueprint_is_a_key_not_a_pinned_id(self):
+        """A pinned id stops resolving when the blueprint is republished: the run
+        returns 202, then the pod dies with `invalid config for 1 node(s)`."""
+        self.assertEqual(mga.BLUEPRINT_DEFAULT, "mga")
+        self.assertFalse(mga.BLUEPRINT_DEFAULT.startswith("blp_"))
+
+    def test_default_output_budget_is_above_the_empty_result_value(self):
+        """2048 — the blueprint's own default — returned `results: []` on a 173 s
+        video with no ERROR row. 4096 on the same input produced 10 steps."""
+        default = re.search(r'"--max-new-tokens", type=int, default=(\d+)', RUNNER_SRC)
+        self.assertIsNotNone(default)
+        self.assertGreaterEqual(int(default.group(1)), 4096)
+
+    def test_zero_step_output_is_called_out(self):
+        """A run can complete with no steps and no failure signal anywhere."""
+        self.assertIn("ZERO steps", RUNNER_SRC)
 
 
 if __name__ == "__main__":

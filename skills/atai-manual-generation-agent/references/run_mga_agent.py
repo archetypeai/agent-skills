@@ -31,17 +31,27 @@ SIX THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-10)
      is stored on the bundle and silently ignored. This script preflights that.
   6. Videos longer than ~5 minutes fail outright, several minutes in.
 
-THE OUTPUT-TOKEN CAP
+THE CONTROL YOU CANNOT REACH (currently `prompt`)
 
-The active `mga` blueprint hardcodes max_new_tokens: 256 and does not expose it,
-which truncates the manual — on a 173 s video, 6 steps covering half of it, the
-last cut mid-clause. A superseded version (BLUEPRINT_WITH_PARAMS below) wires
-max_new_tokens and prompt, and with them the same video yields 10-19 clean steps.
+Twice now the setting needed for a usable manual has been one the blueprint does
+not expose. Check which of your values are real before spending a run — this
+script preflights it and prints a warning.
 
-That superseded blueprint is `is_active: false`: usable for diagnosis, but nothing
-built on it can ship, and it may be removed without notice. It is the default here
-only so the skill demonstrates working behaviour. When the values are restored on
-the active blueprint, set BLUEPRINT_DEFAULT = BLUEPRINT_ACTIVE.
+  WAS: max_new_tokens, hardcoded at 256, truncated the manual to 6 steps with the
+       last cut mid-clause. FIXED — it is settable now and defaults to 2048.
+  NOW: `prompt`. The blueprint hardcodes "Generate a concise, ordered list of
+       distinct steps with 10 steps or less.", so a caller's instruction is
+       accepted, reported inert, and ignored. That caps the manual at 10 steps by
+       wording rather than by content: on a 173 s video it bundles up to seven
+       actions into one step and drops two spoken safety cautions that the same
+       video produced as their own steps when the prompt was honoured.
+       Tracked as PLDEV-1730.
+
+⚠️  max_new_tokens: 2048 — the blueprint's OWN default — returned an EMPTY manual
+    on a 173 s video: job.completed, no ERROR row, `results: []`, 39 bytes, after
+    543 s of generation. 4096 on the identical input produced 10 steps. This
+    script therefore defaults to 4096. Count your steps; nothing in the status or
+    the logs distinguishes an empty result from success.
 """
 from __future__ import annotations
 
@@ -55,12 +65,21 @@ import urllib.error
 import urllib.request
 import uuid
 
-# Active canonical mga (is_canonical: true, is_active: true) — what ships.
-BLUEPRINT_ACTIVE = "blp_0zmce3qnjp8659dp1pszdqbtx4"
-# Superseded, but still accepts bundles and runs. Wires max_new_tokens, prompt,
-# temperature, top_k, top_p, repetition_penalty, seed, stop. DIAGNOSIS ONLY.
-BLUEPRINT_WITH_PARAMS = "blp_76kyqm4vjp9pt8tvfz8tks7x6t"
-BLUEPRINT_DEFAULT = BLUEPRINT_WITH_PARAMS
+# Target the blueprint KEY, never an id.
+#
+# A key resolves to whatever is canonical and active. A pinned id does not survive
+# republication: three `mga` versions shipped in about two hours on 2026-08-11, and
+# the id this script used to default to now FAILS AT RESOLUTION — it wires
+# generation parameters into its own fusion node that the node schema no longer
+# accepts. Reading it, creating a bundle and submitting a run all still succeed;
+# the pod dies one second after it starts with
+# `resolving blueprint: invalid config for 1 node(s)`.
+#
+# Pin an id only to reproduce a specific past run.
+BLUEPRINT_DEFAULT = "mga"
+# Kept for provenance, not for use. Both are superseded; the second is unrunnable.
+BLUEPRINT_HISTORIC_ACTIVE = "blp_0zmce3qnjp8659dp1pszdqbtx4"
+BLUEPRINT_DEAD_WITH_PARAMS = "blp_76kyqm4vjp9pt8tvfz8tks7x6t"
 
 # Says what to COVER, never how to FORMAT. ManualGenerationResultsParserNode owns
 # the output template: a prompt that specifies its own format makes the parser
@@ -277,14 +296,19 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--video", help="path to an .mp4 under ~5 minutes with audio")
     ap.add_argument("--blueprint", default=BLUEPRINT_DEFAULT,
-                    help=f"blueprint id or key (default {BLUEPRINT_DEFAULT}; pass "
-                         f"'mga' for the active one, whose output is truncated)")
+                    help=f"blueprint id or KEY (default {BLUEPRINT_DEFAULT!r}). A key "
+                         f"tracks whatever is canonical and active; a pinned id can "
+                         f"stop resolving when the blueprint is republished")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=2048,
-                    help="inert on the active blueprint, which hardcodes 256")
+    ap.add_argument("--max-new-tokens", type=int, default=4096,
+                    help="output budget (default 4096). The blueprint's own default "
+                         "of 2048 returned an EMPTY manual on a 173s video — see the "
+                         "module docstring")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT,
-                    help="NEVER specify an output format here — the results parser "
-                         "owns the template and will return zero steps")
+                    help="currently IGNORED: the blueprint hardcodes its instruction "
+                         "(PLDEV-1730). The preflight says so. And never specify an "
+                         "output format here — the results parser owns the template "
+                         "and will return zero steps")
     ap.add_argument("--name", default="manual generation run")
     ap.add_argument("--output", default="mga-output.jsonl")
     ap.add_argument("--score", metavar="JSONL", help="offline: score an output")
@@ -329,7 +353,9 @@ def main() -> None:
     bp = api("GET", f"{endpoint}/agents/blueprints/{args.blueprint}")
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if not bp["is_active"]:
-        print("  NOTE: superseded blueprint — usable for diagnosis, cannot ship.")
+        print("  WARNING: superseded blueprint. It will read back, bundle and start "
+              "normally, then the pod may die ~1s in with 'resolving blueprint: "
+              "invalid config'. Target the key 'mga' instead.")
     ignored = inert_values(bp, values)
     if ignored:
         print(f"  WARNING: {ignored} not wired on this blueprint; accepted and ignored.")
@@ -356,6 +382,14 @@ def main() -> None:
     print(f"\nrun {verdict}")
     saved = fetch_results(agent["id"], args.output)
     if saved:
+        # A run can complete with results: [] — no ERROR row, no failed status.
+        # Seen at max_new_tokens 2048; 4096 on the same input produced 10 steps.
+        n = sum(len(json.loads(l).get("results", []))
+                for l in open(saved) if l.strip())
+        if n == 0:
+            print("\n  WARNING: the run completed but produced ZERO steps. This is "
+                  "not reported as a failure anywhere. Retry with a larger "
+                  "--max-new-tokens before assuming the video is at fault.")
         show(saved)
         if args.reference:
             score(saved, args.reference)

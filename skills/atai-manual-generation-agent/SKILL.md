@@ -8,8 +8,8 @@ description: >
   has a recording of a procedure (a repair, an assembly, a workflow) and
   wants the platform to turn it into step-by-step instructions traceable
   back to the video. Covers video suitability (the ~5-minute ceiling, the
-  audio-track requirement), the bundle request shape (`max_frames`, and
-  the `max_new_tokens`/`prompt` values the active blueprint does NOT
+  audio-track requirement), the bundle request shape (`max_frames`,
+  `max_new_tokens`, and the `prompt` the active blueprint does NOT
   expose), the run/poll/results lifecycle, the output JSONL schema
   (`step, instruction, frame_start/end, timestamp_start/end`), and scoring
   against reference step annotations. Do NOT use for verifying that a task
@@ -59,22 +59,16 @@ POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 
 `POST /agents/bundle` (singular) returns **404**. Some older clients still use it.
 
-## ⚠️ The output-token cap — read before anything else
+## ⚠️ Check which values are real — read before anything else
 
-The active `mga` blueprint caps generation at a hardcoded **`max_new_tokens: 256`** and does not expose the value. On a 173-second video with 11 documented steps that yields a **truncated manual**: 6 steps covering 16–85 s, with the last one severed mid-clause.
+Twice now the one setting that decides whether the manual is usable has been a setting the blueprint does not expose. It is not the same setting both times, so verify rather than remember.
 
-| | active blueprint | `max_new_tokens: 2048` | + a coverage prompt |
-|---|---|---|---|
-| Steps emitted | 6 | 10 | 19 |
-| Coverage | 16–85 s of 173 s | 16–120 s | 11–139 s |
-| Reference steps found | **4 / 11** | **10 / 11** | 10 / 11 |
-| Final step | cut mid-clause | clean | clean |
+| | status | effect when unreachable |
+|---|---|---|
+| `max_new_tokens` | **fixed** — wired as `${values.max_new_tokens}`, default 2048 | was hardcoded at 256; truncated a 173 s video to 6 steps, the last cut mid-clause |
+| `prompt` | **still unreachable** (PLDEV-1730) | the blueprint's own instruction caps the manual at ~10 steps regardless of how much happens in the video |
 
-**Setting `max_new_tokens` on the active blueprint fails silently.** The bundle returns **HTTP 201** and echoes the value back in `values`, then ignores it — the fusion node's config is `{model}` only and never references `${values.max_new_tokens}`. Three runs with and without it produced byte-identical output.
-
-A superseded version of the same blueprint (`blp_76kyqm4vjp9pt8tvfz8tks7x6t`, `is_active: false`) does wire it, plus seven other generation parameters and `${values.prompt}`. It still accepts bundles and runs, so it is usable **for diagnosis**, but nothing built on an inactive blueprint should ship. `references/run_mga_agent.py` targets it by default and says so on every run.
-
-**Check before you spend a run.** A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector:
+**A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector.** Nothing in the response tells you: setting an unwired value returns **HTTP 201** and echoes it straight back in `values`. Preflight it — `references/run_mga_agent.py` does this on every run and prints a warning:
 
 ```python
 doc = GET(f"{endpoint}/agents/blueprints/{blueprint}")["document"]
@@ -82,6 +76,20 @@ wired = json.dumps({"nodes": doc["nodes"], "connectors": doc["connectors"]})
 inert = [k for k in my_values
          if k not in doc["values"] or f"${{values.{k}}}" not in wired]
 ```
+
+### The 10-step ceiling is in the prompt, not the model
+
+`connectors.source.config.default_text` on the canonical blueprint is, verbatim:
+
+> Generate a concise, ordered list of distinct steps with 10 steps or less.
+
+`text_extensions: []` disables text inputs, so there is no way to override it. Every manual is therefore capped at ~10 steps **by wording**, not by content, and the model complies by compressing rather than by stopping: on a 173 s video it bundles up to seven distinct actions into a single step and drops two spoken safety cautions that the same video produced as their own steps back when `prompt` was settable. A 60-minute video gets the same ~10 steps as a 3-minute one.
+
+If you need a manual proportional to the procedure, **chunk the video** and run one job per chunk — ~10 steps per chunk is the only lever available today. See Step 1.
+
+### `max_new_tokens: 2048` — the blueprint's own default — can return an empty manual
+
+One 173 s run at 2048 finished as `job.completed` with **no ERROR row**, and its output file was 39 bytes: `{"id": "...", "results": []}`, after 543 s of generation. The identical input at **4096** produced 10 steps. Nothing in the status field, the logs, or the HTTP responses distinguishes this from success — **count the steps in the output before you trust a run**.
 
 ## Step 1 — Choose a video
 
@@ -96,6 +104,18 @@ The platform validates none of this for you, and getting it wrong costs ~15 minu
 The ~5-minute ceiling is **not** a context limit: at `max_frames: 16` the video occupies 392 visual tokens, ~0.15% of F1-0's 256K window.
 
 Source resolution barely matters — every frame is resized to `size × size` (default 224), so 360p is no worse than 1080p, only smaller and faster to upload.
+
+### Longer videos: chunk them
+
+Chunking is also the only way to get more than ~10 steps out of a long procedure, since the step ceiling is per-job (see above). What has worked in production:
+
+- **90 s chunks with 15 s overlap.** 90 s keeps each job well inside the failure band; the overlap is there because a step that straddles a cut is otherwise described from half its evidence in both chunks.
+- **Cut on keyframes.** `ffmpeg -ss <t> -i in.mp4 -c copy` rewinds to the previous keyframe and silently shifts the segment — measured **−7.57 s** of drift on a real file. Read the keyframe timestamps first (`ffprobe -select_streams v -skip_frame nokey -show_entries frame=pts_time`) and snap each cut to one, or re-encode.
+- **Step from each chunk's actual start, not from `i × stride`.** Snapping to keyframes moves the boundaries; a fixed grid then eats the overlap (15 s → 10 s on our first attempt).
+- **One run per chunk, or one run with `source` as an array.** The array form loads the model once instead of per chunk, which is the dominant cost — but results come back **out of order** and every timestamp is **chunk-local**. Tag each input and add the chunk's start offset before merging, or the manual is silently scrambled.
+- **Dedupe the overlap conservatively.** Two steps may be merged only if they came from *different* chunks *and* their time spans actually overlap. A similarity-only rule deletes real repeated actions — three genuine "Click on the OK button" steps collapsed into one before we added the time test.
+
+A `pipeline execution failed: Newton generation event stream closed without a terminal event` at 138–175 s of runtime, on inputs that are well under the ceiling, is a **platform-side** failure and not something to fix by shortening further — retry the chunk.
 
 ## Step 2 — Upload the video
 
@@ -125,18 +145,18 @@ POST {endpoint}/agents/bundles
 | `max_frames` | 16 | Frames uniformly sampled across the whole video. 64 is the reader/preprocessor batch size. **No validation at all** — 16, 512, 1024 and `-1` are all accepted as `ready`. The arithmetic ceiling from `preprocessor_max_pixels` (24 Mi at `size: 224`) is 501 frames. |
 | `size` | 224 | Each frame resized to a square. |
 | `parser_compute_stats` | false | Attaches template-conformance stats — useful for diagnosing a parser mismatch. |
-| `max_new_tokens` | **256, not exposed** | See the cap section above. |
-| `prompt` | **not exposed** | See below. |
+| `max_new_tokens` | 2048 | Exposed and honoured. **Set it to 4096** — 2048 has returned an empty manual (see above). |
+| `prompt` | **not exposed** | Hardcoded, and it is what caps the manual at ~10 steps. See below. |
 
 ### On `prompt`
 
-The instruction is `connectors.source.config.default_text`, hardcoded on the active blueprint, with `text_extensions: []` disabling text inputs entirely. It was exposed once and **rolled back**, for a good reason: `ManualGenerationResultsParserNode` owns the output template, so **a prompt that specifies its own output format makes the parser return zero steps.**
+Hardcoded as `connectors.source.config.default_text`, with `text_extensions: []` disabling text inputs entirely. It was exposed once and **rolled back**, for a reason worth understanding before it is exposed again: `ManualGenerationResultsParserNode` owns the output template, so **a prompt that specifies its own output format makes the parser return zero steps.**
 
-That is about format, not about custom prompts generally. A prompt saying what to *cover* parses cleanly:
+That is about format, not about custom prompts generally — and the rollback threw out the useful half with the dangerous half. A prompt saying what to *cover* parses cleanly, and produced 19 well-formed steps on the video where the hardcoded instruction produces 10:
 
 > Generate a concise, ordered list of every distinct step performed in this video, covering the procedure from the first action to the last. Include brief steps and steps that are repeated. Use up to 20 steps. Keep each step to at most 15 words. Use both what is shown and what is said.
 
-A prompt saying how to *lay the output out* (markdown headings, a `## Steps` section) does not. If you ever set `prompt`, **never specify an output format.**
+A prompt saying how to *lay the output out* (markdown headings, a `## Steps` section) does not. Pass it anyway if you like — it is accepted, echoed back, and ignored — but do not attribute any behaviour to it. When PLDEV-1730 restores it, **never specify an output format.**
 
 ## Step 4 — Run the bundle
 
@@ -209,12 +229,30 @@ Four properties the blueprint does not advertise:
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
 | Client reports failure, run proceeds anyway | `/run` returns **202**, not 201 |
-| `max_new_tokens` has no effect | Not wired on the active blueprint. Accepted (201) and ignored |
-| Parser returns **0 steps** | A custom `prompt` specified an output format; the parser owns the template |
+| A custom `prompt` has no effect | Not wired on the active blueprint. Accepted (201), echoed back, ignored |
+| Manual has ~10 steps no matter how long the video is | The hardcoded prompt says "10 steps or less". Chunk the video |
+| `job.completed`, no ERROR, and **`results: []`** | Seen at `max_new_tokens: 2048`. Raise it to 4096 and rerun |
+| Parser returns **0 steps** | A custom `prompt` specified an output format; the parser owns the template. Only reachable on a blueprint that wires `prompt` |
 | Run "hangs" at `running` forever | The `status` field lags; check `/logs` for `pod.terminated` |
 | `Newton generation event stream closed without a terminal event` | Usually a video longer than ~5 minutes |
-| Manual stops halfway through the video | The 256-token cap — check whether the last step ends mid-clause |
-| Blueprint key resolves to a version without the values you expect | `GET /agents/blueprints` returns **only `is_active: true`** blueprints; superseded versions still exist and still run, reachable by `blueprint_id` |
+| Manual stops halfway through the video | Output-token exhaustion — check whether the last step ends mid-clause, then raise `max_new_tokens` |
+| Run dies ~1 s in: `resolving blueprint: invalid config for 1 node(s)` | A pinned `blueprint_id` that has been superseded. Target the **key** — see below |
+
+## Target the blueprint KEY, not an id
+
+Use `"blueprint": "mga"`. A key resolves to whatever is canonical and active; a pinned id does not survive republication, and republication is frequent — three `mga` versions shipped in about two hours on 2026-08-11.
+
+A superseded id fails **late and quietly**. `GET /agents/blueprints/{id}` still returns the document, `POST /agents/bundles` still returns `201 ready`, and `POST .../run` still returns `202 running` — then the pod dies one second after it starts:
+
+```
+pod.terminated  resolving blueprint: invalid config for 1 node(s):
+                - `fusion`: config validation failed: Additional properties are not allowed
+                  ('repetition_penalty', 'seed', 'stop', 'temperature', 'top_k', 'top_p' were unexpected)
+```
+
+The blueprint that once wired `prompt` and the seven sampling parameters (`blp_76kyqm4vjp9pt8tvfz8tks7x6t`) is dead in exactly this way: its fusion node carries config the node schema no longer accepts. **An earlier version of this skill recommended pinning that id to get `prompt`. Do not** — nothing built on it runs, and there is currently no supported way to set `prompt`.
+
+`GET /agents/blueprints` lists only `is_active: true` versions, so a superseded id will not appear there even while it still reads back individually. Pin an id only to reproduce one specific past run, and expect it to stop working.
 
 ## Cleanup
 
@@ -237,8 +275,8 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 #   ATAI_API_KEY=<dev API key>
 #   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
 
-python3 references/run_mga_agent.py --video my_procedure.mp4
-python3 references/run_mga_agent.py --video my_procedure.mp4 --blueprint mga  # the active one
+python3 references/run_mga_agent.py --video my_procedure.mp4          # targets key `mga`, 4096 tokens
+python3 references/run_mga_agent.py --video my_procedure.mp4 --max-new-tokens 8192
 python3 references/run_mga_agent.py --score references/sample_data/mga-output-max_new_tokens2048-coverage-prompt.jsonl \
     --reference references/sample_data/40567_i2JWkDyg26A_reference_steps.csv
 ```
@@ -254,9 +292,9 @@ skills/atai-manual-generation-agent/
 │   └── sample_data/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
-│       ├── mga-output-truncated-active-blueprint.jsonl
-│       ├── mga-output-max_new_tokens2048.jsonl
-│       └── mga-output-max_new_tokens2048-coverage-prompt.jsonl
+│       ├── mga-output-truncated-active-blueprint.jsonl      historic: the 256-token cap
+│       ├── mga-output-max_new_tokens2048.jsonl               historic: cap lifted
+│       └── mga-output-max_new_tokens2048-coverage-prompt.jsonl  historic: `prompt` honoured
 └── tests/
     └── test_references.py        network-free
 ```

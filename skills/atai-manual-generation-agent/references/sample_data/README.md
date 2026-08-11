@@ -3,11 +3,18 @@
 Reference **outputs**, not inputs. Three MGA runs over the same video, differing
 only in configuration, plus the reference step annotations to score them against.
 
+⚠️ **These three are historic evidence, captured 2026-08-08. None of them reproduces
+today.** The blueprint that wired `max_new_tokens` and `prompt` has been superseded
+twice since; `max_new_tokens` is now settable on the canonical blueprint (so run 1 is
+no longer what ships), and `prompt` is not (so run 3 is no longer reachable at all —
+PLDEV-1730). They are kept because the *contrast between them* is the argument for
+exposing `prompt`, and because they remain valid inputs to the offline scorer.
+
 | File | What it is |
 |---|---|
-| `mga-output-truncated-active-blueprint.jsonl` | The **active** `mga` blueprint, `max_frames: 64`. 6 steps, 16–85 s, last step cut mid-clause. What ships today. |
-| `mga-output-max_new_tokens2048.jsonl` | Same video and instruction, `max_new_tokens: 2048`. 10 steps, 16–120 s, clean. |
-| `mga-output-max_new_tokens2048-coverage-prompt.jsonl` | Also a coverage-oriented `prompt`. 19 steps, 11–139 s, clean. |
+| `mga-output-truncated-active-blueprint.jsonl` | `max_new_tokens` hardcoded at 256. 6 steps, 16–85 s, last step cut mid-clause. **Historic** — the cap has since been lifted. |
+| `mga-output-max_new_tokens2048.jsonl` | Same video and instruction, `max_new_tokens: 2048`. 10 steps, 16–120 s, clean. Closest to what ships today. |
+| `mga-output-max_new_tokens2048-coverage-prompt.jsonl` | Also a coverage-oriented `prompt`. 19 steps, 11–139 s, clean. **Not reproducible** — `prompt` is no longer settable. This is the file that shows what the hardcoded "10 steps or less" instruction costs. |
 | `40567_i2JWkDyg26A_reference_steps.csv` | Reference annotations: `<step>,<start_sec>,<end_sec>`, two independent annotators. |
 
 Score any of them offline, no API key needed:
