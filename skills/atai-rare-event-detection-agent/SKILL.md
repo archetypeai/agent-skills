@@ -107,7 +107,8 @@ default endpoint.
 > the Agent API surface, and the runtime numbers below. If name resolution
 > reports `no bundle named … found`, the pre-packaged bundle isn't published
 > in that environment yet (Staging/Prod rollout pending) — point at Dev, or
-> pass a known `--bundle-id` for that environment.
+> pass a known `--bundle-id` for that environment. Please contact
+> support@archetypeai.dev.
 
 ## The five-step lifecycle
 

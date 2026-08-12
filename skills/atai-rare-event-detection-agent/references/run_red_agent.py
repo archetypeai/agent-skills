@@ -143,7 +143,7 @@ def resolve_bundle(agents: str, name: str) -> dict:
     sys.exit(f"no bundle named '{name}' found in this environment — the "
              f"pre-packaged bundles may not be published here yet (verified on "
              f"Dev; Staging/Prod rollout pending). Pass --bundle-id for this "
-             f"environment as a fallback.")
+             f"environment as a fallback, or contact support@archetypeai.dev.")
 
 
 def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
