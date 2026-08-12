@@ -59,6 +59,15 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > 404s. This skill only needs the plural read (to resolve by name) and the
 > singular run.
 
+> **⚠️ Availability — Dev-verified.** The pre-packaged "OSM Quick Start"
+> bundles are confirmed on the **Dev** deployment
+> (`https://api.dev.u1.archetypeai.app`). They are rolling out to Staging and
+> Prod but **may not be published there yet** — if name resolution returns
+> `no bundle named … found`, the bundle isn't in that environment yet.
+> Resolving by name is portable, so the skill starts working there
+> automatically once the bundles land; until then, point it at Dev (or pass a
+> known `--bundle-id` for that environment).
+
 The full Agent API surface is specified in [`references/openapi.yaml`](references/openapi.yaml); [`references/agent-cli`](references/agent-cli) wraps every endpoint for interactive use.
 
 ## Step 1 — Upload the input CSV
