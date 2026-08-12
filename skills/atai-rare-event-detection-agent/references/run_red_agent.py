@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """End-to-end RED agent run over the Agent API — stdlib only.
 
-upload CSV -> bundle from the canonical `red` blueprint -> run -> poll ->
-download per-window predictions -> score against a ground-truth sidecar.
+upload CSV -> resolve the pre-packaged "RED Quick Start" bundle by name ->
+run -> poll -> download per-window predictions -> score against a
+ground-truth sidecar. Nothing to fit and no classifier to supply: the
+canonical bundle pins both. (To run your OWN classifier, create a bundle
+from the `red` blueprint — SKILL.md, "Bring your own classifier".)
 
 Scoring reports three views, because window averages mislead when the positive
 class is under 1% of windows: window-level P/R/F1 under the design's majority
@@ -13,8 +16,9 @@ Auth comes from the environment (a local .env is loaded if present):
   ATAI_API_KEY, ATAI_API_ENDPOINT
 
 Usage:
-  python3 run_red_agent.py --classifier s3://.../fit-classifier.safetensors \\
-      --csv sample_data/red_sample_inference.csv --window-size 64
+  python3 run_red_agent.py                 # quick-start bundle, sample data
+  python3 run_red_agent.py --embeddings    # + embedding_{variate} columns
+  python3 run_red_agent.py --bundle-id bnd_...   # pin one environment's id
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -118,16 +123,27 @@ def upload_file(path: str, rename: str | None = None) -> dict:
         sys.exit(f"upload of {path} failed ({e.code}): {e.read().decode(errors='replace')}")
 
 
-def blueprint_must_exist(key: str) -> None:
-    req = urllib.request.Request(f"{agents_base()}/blueprints/{key}")
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-    try:
-        with urllib.request.urlopen(req):
-            return
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            sys.exit(f"blueprint '{key}' is not registered in your org — ask an org admin.")
-        raise
+def resolve_bundle(agents: str, name: str) -> dict:
+    """Resolve a bundle by its stable name, preferring canonical bundles.
+
+    Bundle ids are environment-scoped — the same pre-packaged bundle carries a
+    different bnd_… id in dev, staging and prod — so the NAME is the stable
+    handle. `GET /agents/bundles?query=` does a case-insensitive substring
+    search over name and id (`?name=`/`?search=` are silently ignored), so
+    match the name exactly client-side; canonical (platform) bundles win over
+    same-named org bundles.
+    """
+    page = request("GET", f"{agents}/bundles?query={urllib.parse.quote(name)}&limit=100")
+    exact = [bundle for bundle in page.get("data", []) if bundle.get("name") == name]
+    for bundle in exact:
+        if bundle.get("is_canonical"):
+            return bundle
+    if exact:
+        return exact[0]
+    sys.exit(f"no bundle named '{name}' found in this environment — the "
+             f"pre-packaged bundles may not be published here yet (verified on "
+             f"Dev; Staging/Prod rollout pending). Pass --bundle-id for this "
+             f"environment as a fallback.")
 
 
 def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
@@ -193,12 +209,10 @@ def download_results(agent_id: str, out_path: str) -> str | None:
     return out_path
 
 
-BLUEPRINT_KEY = "red"
-# The model name the `red` blueprint declares, and so the key its bundle
-# `artifacts` map must use. Was `rad-classifier` until a typo fix on
-# 2026-07-28; the old key is accepted at bundle creation and fails ~30s
-# into the run with "repeated failures polling JOS job".
-ARTIFACT_KEY = "red-classifier"
+# Pre-packaged canonical bundles (classifier + windowing already pinned).
+# Names are the stable, cross-environment handles; ids differ per environment.
+QUICK_START_BUNDLE = "RED Quick Start (Pump Breakdown)"
+QUICK_START_BUNDLE_EMBEDDINGS = "RED Quick Start (Pump Breakdown, Embeddings)"
 # Class names are NOT hardcoded: `normal` is the conventional baseline label and
 # the rare-event class is inferred from the label sidecar, so this runner works
 # for any catalog. Override with --normal-class / --fault-class.
@@ -239,7 +253,9 @@ def score(output_path: str, labels_path: str, window_size: int,
 
     pred_col = pick(preds[0], "predicted_state", "predicted_label", "predicted_class",
                     "prediction", "label")
-    ts_col = pick(preds[0], "timestamp", "time")
+    # Newer blueprints emit the window span as finish_/start_timestamp; older
+    # ones a single `timestamp`. Either way the row is keyed to the window END.
+    ts_col = pick(preds[0], "finish_timestamp", "timestamp", "time")
     inv_col = pick(preds[0], "invalid", "invalid_state")
     if not pred_col or not ts_col:
         print(f"could not find prediction/timestamp columns in {list(preds[0])}")
@@ -350,23 +366,26 @@ def score(output_path: str, labels_path: str, window_size: int,
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--csv", default="sample_data/red_sample_inference.csv",
+    ap.add_argument("--csv", default="sample_data/pump_eval_inc04.csv",
                     help="prepared input CSV. A ground-truth sidecar named "
                          "<stem>_labels.csv next to it enables scoring.")
-    ap.add_argument("--classifier", required=True,
-                    help="s3:// URI of the fitted classifier (Stage 5 output)")
+    ap.add_argument("--embeddings", action="store_true",
+                    help=f"run '{QUICK_START_BUNDLE_EMBEDDINGS}' instead — each "
+                         "prediction row also carries the Omega encoder "
+                         "embedding as embedding_{variate} columns")
+    ap.add_argument("--bundle-name", default=None,
+                    help="run a different bundle by its exact name (default: "
+                         f"'{QUICK_START_BUNDLE}'). Canonical bundles win when "
+                         "names collide.")
+    ap.add_argument("--bundle-id", default=None,
+                    help="pin a bundle by bnd_… id instead of resolving by "
+                         "name. Ids are environment-scoped — use only when the "
+                         "pre-packaged bundle isn't published in this "
+                         "environment yet.")
     ap.add_argument("--window-size", type=int, default=64,
-                    help="the window the classifier was fit with. Used only to "
-                         "reconstruct window spans when scoring — the agent "
-                         "itself inherits windowing from the classifier snapshot")
-    ap.add_argument("--override-window", type=int, default=None,
-                    help="force the bundle's window_size instead of inheriting it")
-    ap.add_argument("--override-step", type=int, default=1,
-                    help="inference stride. Default 1: one prediction per row, no "
-                         "latency quantisation. Pass 0 to inherit the classifier's "
-                         "own fit stride instead.")
-    ap.add_argument("--name", default="RED agent run",
-                    help="human label for the bundle/agent")
+                    help="the window the bundle's classifier was fit with. Used "
+                         "only to reconstruct window spans when scoring — the "
+                         "agent inherits windowing from the classifier snapshot")
     ap.add_argument("--output", default="red-output.csv")
     ap.add_argument("--normal-class", default=DEFAULT_NORMAL,
                     help="baseline class name in the label sidecar")
@@ -385,33 +404,35 @@ def main() -> None:
               args.normal_class, args.fault_class)
         return
 
+    if args.bundle_id and args.bundle_name:
+        sys.exit("pass --bundle-id or --bundle-name, not both")
+    if args.embeddings and (args.bundle_id or args.bundle_name):
+        sys.exit("--embeddings picks a specific pre-packaged bundle; don't "
+                 "combine it with --bundle-id/--bundle-name")
+
     require_key()
     agents = agents_base()
-    blueprint_must_exist(BLUEPRINT_KEY)
 
     print(f"uploading {args.csv} ...")
     uploaded = upload_file(args.csv)
     file_id = uploaded["file_id"]
     print(f"  file_id={file_id}")
 
-    # window/step are inherited from the classifier snapshot's saved parameters;
-    # override only if explicitly asked.
-    values: dict = {}
-    if args.override_window:
-        values["window_size"] = args.override_window
-    if args.override_step:  # 0 => inherit the classifier's fit stride
-        values["step_size"] = args.override_step
+    # The pre-packaged canonical bundle pins the classifier and its windowing —
+    # nothing to fit, nothing to create. (To run your OWN classifier, create a
+    # bundle from the `red` blueprint instead: SKILL.md, "Bring your own
+    # classifier".)
+    if args.bundle_id:
+        bundle = request("GET", f"{agents}/bundles/{args.bundle_id}")
+        print(f"using bundle {bundle['id']}  name='{bundle.get('name')}'")
+    else:
+        name = args.bundle_name or (
+            QUICK_START_BUNDLE_EMBEDDINGS if args.embeddings else QUICK_START_BUNDLE)
+        bundle = resolve_bundle(agents, name)
+        print(f"resolved bundle '{name}' -> {bundle['id']}"
+              f"{'  (canonical)' if bundle.get('is_canonical') else ''}")
 
-    print(f"creating bundle from blueprint '{BLUEPRINT_KEY}' ...")
-    bundle = request("POST", f"{agents}/bundle", body={
-        "blueprint": BLUEPRINT_KEY,
-        "name": args.name,
-        "values": values,
-        "artifacts": {ARTIFACT_KEY: args.classifier},
-    })
-    print(f"  bundle_id={bundle['id']}  status={bundle.get('status')}")
-
-    agent = request("POST", f"{agents}/bundle/{bundle['id']}/run", body={
+    agent = request("POST", f"{agents}/bundles/{bundle['id']}/run", body={
         "connectors": {"source": [{"type": "file", "id": file_id, "format": "csv"}]},
     })
     agent_id = agent["id"]

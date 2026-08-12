@@ -192,22 +192,31 @@ class SampleDataTests(unittest.TestCase):
 
 
 class BundleShapeTests(unittest.TestCase):
-    def test_artifact_key_is_red_classifier(self):
-        """The key is the model name `red` declares. Renamed 2026-07-28.
-
-        The old `rad-classifier` spelling is still accepted at bundle creation and
-        only fails ~30s into the run, so a wrong key here is expensive to notice.
-        """
+    def test_quick_start_bundle_names_are_the_stable_handles(self):
+        """Bundle ids are environment-scoped; the NAMES resolve everywhere."""
         src = (REF / "run_red_agent.py").read_text()
-        self.assertIn('ARTIFACT_KEY = "red-classifier"', src)
-        self.assertNotIn('"rad-classifier": args.classifier', src)
+        self.assertIn('QUICK_START_BUNDLE = "RED Quick Start (Pump Breakdown)"', src)
+        self.assertIn('QUICK_START_BUNDLE_EMBEDDINGS = '
+                      '"RED Quick Start (Pump Breakdown, Embeddings)"', src)
+        # no real bnd_… id may be hardcoded — that would silently pin one
+        # environment (prose like "bnd_…" in help text is fine)
+        import re
+        self.assertEqual(re.findall(r"bnd_[a-z0-9]{10,}", src), [])
 
-    def test_blueprint_key_and_step_size_only(self):
+    def test_resolution_is_by_query_with_exact_name_match(self):
+        """?query= is a substring search (?name=/?search= are ignored), so the
+        runner must exact-match the name client-side and prefer canonical."""
         src = (REF / "run_red_agent.py").read_text()
-        self.assertIn('BLUEPRINT_KEY = "red"', src)
-        # window_size must not be pinned by default — it is inherited
-        self.assertIn("override_window", src)
-        self.assertIn('values["step_size"]', src)
+        self.assertIn("bundles?query=", src)
+        self.assertIn('bundle.get("name") == name', src)
+        self.assertIn('bundle.get("is_canonical")', src)
+
+    def test_bundle_endpoints_are_plural(self):
+        """The bundle API is plural everywhere as of 2026-08-11; the singular
+        paths (POST /agents/bundle, POST /agents/bundle/{id}/run) 404."""
+        src = (REF / "run_red_agent.py").read_text()
+        self.assertIn('f"{agents}/bundles/{bundle[\'id\']}/run"', src)
+        self.assertNotIn("/bundle/", src.replace("/bundles/", ""))
 
 
 if __name__ == "__main__":

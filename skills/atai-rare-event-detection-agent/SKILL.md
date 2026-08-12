@@ -2,23 +2,24 @@
 name: atai-rare-event-detection-agent
 description: >
   Run Archetype AI's managed Rare Event Detection (RED) agent over the Agent
-  API — upload a sensor CSV, create a bundle from the canonical `red`
-  blueprint pinning a fitted nearest-prototype classifier, run it (one agent
-  per input file), poll status + audit events, and download per-window event
-  predictions. Use this skill when the user has a small number of labelled
-  examples of a *named* rare fault (as few as one incident), plus normal-
-  operation data, and wants fully-managed server-side detection of that
-  fault recurring — equipment breakdowns, process excursions, undesirable
-  well events. Covers the bundle request shape (the `red-classifier`
-  artifact slot, `step_size`), the fit path via the `red-fitting` blueprint
-  with `strategy: centroid`, the run/poll/results lifecycle, the output CSV
-  schema (`timestamp, predicted_state, invalid, p_<class>…`), and why
-  incident-level detection must be scored separately from window-level
-  accuracy. Do NOT use for classifying every operating regime from a full
-  labelled library (that's `atai-operational-state-monitoring-agent`), for
-  unnamed/uncharacterized anomalies against normal-only data, for
-  client-side embedding + KNN over `/query` (`atai-newton-omega-model`), or
-  for cleaning and windowing raw CSVs
+  API — upload a sensor CSV, resolve the pre-packaged "RED Quick Start"
+  bundle by name (portable across dev/staging/prod; a fitted
+  nearest-prototype classifier and its windowing are already pinned), run it
+  (one agent per input file), poll status + audit events, and download
+  per-window event predictions. Use this skill when the user wants
+  fully-managed server-side detection of a *named* rare fault recurring —
+  equipment breakdowns, process excursions — from a
+  handful of labelled examples. Covers bundle resolution by name (?query=),
+  the run/poll/results lifecycle, the output CSV schema
+  (`finish_timestamp, start_timestamp, predicted_state, invalid,
+  p_<class>…`), the Embeddings bundle variant (per-row Omega embeddings,
+  ~2,000× larger output), bring-your-own-classifier via the `red` and
+  `red-fitting` blueprints, and why incident-level detection must be scored
+  separately from window-level accuracy. Do NOT use for classifying every
+  operating regime from a full labelled library
+  (`atai-operational-state-monitoring-agent`), for unnamed anomalies against
+  normal-only data, for client-side embedding + KNN over `/query`
+  (`atai-newton-omega-model`), or for cleaning and windowing raw CSVs
   (`atai-newton-omega-model-data-prep`).
 ---
 
@@ -45,15 +46,23 @@ source → interpolate → window → windowInterpolate → samplingRate
        → limitValues → encoder (omega:1.5) → classifier → sink
 ```
 
-One run = one agent instance = one input file. You upload the CSV, create a
-**bundle** from the canonical `red` **blueprint** (pinning your classifier
-artifact), run the bundle, poll until terminal, and download one output CSV of
-per-window predictions.
+You don't have to fit or host anything: the platform ships **canonical "RED
+Quick Start" bundles** with a pump-breakdown classifier and its windowing
+(`window_size=64, step_size=1`) already pinned. One run = one agent instance =
+one input file. You upload the CSV, **resolve the pre-packaged bundle by
+name**, run it, poll until terminal, and download one output CSV of per-window
+predictions. (Detecting *your own* fault catalog means fitting your own
+classifier and creating your own bundle — see "Bring your own classifier"
+below.)
 
 ## When to Apply
 
-- Detect a **named** fault recurring, given only one or two labelled incidents
-  of it plus normal-operation data
+- Run managed rare-event detection **without fitting anything** — the
+  pre-packaged Quick Start bundle pins a classifier and its windowing; upload
+  a prepared CSV and run
+- Detect a **named** fault of your own recurring, given only one or two
+  labelled incidents of it plus normal-operation data (bring your own
+  classifier, below)
 - Deploy a detector as a repeatable batch job with **no client-side ML** — the
   platform embeds and classifies every window
 - Score a few-shot detector honestly, where standard accuracy is meaningless
@@ -85,10 +94,20 @@ The Agent API is **versionless** — `/agents`, not `/v0.5/agents`. If
 `/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
 default endpoint.
 
+> **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
+> `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch),
+> `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). The
+> singular forms (`POST /agents/bundle`, `POST /agents/bundle/{id}/run`,
+> `GET /agents/bundle/{id}`) now return **404** — earlier docs (and the OSM
+> sibling skill) describing a singular/plural split predate this migration.
+
 > **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
-> deployment (`https://api.dev.u1.archetypeai.app`) — the canonical `red`
-> blueprint, the `red-fitting` blueprint, the Agent API surface, and the runtime
-> numbers below.
+> deployment (`https://api.dev.u1.archetypeai.app`) — the pre-packaged Quick
+> Start bundles, the canonical `red` blueprint, the `red-fitting` blueprint,
+> the Agent API surface, and the runtime numbers below. If name resolution
+> reports `no bundle named … found`, the pre-packaged bundle isn't published
+> in that environment yet (Staging/Prod rollout pending) — point at Dev, or
+> pass a known `--bundle-id` for that environment.
 
 ## The five-step lifecycle
 
@@ -108,41 +127,37 @@ one numeric column per variate; a timestamp column (ISO 8601 or Unix); and
 z-normalized values per variate. Irregular timestamps come back as
 `INVALID_STATE` rather than predictions.
 
-### 2. Create a bundle from the `red` blueprint
+### 2. Resolve the pre-packaged bundle by name
+
+The Quick Start bundles are canonical (platform-published) and identified by a
+**stable name**; their `bnd_…` **id differs per environment** (dev/staging/
+prod), so resolve by name for portability:
 
 ```sh
-curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundle" -d '{
-    "blueprint": "red",
-    "name": "pump breakdown detector",
-    "values": {"step_size": 1},
-    "artifacts": {"red-classifier": "s3://bucket/path/fit-classifier.safetensors"}
-  }'
+curl -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/bundles?query=RED%20Quick%20Start"
 ```
 
-**The artifact key is `red-classifier`.** That string is the model name the
-`red` blueprint declares (`models.classifier: "red-classifier"`), so it is what
-the `artifacts` map must be keyed by.
+`?query=` does a case-insensitive **substring** search over name and id
+(`?name=` and `?search=` are silently ignored). Match the name **exactly**
+client-side and prefer `is_canonical: true`. Two bundles are published:
 
-> ⚠️ Until **2026-07-28** this key was `rad-classifier`, a typo since fixed. The
-> old key still returns **HTTP 201 `status: ready`** at bundle creation and only
-> fails ~30 s into the run with `repeated failures polling JOS job` — with no
-> mention of the artifact. Bundles created before the fix must be recreated.
-> `red-fitting`'s `output` value still defaults to the old spelling, which is
-> harmless only because the runner ignores it (below).
+| Name | What you get |
+|------|--------------|
+| `RED Quick Start (Pump Breakdown)` | Per-window predictions from a pump-breakdown classifier fit to two labelled Kaggle pump-sensor incidents |
+| `RED Quick Start (Pump Breakdown, Embeddings)` | The same, plus each row carries the Omega encoder embedding as `embedding_{variate}` columns (`output_embeddings: true`) |
 
-`step_size` is normally the only value worth setting. Everything else —
-`window_size`, `data_columns`, `timestamp_column`, `encoder_model` — is
-inherited from the classifier's own `parameters` metadata via
-`${models.classifier.parameters.window_size:1024}`, which is why the payload is
-so small. Omit `step_size` and you inherit the stride the classifier was fit
-with.
+Both pin the classifier artifact (`red-classifier` slot) and its windowing
+(`window_size=64, step_size=1`), so there is **nothing to create and no
+classifier URI to supply**. (For reference, on Dev these currently resolve to
+`bnd_47c7pesmwx8yct495bwtm9f05z` and `bnd_01cr02sex781592xa2xhcvby8z` — pin ids
+only as a last resort, since they differ in staging/prod.)
 
 ### 3. Run the bundle — one agent per input file
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundle/$BUNDLE_ID/run" -d '{
+  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID/run" -d '{
     "connectors": {"source": [{"type": "file", "id": "prepared_slice.csv"}]}
   }'
 ```
@@ -173,17 +188,61 @@ token; `expires_at` is `null`, so run outputs do not expire. For a **fitted
 classifier artifact** the `ref` is an absolute presigned S3 URL that expires in
 ~20 minutes — derive a durable `s3://` path instead (see below).
 
-Output is one row per window, keyed to the window-end timestamp:
+Output is one row per window. The row carries the window's **span** —
+`finish_timestamp` (the window end, the value to join ground truth on) and
+`start_timestamp`:
 
 ```
-timestamp,predicted_state,invalid,p_normal,p_pump_breakdown
-1530962520.0,normal,false,1,0
+finish_timestamp,start_timestamp,predicted_state,invalid,p_normal,p_pump_breakdown
+1526966220.0,1526962440.0,normal,false,1,0
 ```
 
-`predicted_state` is the class name or `INVALID_STATE`; `p_<class>` columns are
-per-class probabilities when `output_probabilities` is on (the default).
+(Older blueprint versions emitted a single `timestamp` column — the window
+end. The runner's scorer accepts either.) `predicted_state` is the class name
+or `INVALID_STATE`; `p_<class>` columns are per-class probabilities when
+`output_probabilities` is on (the default).
 
-## Fitting the classifier — the `red-fitting` blueprint
+**The Embeddings bundle adds `embedding_{variate}` columns** — one per input
+channel, each a 768-d vector — and the size cost is dramatic: on the same
+537-window slice, **45.5 MB vs 23 KB** (~85 KB/row with 10 channels, ~2,000×
+the plain output). Use it only when you actually want the vectors alongside
+the predictions (client-side similarity, drift monitoring, projections).
+
+## Bring your own classifier (advanced)
+
+The pre-packaged bundles run Archetype AI's pump-breakdown classifier. To
+detect **your own** fault catalog, fit your own classifier (below) and create
+your own bundle from the canonical `red` blueprint, then run it as in Step 3:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
+    "blueprint": "red",
+    "name": "my fault detector",
+    "values": {"step_size": 1},
+    "artifacts": {"red-classifier": "s3://bucket/path/fit-classifier.safetensors"}
+  }'
+```
+
+**The artifact key is `red-classifier`.** That string is the model name the
+`red` blueprint declares (`models.classifier: "red-classifier"`), so it is what
+the `artifacts` map must be keyed by.
+
+> ⚠️ Until **2026-07-28** this key was `rad-classifier`, a typo since fixed. The
+> old key still returns **HTTP 201 `status: ready`** at bundle creation and only
+> fails ~30 s into the run with `repeated failures polling JOS job` — with no
+> mention of the artifact. Bundles created before the fix must be recreated.
+> `red-fitting`'s `output` value still defaults to the old spelling, which is
+> harmless only because the runner ignores it (below).
+
+`step_size` is normally the only value worth setting. Everything else —
+`window_size`, `data_columns`, `timestamp_column`, `encoder_model` — is
+inherited from the classifier's own `parameters` metadata via
+`${models.classifier.parameters.window_size:1024}`, which is why the payload is
+so small. Omit `step_size` and you inherit the stride the classifier was fit
+with.
+
+### Fitting the classifier — the `red-fitting` blueprint
 
 RED's classifier is fitted by a second blueprint whose sink uses
 **`strategy: centroid`** — one mean prototype per class, which is the design's
@@ -192,7 +251,7 @@ with one candidate per class there is nothing to vote on.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundle" -d '{
+  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
     "blueprint": "red-fitting",
     "name": "pump breakdown fit",
     "values": {"window_size": 64, "step_size": 1, "metric": "L2",
@@ -304,14 +363,19 @@ Two structural facts follow from majority labelling:
   runs ~15× faster, which suggests per-window overhead rather than compute.
 - **Run agents sequentially.** Concurrent runs share dev's GPU workers; five at
   once ran roughly 5× slower each. Total GPU work is unchanged, so what
-  concurrency costs is feedback, not throughput.
+  concurrency costs is feedback, not throughput. Contention is also **highly
+  variable**: two concurrent 537-window Quick Start runs on a busy Dev took
+  ~2.5 h wall-clock (~0.1 win/s effective) against the ~2.2 win/s solo rate —
+  budget generously and treat the events stream, not the clock, as the signal.
 - **Cancel with `POST /agents/instances/{id}/cancel`.** Killing a local client
   does not stop the job — `DELETE` returns 409 while running.
 
 ## References
 
 - `references/run_red_agent.py` — stdlib-only end-to-end runner: upload →
-  bundle → run → poll → download → score, with the three scoring views above.
+  resolve the Quick Start bundle by name → run → poll → download → score, with
+  the three scoring views above. `--embeddings` switches to the Embeddings
+  bundle; `--bundle-name`/`--bundle-id` run any other bundle.
 - `references/.env.example` — the two required environment variables.
 - `references/sample_data/` — prepared pump slices: three single-class shot
   files for fitting and a held-out slice with a ground-truth sidecar for running
