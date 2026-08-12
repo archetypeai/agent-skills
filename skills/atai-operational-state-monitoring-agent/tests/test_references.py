@@ -6,9 +6,11 @@ NO network. They lock in the verified invariants:
     stripped before mounting /agents (the files API keeps its own /v0.5).
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
     endpoint.
-  * The bundle body pins the `osm` blueprint, the fit-classifier artifact
-    slot, and the windowing values; the run body binds the source connector
-    to the upload's file_id (the filename), not the fil_ uid.
+  * The pre-packaged bundle is resolved by EXACT name via the plural read
+    endpoint (GET /agents/bundles?query=...) with no bundle creation;
+    --embeddings selects the variant, --bundle-id skips the lookup; the run
+    body binds the source connector to the upload's file_id (the filename),
+    not the fil_ uid.
   * evaluate() scores with end-row labeling, skips INVALID_STATE windows,
     and restricts the steady-state cut to seam-free single-label windows.
   * The shipped sample slice and its labels sidecar line up row-for-row and
@@ -63,8 +65,13 @@ class TestRequestBodies(unittest.TestCase):
     def _run_main(self, argv):
         calls = []
         outputs = {
-            ("POST", "/agents/bundle"): {"id": "bnd_1", "status": "ready"},
-            ("POST", "/agents/bundle/bnd_1/run"): {"id": "agt_1", "status": "running"},
+            ("GET", "/agents/bundles"): {"data": [
+                {"id": "bnd_base", "name": run_osm_agent.BUNDLE_NAME},
+                {"id": "bnd_emb", "name": run_osm_agent.BUNDLE_NAME_EMBEDDINGS},
+            ]},
+            ("POST", "/agents/bundle/bnd_base/run"): {"id": "agt_1", "status": "running"},
+            ("POST", "/agents/bundle/bnd_emb/run"): {"id": "agt_1", "status": "running"},
+            ("POST", "/agents/bundle/bnd_pinned/run"): {"id": "agt_1", "status": "running"},
             ("GET", "/agents/instances/agt_1"): {"id": "agt_1", "status": "completed"},
             ("GET", "/agents/instances/agt_1/events"): {"data": []},
             ("GET", "/agents/instances/agt_1/results"): {
@@ -74,7 +81,8 @@ class TestRequestBodies(unittest.TestCase):
         }
 
         def fake_request(method, url, body=None, headers=None):
-            path = url.split("archetypeai.app", 1)[1]
+            # reads carry a ?query=... string; key mocks on the path alone
+            path = url.split("archetypeai.app", 1)[1].split("?", 1)[0]
             calls.append((method, path, body))
             return outputs[(method, path)]
 
@@ -99,19 +107,29 @@ class TestRequestBodies(unittest.TestCase):
             run_osm_agent.main()
         return calls
 
-    def test_bundle_and_run_shapes(self):
-        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
-                                "--classifier", "s3://bucket/clf.safetensors",
-                                "--window-size", "64", "--step-size", "2"])
-        bundle_body = next(b for m, p, b in calls if p == "/agents/bundle")
-        self.assertEqual(bundle_body["blueprint"], "osm")
-        self.assertEqual(bundle_body["values"], {"window_size": 64, "step_size": 2})
-        self.assertEqual(bundle_body["artifacts"],
-                         {"fit-classifier": "s3://bucket/clf.safetensors"})
-
-        run_body = next(b for m, p, b in calls if p.endswith("/run"))
-        self.assertEqual(run_body["connectors"]["source"],
+    def test_resolve_by_name_and_run_shapes(self):
+        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv")])
+        paths = [p for m, p, b in calls]
+        # resolved by name via the plural read endpoint; NO bundle creation
+        self.assertIn("/agents/bundles", paths)
+        self.assertNotIn("/agents/bundle", paths)  # the singular create POST
+        run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
+        self.assertEqual(run[1], "/agents/bundle/bnd_base/run")  # exact-name match
+        self.assertEqual(run[2]["connectors"]["source"],
                          [{"type": "file", "id": "volve_states_opt_slice_04.csv"}])
+
+    def test_embeddings_selects_exact_variant(self):
+        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
+                                "--embeddings"])
+        run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
+        self.assertEqual(run[1], "/agents/bundle/bnd_emb/run")
+
+    def test_bundle_id_override_skips_lookup(self):
+        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
+                                "--bundle-id", "bnd_pinned"])
+        self.assertNotIn("/agents/bundles", [p for m, p, b in calls])
+        run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
+        self.assertEqual(run[1], "/agents/bundle/bnd_pinned/run")
 
 
 class TestEvaluate(unittest.TestCase):
