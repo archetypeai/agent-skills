@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Run the managed OSM agent end-to-end: upload a sensor CSV, create a bundle
-from the canonical `osm` blueprint pinning a fitted classifier, run it, poll
-until terminal, download the per-window predictions — and, if the input ships
-a `<input>_labels.csv` ground-truth sidecar, score the run.
+"""Run the managed OSM agent end-to-end against a PRE-PACKAGED bundle: upload a
+sensor CSV, resolve the maintained "OSM Quick Start" bundle, run it, poll until
+terminal, download the per-window predictions — and, if the input ships a
+`<input>_labels.csv` ground-truth sidecar, score the run.
 
-Stdlib-only. Each step maps to an operation in ../openapi.yaml:
-  1. Upload a CSV of sensor records to the platform files API.
-  2. Create a bundle from the `osm` blueprint, pointing its
-     `fit-classifier` artifact at a fitted classifier on S3. (create_bundle)
-  3. Run the bundle with the uploaded file bound as the source connector.
-     Each run creates a new agent instance.                    (run_bundle)
-  4. Poll the agent until it reaches a terminal state, surfacing the
-     audit-log events as they appear.            (get_agent, list_agent_events)
-  5. Fetch the run results and download the output CSV.  (get_agent_results)
+No bundle creation, no classifier URI: the platform ships canonical
+quick-start bundles (classifier + windowing already pinned). This script just
+finds one and runs it. It resolves the bundle **by name** so it is portable
+across dev/staging/prod (the bundle *id* changes per environment; the name
+does not); pass `--bundle-id` to skip the lookup.
+
+Stdlib-only. The bundle API is split singular/plural: reads are plural
+(`GET /agents/bundles`, `GET /agents/bundles/{id}`), create/run are singular
+(`POST /agents/bundle`, `POST /agents/bundle/{id}/run`).
 
 Auth / endpoint come from the environment (a local .env is loaded if present):
   ATAI_API_KEY        Bearer token (required).
@@ -21,9 +21,10 @@ Auth / endpoint come from the environment (a local .env is loaded if present):
                       (mounted at /agents), the files API at /v0.5/files.
 
 Usage:
-  python3 run_osm_agent.py --classifier s3://... --window-size 16
-  python3 run_osm_agent.py --csv my_slice.csv --classifier s3://... \
-      --window-size 64 --step-size 1
+  python3 run_osm_agent.py                      # default sample slice
+  python3 run_osm_agent.py --csv my_slice.csv
+  python3 run_osm_agent.py --embeddings         # variant that also emits embeddings
+  python3 run_osm_agent.py --bundle-id bnd_...  # skip name lookup (pin an id)
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -41,13 +43,13 @@ sys.stdout.reconfigure(line_buffering=True)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "volve_states_opt_slice_04.csv")
-# The published six-state Volve classifier this skill's sample data matches
-# (fitted at window_size=16, step_size=1 — the defaults below).
-DEFAULT_CLASSIFIER = (
-    "s3://atai-platform-dev-platform-data-us-west-2/"
-    "osm_classifier_tmp/volve-states-classifier-20260710T063913Z.safetensors"
-)
-BLUEPRINT_KEY = "osm"
+
+# Canonical pre-packaged quick-start bundles, resolved by name (portable across
+# environments). The base name is a substring of the embeddings name, so the
+# lookup selects the EXACT name match, not just the first hit.
+BUNDLE_NAME = "OSM Quick Start (Volve Six State)"
+BUNDLE_NAME_EMBEDDINGS = "OSM Quick Start (Volve Six State, Embeddings)"
+
 POLL_INTERVAL_S = 15
 TIMEOUT_S = 45 * 60
 
@@ -110,18 +112,32 @@ def upload_file(path):
         sys.exit(f"file upload failed ({e.code}): {e.read().decode(errors='replace')}")
 
 
+def resolve_bundle(agents, name):
+    """Find the pre-packaged bundle id for an exact name, via the plural
+    read endpoint's case-insensitive substring search. Portable across
+    environments: the name is stable, the id is not."""
+    q = urllib.parse.urlencode({"query": name, "limit": 50})
+    res = request("GET", f"{agents}/bundles?{q}")
+    rows = res.get("data", []) if isinstance(res, dict) else (res or [])
+    exact = [b for b in rows if b.get("name") == name]
+    if not exact:
+        seen = [b.get("name") for b in rows]
+        sys.exit(f"no bundle named {name!r} found (query returned {seen}). "
+                 f"Is it published in this environment? Pass --bundle-id to pin one.")
+    return exact[0]["id"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=DEFAULT_CSV, help="input CSV to run inference on")
-    parser.add_argument("--classifier", default=DEFAULT_CLASSIFIER,
-                        help="s3:// path to the fitted classifier safetensors")
+    parser.add_argument("--embeddings", action="store_true",
+                        help="use the variant bundle that also emits per-variate "
+                             "encoder embeddings (embedding_{variate} columns)")
+    parser.add_argument("--bundle-id",
+                        help="run this bundle id directly, skipping the name lookup")
     parser.add_argument("--window-size", type=int, default=16,
-                        help="MUST match the classifier's fit config — a mismatch "
-                             "silently degrades accuracy instead of erroring")
-    parser.add_argument("--step-size", type=int, default=1,
-                        help="rows between window starts (1 = score every row)")
-    parser.add_argument("--name", default="OSM agent run",
-                        help="human label for the bundle/agent")
+                        help="window the bundle's classifier was fit with; used "
+                             "only for the local steady-state scoring cut (16)")
     parser.add_argument("--output", default="osm-output.csv",
                         help="local path to save the classified-windows CSV")
     args = parser.parse_args()
@@ -138,23 +154,20 @@ def main():
     file_id = uploaded["file_id"]
     print(f"  file_id={file_id}  file_uid={uploaded.get('file_uid')}")
 
-    # 2. Create a bundle pinning the canonical OSM blueprint. The
-    #    `fit-classifier` artifact slot must be an s3:// URI (platform file
-    #    ids and https URLs fail with ENOENT).
-    print(f"creating bundle from blueprint '{BLUEPRINT_KEY}' ...")
-    bundle = request("POST", f"{agents}/bundle", body={
-        "blueprint": BLUEPRINT_KEY,
-        "name": args.name,
-        "description": "OSM skill reference run",
-        "values": {"window_size": args.window_size, "step_size": args.step_size},
-        "artifacts": {"fit-classifier": args.classifier},
-    })
-    print(f"  bundle_id={bundle['id']}  status={bundle['status']}")
+    # 2. Resolve the pre-packaged bundle. By name (portable) unless an id is
+    #    pinned. The bundle already pins the classifier and windowing.
+    name = BUNDLE_NAME_EMBEDDINGS if args.embeddings else BUNDLE_NAME
+    if args.bundle_id:
+        bundle_id = args.bundle_id
+        print(f"using bundle {bundle_id}")
+    else:
+        bundle_id = resolve_bundle(agents, name)
+        print(f"resolved {name!r} -> {bundle_id}")
 
     # 3. Run the bundle. No sink is given, so the runner writes one output per
     #    input, named after the input file.
     print("starting agent run ...")
-    agent = request("POST", f"{agents}/bundle/{bundle['id']}/run", body={
+    agent = request("POST", f"{agents}/bundle/{bundle_id}/run", body={
         "connectors": {"source": [{"type": "file", "id": file_id}]},
     })
     agent_id = agent["id"]
@@ -224,7 +237,9 @@ def evaluate(pred_csv, labels_csv, window):
     per_class = {}
     n = correct = n_steady = correct_steady = invalid = 0
     for row in csv.DictReader(open(pred_csv)):
-        t = int(float(row["timestamp"]))
+        # window-end key: current blueprint emits `finish_timestamp`; older
+        # runs emitted `timestamp` — accept either
+        t = int(float(row.get("finish_timestamp") or row["timestamp"]))
         pred, true = row["predicted_state"], truth.get(t)
         if pred == "INVALID_STATE" or true is None:
             invalid += 1
