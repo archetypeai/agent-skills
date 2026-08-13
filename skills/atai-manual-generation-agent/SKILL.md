@@ -88,11 +88,11 @@ blueprint blp_6va7xxnrrn9fr8ybhgz3v3zvw7 (key=mga, active=True)
   honoured: ['max_frames', 'max_new_tokens', 'prompt']
 ```
 
-That check is here because **twice in five days the setting that decided whether the
-manual was usable was one the blueprint did not wire** — `max_new_tokens`, hardcoded
-at 256, which truncated a 173 s video to 6 steps; then `prompt`, hardcoded to
-*"…10 steps or less"*. Both are fixed. The frequency is the reason to keep checking,
-not the individual defects.
+Run the check every time. The `mga` blueprint is republished often — three versions
+in one week — and each republication can change which values are wired. When one of
+these two stops being honoured, the run still succeeds and the manual quietly gets
+worse, so the preflight is the only thing standing between you and a plausible bad
+result.
 
 ### `max_new_tokens` is a FLOOR, not a ceiling
 
@@ -196,19 +196,19 @@ POST {endpoint}/agents/bundles
 | `size` | 224 | Each frame resized to a square. |
 | `parser_compute_stats` | false | Attaches template-conformance stats — useful for diagnosing a parser mismatch. |
 | `max_new_tokens` | 16384 | Exposed and honoured. A **floor**, not a ceiling — 2048 and 4096 both returned an EMPTY manual on a 173 s video. Send the default; above it nothing changes. |
-| `prompt` | (blueprint's own) | Exposed again since 2026-08-12 (PLDEV-1730). Preflight it — it has been hardcoded before. See below. |
+| `prompt` | (blueprint's own) | **Send one.** Omitting it halves the manual. Preflight it — it has been unwired before. See below. |
 
 ### On `prompt`
 
-Wired as `${values.prompt}` today, feeding `connectors.source.config.default_text`. It has been hardcoded twice before, so **preflight it rather than assuming** — and note `text_extensions: []`, which means a text input cannot be used as a back door when it is hardcoded.
+Wired as `${values.prompt}`, feeding `connectors.source.config.default_text`. Preflight it — it has been unwired before, and `text_extensions: []` means there is no text-input back door when it is.
 
-It was exposed once and **rolled back**, for a reason worth keeping: `ManualGenerationResultsParserNode` owns the output template, so **a prompt that specifies its own output format makes the parser return zero steps.** That is about format, not about custom prompts generally. A prompt saying what to *cover* parses cleanly, and gives 18 steps on the video where the hardcoded instruction gives 10:
+**The one hard rule: say what to COVER, never how to FORMAT.** `ManualGenerationResultsParserNode` owns the output template, so a prompt specifying markdown headings or its own step layout makes the parser return **zero steps** — with no error. This instruction parses cleanly and gives 18 steps where the blueprint's own gives 10:
 
 > Generate a concise, ordered list of every distinct step performed in this video, covering the procedure from the first action to the last. Include brief steps and steps that are repeated. Use up to 20 steps. Keep each step to at most 15 words. Use both what is shown and what is said.
 
-A prompt saying how to *lay the output out* (markdown headings, a `## Steps` section) does not. **Never specify an output format.**
+Useful things to put in it: how many steps to aim for, a length cap per step, whether to use narration as well as what is on screen, and an instruction not to invent steps. Things that will cost you the run: any mention of output structure.
 
-What a prompt buys, measured on the same clip: **3.2 actions bundled into the average step falls to 1.7**, and spoken-only content becomes its own step at all — with the instruction hardcoded, none of the narrated safety cautions appear. What it did *not* buy: every caution. An earlier run found three, the current one finds one, and since the two differ in blueprint, model build and token budget as well as prompt, nothing isolates the cause.
+If a run comes back with **zero steps and no warning in `/logs`**, suspect the prompt's wording before the budget — a format-shaped instruction is the one failure that produces silence rather than the reasoning-block warning.
 
 ## Step 4 — Run the bundle
 
@@ -330,9 +330,14 @@ pod.terminated  resolving blueprint: invalid config for 1 node(s):
                   ('repetition_penalty', 'seed', 'stop', 'temperature', 'top_k', 'top_p' were unexpected)
 ```
 
-The blueprint that once wired `prompt` and the seven sampling parameters (`blp_76kyqm4vjp9pt8tvfz8tks7x6t`) is dead in exactly this way: its fusion node carries config the node schema no longer accepts. **An earlier version of this skill recommended pinning that id to get `prompt`. Do not** — nothing built on it runs, and there is currently no supported way to set `prompt`.
+That signature — a `202` followed by a pod that dies about a second later — means a
+stale id, not a bad video or a bad value. Switch to the key and re-run.
 
-`GET /agents/blueprints` lists only `is_active: true` versions, so a superseded id will not appear there even while it still reads back individually. Pin an id only to reproduce one specific past run, and expect it to stop working.
+`GET /agents/blueprints` lists only `is_active: true` versions, so a superseded id
+will not appear there even while it still reads back individually. **Reading a
+blueprint successfully tells you nothing about whether a run against it will
+resolve.** Pin an id only to reproduce one specific past run, and expect it to stop
+working.
 
 ## Cleanup
 
@@ -346,20 +351,33 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 
 ## Local Setup
 
+`references/run_mga_agent.py` is **stdlib-only** — no pip install, no virtualenv.
+It needs an `.env` beside wherever you run it, with **both** variables; there is no
+default endpoint, and the endpoint takes **no `/v0.5` suffix** (the script mounts
+`/agents` and `/v0.5/files` itself):
+
+```
+ATAI_API_KEY=<dev API key>
+ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+```
+
 ```sh
-# No third-party deps — references/run_mga_agent.py is stdlib-only.
-# yt-dlp is optional, only to fetch the sample video from YouTube.
+# See exactly what would be sent — no API calls, no GPU, safe to run first.
+python3 references/run_mga_agent.py --video my_procedure.mp4 --dry-run
 
-# Drop a .env next to where you run (BOTH variables required, no default endpoint;
-# note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself):
-#   ATAI_API_KEY=<dev API key>
-#   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+# The real thing: preflight, upload, bundle, run, poll /logs, download, print.
+# ~15 minutes, most of it model loading. Defaults are the ones you want.
+python3 references/run_mga_agent.py --video my_procedure.mp4
 
-python3 references/run_mga_agent.py --video my_procedure.mp4          # key `mga`, 16384 tokens
-python3 references/run_mga_agent.py --video my_procedure.mp4 --max-frames 32
+# Offline, instant, no key: print a manual, or score one against reference steps.
+python3 references/run_mga_agent.py --show references/sample_data/mga-output-current-16384.json
 python3 references/run_mga_agent.py --score references/sample_data/mga-output-current-16384.json \
     --reference references/sample_data/40567_i2JWkDyg26A_reference_steps.csv
 ```
+
+**Start with `--dry-run`.** It resolves nothing remotely and prints the exact bundle
+and run payloads, which is the cheapest way to confirm you are sending a prompt and
+a sufficient budget before spending 15 minutes of shared GPU.
 
 ## File Layout
 
@@ -374,9 +392,7 @@ skills/atai-manual-generation-agent/
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
 │       ├── mga-output-current-16384.json                   what the defaults produce today
 │       ├── mga-output-current-4096-EMPTY.json               below the reasoning floor: 0 steps
-│       ├── mga-output-truncated-active-blueprint.json      historic: the 256-token cap
-│       ├── mga-output-max_new_tokens2048.json               historic: cap lifted
-│       └── mga-output-max_new_tokens2048-coverage-prompt.json  historic: `prompt` honoured
+│       └── three older outputs, kept as scoring fixtures
 └── tests/
     └── test_references.py        network-free
 ```

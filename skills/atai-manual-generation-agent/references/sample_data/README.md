@@ -3,21 +3,17 @@
 Reference **outputs**, not inputs. Five MGA runs over the same video, differing
 only in configuration, plus the reference step annotations to score them against.
 
-⚠️ **These three are historic evidence, captured 2026-08-08**, on blueprint versions
-that have since been superseded several times. Both controls they were built to
-demonstrate are settable on the canonical blueprint today, so run 1 is no longer
-what ships and run 3 is reproducible again — though at `max_new_tokens: 2048` it
-would now come back EMPTY, since that is below the model's reasoning floor. Kept
-because the contrast between them is the argument that got `prompt` exposed, and
-because they remain valid inputs to the offline scorer.
+The two `-current-` files are what the skill's defaults produce. The other three are
+older runs on superseded blueprints, kept because the offline scorer needs more than
+one point of comparison — not as configurations to reproduce.
 
 | File | What it is |
 |---|---|
 | `mga-output-current-16384.json` | **What the skill's defaults produce today** — canonical blueprint, `max_new_tokens: 16384`, coverage prompt. 18 steps, 11–139 s, 11/11 reference steps covered and **7/11 at IoU ≥ 0.5**, the best of the five. Reproduced byte-for-byte on two machines. |
 | `mga-output-current-4096-EMPTY.json` | Same blueprint, same prompt, `max_new_tokens: 4096`. **38 bytes, zero steps** — `job.completed`, no ERROR row, 11.3 minutes of generation spent inside the model's reasoning block. Keep this one: it is what a run below the floor looks like, and it looks like success everywhere except the step count. |
-| `mga-output-truncated-active-blueprint.json` | `max_new_tokens` hardcoded at 256. 6 steps, 16–85 s, last step cut mid-clause. **Historic** — the cap has since been lifted. |
-| `mga-output-max_new_tokens2048.json` | Same video and instruction, `max_new_tokens: 2048`. 10 steps, 16–120 s, clean. Closest to what ships today. |
-| `mga-output-max_new_tokens2048-coverage-prompt.json` | Also a coverage-oriented `prompt`. 19 steps, 11–139 s, clean. Reproducible again since `prompt` was re-exposed on 2026-08-12 — though at `max_new_tokens: 2048` it now returns EMPTY, below the model's reasoning floor. This is the file that shows what the hardcoded "10 steps or less" instruction costs. |
+| `mga-output-truncated-active-blueprint.json` | Older: a 256-token output cap. 6 steps, 16–85 s, last step cut mid-clause — what truncation looks like. |
+| `mga-output-max_new_tokens2048.json` | Older: budget raised, no caller prompt. 10 steps, 16–120 s, clean. |
+| `mga-output-max_new_tokens2048-coverage-prompt.json` | Older: budget plus a coverage prompt. 19 steps, 11–139 s — the same shape the current defaults produce. |
 | `40567_i2JWkDyg26A_reference_steps.csv` | Reference annotations: `<step>,<start_sec>,<end_sec>`, two independent annotators. |
 
 Score any of them offline, no API key needed:

@@ -74,18 +74,12 @@ import uuid
 # Target the blueprint KEY, never an id.
 #
 # A key resolves to whatever is canonical and active. A pinned id does not survive
-# republication: three `mga` versions shipped in about two hours on 2026-08-11, and
-# the id this script used to default to now FAILS AT RESOLUTION — it wires
-# generation parameters into its own fusion node that the node schema no longer
-# accepts. Reading it, creating a bundle and submitting a run all still succeed;
-# the pod dies one second after it starts with
+# republication is frequent, and a superseded id fails LATE: reading it, bundling
+# and submitting all succeed, then the pod dies about a second in with
 # `resolving blueprint: invalid config for 1 node(s)`.
 #
 # Pin an id only to reproduce a specific past run.
 BLUEPRINT_DEFAULT = "mga"
-# Kept for provenance, not for use. Both are superseded; the second is unrunnable.
-BLUEPRINT_HISTORIC_ACTIVE = "blp_0zmce3qnjp8659dp1pszdqbtx4"
-BLUEPRINT_DEAD_WITH_PARAMS = "blp_76kyqm4vjp9pt8tvfz8tks7x6t"
 
 # Says what to COVER, never how to FORMAT. ManualGenerationResultsParserNode owns
 # the output template: a prompt that specifies its own format makes the parser
@@ -339,9 +333,9 @@ def main() -> None:
                          "so 4096 returns an EMPTY manual rather than a short one, and "
                          "nothing above 16384 changes the answer")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT,
-                    help="the instruction, honoured again as ${values.prompt} since "
-                         "2026-08-12 (PLDEV-1730); the preflight warns if that "
-                         "regresses. Say what to COVER, never how to format — the "
+                    help="the instruction, honoured as ${values.prompt}; "
+                         "the preflight warns if that stops being true. "
+                         "Say what to COVER, never how to format — the "
                          "results parser owns the template and a format-overriding "
                          "prompt makes it return zero steps")
     ap.add_argument("--name", default="manual generation run")
