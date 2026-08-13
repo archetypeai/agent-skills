@@ -10,12 +10,16 @@ description: >
   step was actually performed — assembly QA, maintenance sign-off, training
   assessment, SOP compliance. Covers the runtime SOP input (`source.text ->
   PrepareSOPNode`, so one bundle serves every SOP), SOP authoring as the
-  only tuning lever (there is no `prompt` value), the two silent failures
-  that cost the most (a sink format with no registered connector, and the
-  output budget being consumed by the model's `<think>` block so a run
-  returns `results: []` while reporting `job.completed`), the output schema
-  (`step, status, timestamp_start/end, reason`), and scoring against
-  labelled clips. Do NOT use for generating a procedure from a video where
+  only tuning lever (there is no `prompt` value), and the output schema
+  (`step, status, timestamp_start/end, reason`). Also covers what a
+  12-clip measurement established about reliability, which a caller needs
+  before trusting a verdict: TVA detects a missing TOOL or PART reliably
+  but assumes the action whenever the object is on screen, so a skipped
+  step on a laid-out workstation comes back PASSED with an invented
+  reason — no SOP wording fixes it. Plus the failure that reports success
+  (`results: []` with `job.completed` when the output budget is consumed
+  by the model's `<think>` block, where a BIGGER budget makes it worse),
+  and scoring against labelled clips. Do NOT use for generating a procedure from a video where
   none exists (that is `atai-manual-generation-agent`), for one-shot
   multimodal questions over a clip (`atai-newton-fusion-model` via
   `/query`), or for time-series state classification
@@ -37,7 +41,9 @@ TVA V1 is **zero-shot**. The `tva` blueprint pins its own models (`newton-fusion
 
 ## When to Apply
 
-**Use when** the procedure is already known and the question is whether it was followed: did the operator install the o-ring, torque the fitting, apply the tape? The output is auditable — each verdict carries a time range and a reason citing what was on screen.
+**Use when** the procedure is already known and the question is whether it was followed: did the operator install the o-ring, torque the fitting, apply the tape? Each verdict carries a status, a time range and a reason.
+
+**Do not treat that output as an audit trail.** A `PASSED` verdict is not evidence the step happened, and the `reason` is a restatement of your SOP rather than a report of the video — measured, with the frames to prove it, in §1 below. **Use this to triage which recordings a human should watch, not to sign work off unreviewed.**
 
 **Do NOT use when:**
 
@@ -145,17 +151,13 @@ the `dropping N rehearsed row(s)` count in the WARN:
 `N > 0` means the answer was formed and thrown away, so no extra budget was needed at
 all — which is worth saying out loud when you report the failure upstream.
 
-### 3. Read the sink format, but never hard-code which one is broken
+### 3. Read the sink format from the blueprint document
 
-`tva` shipped for ~18 hours with a sink format that had no registered connector, and
-every run died at graph instantiation after the full ~7-minute model load. It was fixed
-on 2026-08-12.
-
-The lesson is not "avoid `json/per-request`" — that is the working format today. An
-earlier version of `run_tva_agent.py` encoded it as a denylist and then **refused every
-run against the fixed blueprint while sounding certain.** Warn on an unrecognised
-format, never refuse, and re-test before trusting a constant you measured. Neither the
-key nor a pinned id tells you whether the graph will instantiate: **read the document.**
+A sink with no registered connector dies at graph instantiation — **after** the full
+~7-minute model load, with `/results` empty. `check_sink()` reads
+`connectors.sink.config.format` in about a second and **warns rather than refuses**: a
+format observed broken once may be fixed by the time you run. Neither the key nor a
+pinned id tells you whether the graph will instantiate.
 
 ## Step 1 — Write the SOP
 
@@ -198,7 +200,7 @@ A run's inputs arrive as **one flat list of file ids**, with nothing saying whic
 
 The clip's stem alone would satisfy the matching, but then **every SOP variant collides on one name per clip.** That matters more than it sounds:
 
-**`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and dev can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job. Three runs were lost to this before the mechanism was clear.
+**`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and dev can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job.
 
 `run_tva_agent.py` does two things about it: `pair_names()` derives the ids from both the clip and the SOP, and `upload()` compares local bytes against `GET /v0.5/files/download/{file_id}` and **skips when they match**. Keep the SOP in version control too — that, not the platform's file list, is the record of what a past run was checked against.
 
@@ -221,7 +223,7 @@ POST {endpoint}/agents/bundles
 | `parser_compute_stats` | false | Attaches template-conformance stats; useful when the parser returns nothing. |
 | `parser_output_frame_indices` | true | Emits `frame_start`/`frame_end`. |
 | `prompt` | **does not exist** | Not a defect to work around — absent. The SOP replaces it. |
-| `min_temporal_similarity_threshold` | **not exposed** | The design doc's temporal-compression control. See Divergences. |
+| `min_temporal_similarity_threshold` | **not exposed** | The design doc's temporal-compression control — specified there, unreachable from a bundle. |
 
 **One bundle is enough for every clip and every SOP.** Nothing that varies per run lives in the bundle: `values` are identical across clips, and both the video and the SOP are source connector inputs supplied at run time. If you find yourself creating a bundle per input, something is in `values` that belongs in a connector.
 
@@ -290,9 +292,9 @@ The `ref` is a **relative** platform path resolving under `/v0.5`, and needs the
 | `status` | `PASSED` · `FAILED` · `MISSING` |
 | `timestamp_start/end` | Seconds. **Absent on `MISSING`** — there is no interval for a step that never happened, so handle nulls. |
 | `frame_start/end` | **SOURCE frames**, not sampled: `frame = timestamp × source_fps` (810 = 27.0 × 30). |
-| `reason` | Free text, and the most useful field — it cites what was on screen. |
+| `reason` | Free text that reads like a report of the video. **It is a restatement of your SOP step — see §1. Do not use it as evidence or as a confidence signal.** |
 
-Four properties the blueprint does not advertise:
+Five properties the blueprint does not advertise:
 
 - **`step` is 0-based, and an off-by-one fails QUIETLY.** Human-authored SOPs are 1-based. A naive join credits step 2's verdict to step 1 and reports the last step missing — which reads as a model that gave up, not a join bug. A perfect 3-of-3 run misread this way:
 
@@ -304,6 +306,7 @@ Four properties the blueprint does not advertise:
 
 - **`FAILED` and `MISSING` are different claims.** `FAILED` = attempted and done wrong; `MISSING` = never happened. Both mean "not done correctly", so a binary pass/fail label cannot distinguish them — report the split rather than collapsing it, because which one appears tells you whether the model saw an attempt.
 - **The output does NOT tile the timeline.** MGA segments contiguously, so every second must be labelled; TVA emits one row per SOP step and rows may leave gaps. **TVA is verification, not segmentation.**
+- **`len(results)` is NOT the step count.** The model repeats itself and the parser keeps every repetition — one 3-step SOP returned **21 rows**. Collapse by `step` before scoring, and prefer the informative row: a placeholder (`reason: "..."`, no timestamps) can arrive *first*. Nothing in the pipeline compares the row count to the SOP's step count, so a self-evidently wrong result passes through as data.
 - **Generation is deterministic.** The same clip and SOP produced byte-identical output across two API keys in two orgs, 25 minutes apart (678 bytes, md5 `7eb028ac7d39938b261be17eaaf3e2bb`). A matching digest means an exact reproduction; a differing one means something really changed.
 
 ## Scoring — and the trap in it
@@ -340,6 +343,8 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
 | `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
+| **A step that was skipped came back `PASSED`** | **Expected, and not fixable from the SOP.** The part was on screen, so the action was assumed — see §1. Human-review every `PASSED` |
+| `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue. Do not re-upload what is already there |
 | Verdicts for some steps only | The SOP had a wrapped line, or the budget truncated mid-answer |
 | Last `reason` cut mid-sentence | Raise `max_new_tokens` — this is the one case where raising helps |
 | Every step scores correct on fail clips | A scorer crediting NOT REPORTED as a correct FAIL |
@@ -347,17 +352,8 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | `MISSING` rows crash the consumer | They carry no `timestamp_start/end` |
 | Run "hangs" at `running` | The `status` field lags; read `/logs` |
 | Pod not started long after `job.admitted` | Another org's job. Invisible from your instance list |
-| Source resolution didn't help | Every frame is resized to `size × size` (224) |
-
-## Divergences from the design doc
-
-Observations for the algorithm author, not defects.
-
-- **`min_temporal_similarity_threshold` is not exposed.** The doc devotes its longest section to the temporal compression algorithm it controls — four stages, MAD-based adaptive segmentation, a documented *"70% compression with a 25% performance improvement"*. The blueprint wires only `model` and `max_new_tokens` into the fusion node, so **the headline algorithmic contribution of TVA V1 is not reachable from a bundle and cannot be evaluated through this API.**
-- **Audio is in V1.** The doc says F1-0 adds audio in a later version; the blueprint runs `whisper:large-v3` into `prompt.audio` today. It also loads whisper for videos with **no audio track**, costing ~40 s per run for nothing.
-- **`step` is 0-based and undocumented.** The doc specifies `step: <int>` without saying where it starts.
-- **`MISSING` rows carrying no timestamps** matches the doc's own format (`step N: MISSING, reason: <reason>`), but belongs in the output schema, since consumers must handle nulls.
-- **The model is fp8** — `f1_0_35b_a3b_fp8_base_040625b4d0750b`, confirming the 35B/3B-active MoE description and adding quantization the doc does not mention.
+| Source resolution didn't help | Every frame is resized to `size × size` (224), so 1080p carries no more detail than 480p |
+| Raising `size` returned nothing | Visual tokens grow quadratically with it, starving generation. One run at 448 had to drop to 32 frames and produced no verdicts |
 
 ## Cleanup
 
@@ -409,7 +405,6 @@ skills/atai-task-verification-agent/
 │       ├── 1_fail_2_pass_3_pass_A.mp4         step 1 skipped — the o-ring is never fitted
 │       ├── oring-numbered.txt                 the 3-step SOP both clips were run against
 │       ├── tva-output-1_pass_2_pass_3_pass_A.json               3 PASSED, with reasons
-│       ├── tva-output-sealant-CORRECT-MISSING.json              correct MISSING on an absent prop
 │       ├── tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json  correct MISSING on a skipped step
 │       ├── tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json    PASSED on a step never performed
 │       └── tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json the reasoning overflow, 44 bytes

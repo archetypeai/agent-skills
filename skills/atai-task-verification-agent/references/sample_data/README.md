@@ -34,20 +34,19 @@ committed output predates the current default of 5760.
 | `1_fail_2_pass_3_pass_A.mp4` | Step 1 skipped — **the O-ring is never fitted**, though the rings sit on the mat throughout. 7.5 MB. |
 | `oring-numbered.txt` | The 3-step SOP both clips were run against, one step per line. |
 | `tva-output-1_pass_2_pass_3_pass_A.json` | Three `PASSED` verdicts with timestamps and reasons. 678 bytes. |
-| `tva-output-sealant-CORRECT-MISSING.json` | The all-pass clip, run with step 3 replaced by *"The worker squeezes thread sealant from a tube onto the manifold port"* — a prop that appears in **no** clip. Steps 1–2 `PASSED`, step 3 **correctly** `MISSING`: *"No thread sealant tube is shown or used in the video."* |
 | `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproducible — its clip ships. |
 | `tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json` | The **same clip at an adequate budget**: steps 1–2 `PASSED`, step 3 correctly `MISSING` — *"no wrench is introduced"*. This is what the shipped default returns. |
 | `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | The **same clip at `max_new_tokens: 2048`**: `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
 
 ## Read these two together — they are the whole finding
 
-| output | what the model was asked | what it answered |
+| output | the object the step needs | what it answered |
 |---|---|---|
-| `sealant-CORRECT-MISSING` | did the worker apply sealant? *(no such prop anywhere in the video)* | `MISSING` ✅ |
-| `1_fail…A-FALSE-PASS` | did the worker fit the O-ring? *(the rings are on the mat, untouched)* | `PASSED` ❌ |
+| `1_pass_2_pass_3_fail_A-CORRECT-MISSING` | the wrench — **never enters frame** | `MISSING` ✅ |
+| `1_fail_2_pass_3_pass_A-FALSE-PASS` | the O-ring — **on the mat throughout, untouched** | `PASSED` ❌ |
 
-Both actions are absent from the footage. The only difference is whether the **object**
-is on screen.
+Neither action happens in its clip. The only difference is whether the **object** is on
+screen.
 
 The model reliably answers **"is this thing in the video at all?"** — and when the
 object is present, it assumes the action happened. A workstation has its parts laid
@@ -95,7 +94,7 @@ the `dropping N` count instead — see SKILL.md.
 
 | clip | reproduces |
 |---|---|
-| `1_pass_2_pass_3_pass_A.mp4` | the 3-`PASSED` output, and the sealant correct-rejection |
+| `1_pass_2_pass_3_pass_A.mp4` | the 3-`PASSED` output |
 | `1_pass_2_pass_3_fail_A.mp4` | a correct `MISSING` at the default, **and** the empty result at `--max-new-tokens 2048` |
 | `1_fail_2_pass_3_pass_A.mp4` | **the false pass** |
 
