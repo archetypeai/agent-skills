@@ -9,7 +9,7 @@ Stdlib only — no pip install, no virtualenv. Put a .env next to where you run:
     python3 run_mga_agent.py --video procedure.mp4
     python3 run_mga_agent.py --video procedure.mp4 --blueprint mga    # active blueprint
     python3 run_mga_agent.py --dry-run --video procedure.mp4
-    python3 run_mga_agent.py --score out.jsonl --reference steps.csv  # offline
+    python3 run_mga_agent.py --score out.json --reference steps.csv   # offline
 
 Budget ~15 minutes per run: ~7.5 min of model download and load happens on EVERY
 run (nothing is cached), then roughly 2.5x realtime processing. The platform
@@ -246,8 +246,21 @@ def fetch_results(agent_id: str, out_path: str) -> str | None:
 
 
 def load_manual(path: str) -> list[dict]:
-    with open(path) as f:
-        return json.loads(f.read().strip().splitlines()[0])["results"]
+    """Steps from an MGA output file.
+
+    MGA writes ONE JSON DOCUMENT per run — the results metadata reports
+    `file_extension: "json"` and the body parses as a single object. Line-delimited
+    bodies are still accepted so older files keep working.
+    """
+    raw = open(path, encoding="utf-8").read().strip()
+    if not raw:
+        return []
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError:
+        doc = [json.loads(l) for l in raw.splitlines() if l.strip()]
+    rec = doc[0] if isinstance(doc, list) else doc
+    return rec.get("results", [])
 
 
 def show(path: str) -> None:
@@ -332,11 +345,11 @@ def main() -> None:
                          "results parser owns the template and a format-overriding "
                          "prompt makes it return zero steps")
     ap.add_argument("--name", default="manual generation run")
-    ap.add_argument("--output", default="mga-output.jsonl")
-    ap.add_argument("--score", metavar="JSONL", help="offline: score an output")
+    ap.add_argument("--output", default="mga-output.json")
+    ap.add_argument("--score", metavar="FILE", help="offline: score an output")
     ap.add_argument("--reference", metavar="CSV",
                     help="reference steps: <step>,<start_sec>,<end_sec>")
-    ap.add_argument("--show", metavar="JSONL", help="offline: print a manual")
+    ap.add_argument("--show", metavar="FILE", help="offline: print a manual")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 

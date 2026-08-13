@@ -10,7 +10,7 @@ description: >
   back to the video. Covers video suitability (the ~5-minute ceiling, the
   audio-track requirement), the bundle request shape (`max_frames`,
   `max_new_tokens`, and the `prompt` the active blueprint does NOT
-  expose), the run/poll/results lifecycle, the output JSONL schema
+  expose), the run/poll/results lifecycle, the output JSON schema
   (`step, instruction, frame_start/end, timestamp_start/end`), and scoring
   against reference step annotations. Do NOT use for verifying that a task
   was performed correctly against a reference procedure (that is the `tva`
@@ -208,12 +208,18 @@ Between `input_started` and the terminal event there are **zero log rows** acros
 
 ```python
 GET {endpoint}/agents/instances/{agent_id}/results
-→ {"data": [{"data": {"filename": "…jsonl", "ref": "/files/download/…"}}]}
+→ {"data": [{"data": {"filename": "…_0001.json", "file_extension": "json",
+                      "ref": "/files/download/…"}}]}
 ```
 
 The `ref` is a **relative** platform path that resolves under `/v0.5` and needs the bearer token. Run outputs do **not** expire.
 
-## Output JSONL — one record per video
+## Output JSON — one document per run
+
+**It is JSON, not JSONL.** The results metadata says so (`file_extension: "json"`,
+filename ending `.json`) and the body parses as a single object. A reader that
+assumes one-record-per-line happens to work on a single-video run and breaks the
+moment it does not.
 
 ```json
 {"id":"clip","results":[
@@ -314,7 +320,7 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 
 python3 references/run_mga_agent.py --video my_procedure.mp4          # key `mga`, 16384 tokens
 python3 references/run_mga_agent.py --video my_procedure.mp4 --max-frames 32
-python3 references/run_mga_agent.py --score references/sample_data/mga-output-max_new_tokens2048-coverage-prompt.jsonl \
+python3 references/run_mga_agent.py --score references/sample_data/mga-output-max_new_tokens2048-coverage-prompt.json \
     --reference references/sample_data/40567_i2JWkDyg26A_reference_steps.csv
 ```
 
@@ -329,9 +335,9 @@ skills/atai-manual-generation-agent/
 │   └── sample_data/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
-│       ├── mga-output-truncated-active-blueprint.jsonl      historic: the 256-token cap
-│       ├── mga-output-max_new_tokens2048.jsonl               historic: cap lifted
-│       └── mga-output-max_new_tokens2048-coverage-prompt.jsonl  historic: `prompt` honoured
+│       ├── mga-output-truncated-active-blueprint.json      historic: the 256-token cap
+│       ├── mga-output-max_new_tokens2048.json               historic: cap lifted
+│       └── mga-output-max_new_tokens2048-coverage-prompt.json  historic: `prompt` honoured
 └── tests/
     └── test_references.py        network-free
 ```

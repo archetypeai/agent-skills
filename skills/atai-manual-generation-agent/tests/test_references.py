@@ -152,9 +152,9 @@ class TestSampleOutputs(unittest.TestCase):
     """The three committed outputs, and the invariants of MGA's schema."""
 
     FILES = {
-        "truncated": "mga-output-truncated-active-blueprint.jsonl",
-        "budget": "mga-output-max_new_tokens2048.jsonl",
-        "budget_prompt": "mga-output-max_new_tokens2048-coverage-prompt.jsonl",
+        "truncated": "mga-output-truncated-active-blueprint.json",
+        "budget": "mga-output-max_new_tokens2048.json",
+        "budget_prompt": "mga-output-max_new_tokens2048-coverage-prompt.json",
     }
 
     def steps(self, key):
@@ -244,7 +244,7 @@ class TestScoringSemantics(unittest.TestCase):
 
     def test_scoring_reports_recall_not_precision(self):
         """A reference procedure is not an inventory, so precision would mislead."""
-        out = self._score_output("mga-output-max_new_tokens2048.jsonl")
+        out = self._score_output("mga-output-max_new_tokens2048.json")
         self.assertIn("recall @ IoU>=", out)
         self.assertNotIn("precision", out.lower())
 
@@ -256,8 +256,8 @@ class TestScoringSemantics(unittest.TestCase):
                     return int(line.split(":")[1].split("/")[0])
             self.fail(f"no recall line for {name}")
 
-        self.assertGreater(recall("mga-output-max_new_tokens2048.jsonl"),
-                           recall("mga-output-truncated-active-blueprint.jsonl"))
+        self.assertGreater(recall("mga-output-max_new_tokens2048.json"),
+                           recall("mga-output-truncated-active-blueprint.json"))
 
 
 class TestRequestShapes(unittest.TestCase):
@@ -298,6 +298,30 @@ class TestRequestShapes(unittest.TestCase):
         default = re.search(r'"--max-new-tokens", type=int, default=(\d+)', RUNNER_SRC)
         self.assertIsNotNone(default)
         self.assertGreaterEqual(int(default.group(1)), 16384)
+
+    def test_output_is_one_json_document_not_jsonl(self):
+        """MGA reports file_extension: "json" and the body is a single object.
+        A line-oriented reader works by accident on one video and breaks on two."""
+        for name in ("mga-output-truncated-active-blueprint.json",
+                     "mga-output-max_new_tokens2048.json",
+                     "mga-output-max_new_tokens2048-coverage-prompt.json"):
+            raw = open(os.path.join(DATA, name), encoding="utf-8").read().strip()
+            doc = json.loads(raw)                      # would raise if JSONL
+            self.assertIsInstance(doc, dict)
+            self.assertIn("results", doc)
+
+    def test_loader_accepts_both_shapes(self):
+        """Older files are line-delimited; do not strand anyone holding one."""
+        import tempfile, os as _os
+        rec = {"id": "x", "results": [{"step": 0, "instruction": "Do the thing."}]}
+        for body in (json.dumps(rec), json.dumps(rec) + "\n"):
+            fd, path = tempfile.mkstemp(suffix=".json")
+            with _os.fdopen(fd, "w") as f:
+                f.write(body)
+            try:
+                self.assertEqual(len(mga.load_manual(path)), 1)
+            finally:
+                _os.unlink(path)
 
     def test_uploads_are_uniquely_named(self):
         """file_id is a mutable, org-wide pointer: a plain basename lets a
