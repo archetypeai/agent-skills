@@ -59,21 +59,19 @@ POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 
 `POST /agents/bundle` (singular) returns **404**. Some older clients still use it.
 
-## ⚠️ Check which values are real — read before anything else
+## ⚠️ Two values decide whether you get a manual — read before anything else
 
-Twice in five days the one setting that decided whether the manual was usable was a setting the blueprint did not expose. Both are exposed again today. Neither fix is a reason to stop checking — the point is the frequency, and that the failure is silent every time.
+Both are settable today. Both fail silently when they are wrong.
 
-| | status today | what it cost while unreachable |
-|---|---|---|
-| `max_new_tokens` | ✅ wired, default **16384** | hardcoded at 256: a 173 s video truncated to 6 steps, the last cut mid-clause |
-| `prompt` | ✅ wired (**PLDEV-1730**, canonical `blp_6va7xx…` from 2026-08-12) | hardcoded to "10 steps or less": 10 steps instead of 18, 3.2 actions bundled into each instead of 1.7, and no spoken caution surfaced as its own step |
+| Send | Why |
+|---|---|
+| `max_new_tokens: 16384` (the blueprint default) | It is a **floor**. Below it you get an empty manual, reported as success. |
+| a `prompt` saying what to **cover** | Omit it and the blueprint's own instruction applies, halving the manual. Never specify an output *format* — the parser owns the template and returns zero steps. |
 
-**A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector.** Nothing in the response tells you: setting an unwired value returns **HTTP 201** and echoes it straight back in `values`. Preflight it — `references/run_mga_agent.py` does this on every run and prints both halves, so silence never has to be read as success:
-
-```
-blueprint blp_6va7xxnrrn9fr8ybhgz3v3zvw7 (key=mga, active=True)
-  honoured: ['max_frames', 'max_new_tokens', 'prompt']
-```
+And **check that they are honoured**, rather than assuming. A value is real only if
+it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by
+some node or connector. Nothing in the response tells you: an unwired value returns
+**HTTP 201** and is echoed straight back at you in `values`.
 
 ```python
 doc = GET(f"{endpoint}/agents/blueprints/{blueprint}")["document"]
@@ -82,9 +80,23 @@ inert = [k for k in my_values
          if k not in doc["values"] or f"${{values.{k}}}" not in wired]
 ```
 
+`references/run_mga_agent.py` runs that before every run and prints both halves, so
+silence never has to be read as success:
+
+```
+blueprint blp_6va7xxnrrn9fr8ybhgz3v3zvw7 (key=mga, active=True)
+  honoured: ['max_frames', 'max_new_tokens', 'prompt']
+```
+
+That check is here because **twice in five days the setting that decided whether the
+manual was usable was one the blueprint did not wire** — `max_new_tokens`, hardcoded
+at 256, which truncated a 173 s video to 6 steps; then `prompt`, hardcoded to
+*"…10 steps or less"*. Both are fixed. The frequency is the reason to keep checking,
+not the individual defects.
+
 ### `max_new_tokens` is a FLOOR, not a ceiling
 
-The model **reasons before it answers**, and pays for the reasoning out of this same budget. Set it too low and generation ends inside the reasoning block having never emitted an answer. Every signal says success: `job.completed`, no ERROR row, every HTTP call 2xx, and a 38-byte output file containing `{"id": "…", "results": []}`.
+The model **reasons before it answers**, and pays for the reasoning out of this same budget. Set it too low and generation ends inside the reasoning block having never emitted an answer. Every signal says success: `job.completed`, no ERROR row, every HTTP call 2xx, and a 38-byte output containing `{"id": "…", "results": []}`.
 
 Measured on one 173 s video, one variable, 2026-08-13:
 
@@ -102,30 +114,24 @@ WARN parser.running  ManualGenerationResultsParserNode: generation ended inside 
   row(s). Raise `max_new_tokens` if the reasoning was truncated.
 ```
 
+`sample_data/mga-output-current-4096-EMPTY.json` is what this produces, kept as a
+fixture because nothing else distinguishes it from a good run.
+
 ### What a caller-supplied `prompt` is worth
 
-Same clip, same `max_frames`, only the instruction differing — the blueprint's hardcoded "10 steps or less" versus a coverage instruction:
+Same clip, same `max_frames`, only the instruction differing — the blueprint's hardcoded "10 steps or less" against a coverage instruction:
 
 | | hardcoded | coverage prompt |
 |---|---|---|
 | steps | 10 | **18** |
-| ref steps found at IoU ≥ 0.5 | 4/11 | **7/11** |
-| spoken-only cautions | dropped | present |
-
-**Judge a manual by whether it can be followed.** The clearest signal is how many
-actions get bundled into one step — an operator cannot tick off "apply the parking
-brake" separately from "switch off the ignition", and each step carries one frame
-thumbnail however many actions it contains. Scoring the same clip both ways:
-
-| | hardcoded prompt | coverage prompt |
-|---|---|---|
-| actions per step | 3.2 avg, 7 max | **1.7 avg, 4 max** |
+| actions bundled per step | 3.2 avg, 7 max | **1.7 avg, 4 max** |
 | ref steps at IoU ≥ 0.5 | 4/11 | **7/11** |
 | ref steps at IoU ≥ 0.3 | **10/11** | 9/11 |
+| spoken cautions as their own step | 0 | 1 |
 
-The gain is in temporal precision, not verbosity. Note the trap in scoring this: at a *loose* threshold the 10-step version scores **higher** (10/11 vs 9/11 at IoU ≥ 0.3), because MGA tiles the timeline contiguously and fewer steps means longer ones that overlap a reference interval more easily. Coarser segmentation flatters loose-threshold recall while being less useful as a manual.
+**Judge a manual by whether it can be followed**, and note that the last two rows disagree with that judgement. At the *loose* threshold the 10-step version scores **higher**, because MGA tiles the timeline contiguously so fewer steps means longer ones that overlap a reference interval more easily. Coarser segmentation flatters loose-threshold recall while being worse to work from: an operator cannot tick off "apply the parking brake" separately from "switch off the ignition", and each step carries one frame thumbnail however many actions it contains.
 
-Where the remaining error sits is worth checking per step rather than in aggregate: on the current run, every score below 0.4 came from **two pairs of reference steps collapsing onto one prediction each** (remove-the-nuts with remove-the-wheel; tighten with put-things-back). Every other step scored 0.5–0.69. That is a prompt-shaped problem, not a model ceiling.
+Where the remaining error sits is worth checking per step rather than in aggregate. On the current run every score below 0.4 came from **two pairs of reference steps collapsing onto one prediction each** (remove-the-nuts with remove-the-wheel; tighten with put-things-back); every other step scored 0.5–0.69. That is prompt-shaped, not a model ceiling — an instruction asking for those as separate steps would likely split them. Untested.
 
 ## Step 1 — Choose a video
 
