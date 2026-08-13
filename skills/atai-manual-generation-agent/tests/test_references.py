@@ -302,7 +302,9 @@ class TestRequestShapes(unittest.TestCase):
     def test_output_is_one_json_document_not_jsonl(self):
         """MGA reports file_extension: "json" and the body is a single object.
         A line-oriented reader works by accident on one video and breaks on two."""
-        for name in ("mga-output-truncated-active-blueprint.json",
+        for name in ("mga-output-current-16384.json",
+                     "mga-output-current-4096-EMPTY.json",
+                     "mga-output-truncated-active-blueprint.json",
                      "mga-output-max_new_tokens2048.json",
                      "mga-output-max_new_tokens2048-coverage-prompt.json"):
             raw = open(os.path.join(DATA, name), encoding="utf-8").read().strip()
@@ -322,6 +324,29 @@ class TestRequestShapes(unittest.TestCase):
                 self.assertEqual(len(mga.load_manual(path)), 1)
             finally:
                 _os.unlink(path)
+
+    def test_current_defaults_sample_beats_the_historic_ones(self):
+        """The shipped configuration should be the best row, or the defaults are
+        wrong. 18 steps against 10, and IoU>=0.5 of 7/11 against 4/11."""
+        cur = mga.load_manual(os.path.join(DATA, "mga-output-current-16384.json"))
+        old = mga.load_manual(os.path.join(DATA, "mga-output-max_new_tokens2048.json"))
+        self.assertEqual(len(cur), 18)
+        self.assertGreater(len(cur), len(old))
+
+    def test_the_empty_sample_really_is_empty(self):
+        """A run below the reasoning floor: job.completed, no error, no steps.
+        Kept as a fixture because nothing else distinguishes it from success."""
+        path = os.path.join(DATA, "mga-output-current-4096-EMPTY.json")
+        self.assertEqual(mga.load_manual(path), [])
+        self.assertLess(os.path.getsize(path), 100)
+
+    def test_scoring_an_empty_manual_does_not_crash(self):
+        """It should score an honest zero rather than raising on preds[-1]."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mga.score(os.path.join(DATA, "mga-output-current-4096-EMPTY.json"),
+                      os.path.join(DATA, "40567_i2JWkDyg26A_reference_steps.csv"))
+        self.assertIn("0/11", buf.getvalue())
 
     def test_uploads_are_uniquely_named(self):
         """file_id is a mutable, org-wide pointer: a plain basename lets a

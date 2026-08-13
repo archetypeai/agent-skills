@@ -66,9 +66,14 @@ Twice in five days the one setting that decided whether the manual was usable wa
 | | status today | what it cost while unreachable |
 |---|---|---|
 | `max_new_tokens` | ✅ wired, default **16384** | hardcoded at 256: a 173 s video truncated to 6 steps, the last cut mid-clause |
-| `prompt` | ✅ wired (**PLDEV-1730**, canonical `blp_6va7xx…` from 2026-08-12) | hardcoded to "10 steps or less": 10 steps instead of 18, two spoken safety cautions dropped |
+| `prompt` | ✅ wired (**PLDEV-1730**, canonical `blp_6va7xx…` from 2026-08-12) | hardcoded to "10 steps or less": 10 steps instead of 18, 3.2 actions bundled into each instead of 1.7, and no spoken caution surfaced as its own step |
 
-**A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector.** Nothing in the response tells you: setting an unwired value returns **HTTP 201** and echoes it straight back in `values`. Preflight it — `references/run_mga_agent.py` does this on every run and prints a warning:
+**A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector.** Nothing in the response tells you: setting an unwired value returns **HTTP 201** and echoes it straight back in `values`. Preflight it — `references/run_mga_agent.py` does this on every run and prints both halves, so silence never has to be read as success:
+
+```
+blueprint blp_6va7xxnrrn9fr8ybhgz3v3zvw7 (key=mga, active=True)
+  honoured: ['max_frames', 'max_new_tokens', 'prompt']
+```
 
 ```python
 doc = GET(f"{endpoint}/agents/blueprints/{blueprint}")["document"]
@@ -346,7 +351,7 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 
 python3 references/run_mga_agent.py --video my_procedure.mp4          # key `mga`, 16384 tokens
 python3 references/run_mga_agent.py --video my_procedure.mp4 --max-frames 32
-python3 references/run_mga_agent.py --score references/sample_data/mga-output-max_new_tokens2048-coverage-prompt.json \
+python3 references/run_mga_agent.py --score references/sample_data/mga-output-current-16384.json \
     --reference references/sample_data/40567_i2JWkDyg26A_reference_steps.csv
 ```
 
@@ -361,6 +366,8 @@ skills/atai-manual-generation-agent/
 │   └── sample_data/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
+│       ├── mga-output-current-16384.json                   what the defaults produce today
+│       ├── mga-output-current-4096-EMPTY.json               below the reasoning floor: 0 steps
 │       ├── mga-output-truncated-active-blueprint.json      historic: the 256-token cap
 │       ├── mga-output-max_new_tokens2048.json               historic: cap lifted
 │       └── mga-output-max_new_tokens2048-coverage-prompt.json  historic: `prompt` honoured
