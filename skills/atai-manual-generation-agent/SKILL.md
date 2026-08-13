@@ -107,7 +107,20 @@ Same clip, same `max_frames`, only the instruction differing — the blueprint's
 | ref steps found at IoU ≥ 0.5 | 4/11 | **7/11** |
 | spoken-only cautions | dropped | present |
 
+**Judge a manual by whether it can be followed.** The clearest signal is how many
+actions get bundled into one step — an operator cannot tick off "apply the parking
+brake" separately from "switch off the ignition", and each step carries one frame
+thumbnail however many actions it contains. Scoring the same clip both ways:
+
+| | hardcoded prompt | coverage prompt |
+|---|---|---|
+| actions per step | 3.2 avg, 7 max | **1.7 avg, 4 max** |
+| ref steps at IoU ≥ 0.5 | 4/11 | **7/11** |
+| ref steps at IoU ≥ 0.3 | **10/11** | 9/11 |
+
 The gain is in temporal precision, not verbosity. Note the trap in scoring this: at a *loose* threshold the 10-step version scores **higher** (10/11 vs 9/11 at IoU ≥ 0.3), because MGA tiles the timeline contiguously and fewer steps means longer ones that overlap a reference interval more easily. Coarser segmentation flatters loose-threshold recall while being less useful as a manual.
+
+Where the remaining error sits is worth checking per step rather than in aggregate: on the current run, every score below 0.4 came from **two pairs of reference steps collapsing onto one prediction each** (remove-the-nuts with remove-the-wheel; tighten with put-things-back). Every other step scored 0.5–0.69. That is a prompt-shaped problem, not a model ceiling.
 
 ## Step 1 — Choose a video
 
@@ -148,12 +161,20 @@ The **declared** `Content-Type` is enforced against a MIME allowlist, not the by
 
 **No `artifacts` map** — the blueprint pins its own models. This is the main shape difference from `osm`/`red`.
 
+**Send a `prompt`.** Omit it and the blueprint's own instruction applies, which on
+current versions has read *"…with 10 steps or less"* — halving the manual for a
+reason nothing in the response reveals.
+
 ```json
 POST {endpoint}/agents/bundles
 {
   "blueprint": "mga",
   "name": "manual generation run",
-  "values": {"max_frames": 64}
+  "values": {
+    "max_frames": 64,
+    "max_new_tokens": 16384,
+    "prompt": "Generate a concise, ordered list of every distinct step performed in this video, covering the procedure from the first action to the last. Include brief steps and steps that are repeated. Use up to 20 steps. Keep each step to at most 15 words. Use both what is shown and what is said."
+  }
 }
 → 201 {"id": "bnd_…", "status": "ready", "is_canonical": false}
 ```
@@ -163,26 +184,31 @@ POST {endpoint}/agents/bundles
 | `max_frames` | 16 | Frames uniformly sampled across the whole video. 64 is the reader/preprocessor batch size. **No validation at all** — 16, 512, 1024 and `-1` are all accepted as `ready`. The arithmetic ceiling from `preprocessor_max_pixels` (24 Mi at `size: 224`) is 501 frames. |
 | `size` | 224 | Each frame resized to a square. |
 | `parser_compute_stats` | false | Attaches template-conformance stats — useful for diagnosing a parser mismatch. |
-| `max_new_tokens` | 2048 | Exposed and honoured. **Set it to 4096** — 2048 has returned an empty manual (see above). |
-| `prompt` | **not exposed** | Hardcoded, and it is what caps the manual at ~10 steps. See below. |
+| `max_new_tokens` | 16384 | Exposed and honoured. A **floor**, not a ceiling — 2048 and 4096 both returned an EMPTY manual on a 173 s video. Send the default; above it nothing changes. |
+| `prompt` | (blueprint's own) | Exposed again since 2026-08-12 (PLDEV-1730). Preflight it — it has been hardcoded before. See below. |
 
 ### On `prompt`
 
-Hardcoded as `connectors.source.config.default_text`, with `text_extensions: []` disabling text inputs entirely. It was exposed once and **rolled back**, for a reason worth understanding before it is exposed again: `ManualGenerationResultsParserNode` owns the output template, so **a prompt that specifies its own output format makes the parser return zero steps.**
+Wired as `${values.prompt}` today, feeding `connectors.source.config.default_text`. It has been hardcoded twice before, so **preflight it rather than assuming** — and note `text_extensions: []`, which means a text input cannot be used as a back door when it is hardcoded.
 
-That is about format, not about custom prompts generally — and the rollback threw out the useful half with the dangerous half. A prompt saying what to *cover* parses cleanly, and produced 19 well-formed steps on the video where the hardcoded instruction produces 10:
+It was exposed once and **rolled back**, for a reason worth keeping: `ManualGenerationResultsParserNode` owns the output template, so **a prompt that specifies its own output format makes the parser return zero steps.** That is about format, not about custom prompts generally. A prompt saying what to *cover* parses cleanly, and gives 18 steps on the video where the hardcoded instruction gives 10:
 
 > Generate a concise, ordered list of every distinct step performed in this video, covering the procedure from the first action to the last. Include brief steps and steps that are repeated. Use up to 20 steps. Keep each step to at most 15 words. Use both what is shown and what is said.
 
-A prompt saying how to *lay the output out* (markdown headings, a `## Steps` section) does not. Pass it anyway if you like — it is accepted, echoed back, and ignored — but do not attribute any behaviour to it. When PLDEV-1730 restores it, **never specify an output format.**
+A prompt saying how to *lay the output out* (markdown headings, a `## Steps` section) does not. **Never specify an output format.**
+
+What a prompt buys, measured on the same clip: **3.2 actions bundled into the average step falls to 1.7**, and spoken-only content becomes its own step at all — with the instruction hardcoded, none of the narrated safety cautions appear. What it did *not* buy: every caution. An earlier run found three, the current one finds one, and since the two differ in blueprint, model build and token budget as well as prompt, nothing isolates the cause.
 
 ## Step 4 — Run the bundle
 
 ```json
 POST {endpoint}/agents/bundles/{bundle_id}/run
-{"connectors": {"source": [{"type": "file", "id": "clip.mp4", "format": "mp4"}]}}
+{"connectors": {"source": [{"type": "file",
+                            "id": "clip-20260813T154418Z-410f.mp4", "format": "mp4"}]}}
 → 202 {"id": "agt_…", "status": "running"}
 ```
+
+The `id` is whatever `file_id` the upload returned — suffix it, see below.
 
 **202, not 201.** A client that treats only 201 as success reports a failure while the agent runs unattended on the GPU with nothing collecting its output.
 
