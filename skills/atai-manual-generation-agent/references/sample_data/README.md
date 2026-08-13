@@ -3,12 +3,13 @@
 Reference **outputs**, not inputs. Three MGA runs over the same video, differing
 only in configuration, plus the reference step annotations to score them against.
 
-⚠️ **These three are historic evidence, captured 2026-08-08. None of them reproduces
-today.** The blueprint that wired `max_new_tokens` and `prompt` has been superseded
-twice since; `max_new_tokens` is now settable on the canonical blueprint (so run 1 is
-no longer what ships), and `prompt` is not (so run 3 is no longer reachable at all —
-PLDEV-1730). They are kept because the *contrast between them* is the argument for
-exposing `prompt`, and because they remain valid inputs to the offline scorer.
+⚠️ **These three are historic evidence, captured 2026-08-08**, on blueprint versions
+that have since been superseded several times. Both controls they were built to
+demonstrate are settable on the canonical blueprint today, so run 1 is no longer
+what ships and run 3 is reproducible again — though at `max_new_tokens: 2048` it
+would now come back EMPTY, since that is below the model's reasoning floor. Kept
+because the contrast between them is the argument that got `prompt` exposed, and
+because they remain valid inputs to the offline scorer.
 
 | File | What it is |
 |---|---|

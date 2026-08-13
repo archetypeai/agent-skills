@@ -61,12 +61,12 @@ POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 
 ## ⚠️ Check which values are real — read before anything else
 
-Twice now the one setting that decides whether the manual is usable has been a setting the blueprint does not expose. It is not the same setting both times, so verify rather than remember.
+Twice in five days the one setting that decided whether the manual was usable was a setting the blueprint did not expose. Both are exposed again today. Neither fix is a reason to stop checking — the point is the frequency, and that the failure is silent every time.
 
-| | status | effect when unreachable |
+| | status today | what it cost while unreachable |
 |---|---|---|
-| `max_new_tokens` | **fixed** — wired as `${values.max_new_tokens}`, default 2048 | was hardcoded at 256; truncated a 173 s video to 6 steps, the last cut mid-clause |
-| `prompt` | **still unreachable** (PLDEV-1730) | the blueprint's own instruction caps the manual at ~10 steps regardless of how much happens in the video |
+| `max_new_tokens` | ✅ wired, default **16384** | hardcoded at 256: a 173 s video truncated to 6 steps, the last cut mid-clause |
+| `prompt` | ✅ wired (**PLDEV-1730**, canonical `blp_6va7xx…` from 2026-08-12) | hardcoded to "10 steps or less": 10 steps instead of 18, two spoken safety cautions dropped |
 
 **A value is honoured only if it is declared in the blueprint's `values` *and* referenced as `${values.<key>}` by some node or connector.** Nothing in the response tells you: setting an unwired value returns **HTTP 201** and echoes it straight back in `values`. Preflight it — `references/run_mga_agent.py` does this on every run and prints a warning:
 
@@ -77,19 +77,37 @@ inert = [k for k in my_values
          if k not in doc["values"] or f"${{values.{k}}}" not in wired]
 ```
 
-### The 10-step ceiling is in the prompt, not the model
+### `max_new_tokens` is a FLOOR, not a ceiling
 
-`connectors.source.config.default_text` on the canonical blueprint is, verbatim:
+The model **reasons before it answers**, and pays for the reasoning out of this same budget. Set it too low and generation ends inside the reasoning block having never emitted an answer. Every signal says success: `job.completed`, no ERROR row, every HTTP call 2xx, and a 38-byte output file containing `{"id": "…", "results": []}`.
 
-> Generate a concise, ordered list of distinct steps with 10 steps or less.
+Measured on one 173 s video, one variable, 2026-08-13:
 
-`text_extensions: []` disables text inputs, so there is no way to override it. Every manual is therefore capped at ~10 steps **by wording**, not by content, and the model complies by compressing rather than by stopping: on a 173 s video it bundles up to seven distinct actions into a single step and drops two spoken safety cautions that the same video produced as their own steps back when `prompt` was settable. A 60-minute video gets the same ~10 steps as a 3-minute one.
+| `max_new_tokens` | 2048 | 4096 | **16384** | 32768 | 65536 |
+|---|---|---|---|---|---|
+| steps | 0 | 0 | **18** | 18 | 18 |
 
-If you need a manual proportional to the procedure, **chunk the video** and run one job per chunk — ~10 steps per chunk is the only lever available today. See Step 1.
+The last three are **byte-identical** — generation is deterministic at temperature 0 — so the threshold is between 4k and 16k and nothing above 16384 changes the answer. **Lowering this does not give you a shorter manual, it gives you no manual.** Send the blueprint's default and leave it alone.
 
-### `max_new_tokens: 2048` — the blueprint's own default — can return an empty manual
+The platform logs a warning for this case, and it is the only thing that makes it diagnosable:
 
-One 173 s run at 2048 finished as `job.completed` with **no ERROR row**, and its output file was 39 bytes: `{"id": "...", "results": []}`, after 543 s of generation. The identical input at **4096** produced 10 steps. Nothing in the status field, the logs, or the HTTP responses distinguishes this from success — **count the steps in the output before you trust a run**.
+```
+WARN parser.running  ManualGenerationResultsParserNode: generation ended inside the
+  model's reasoning block, so it never produced an answer; dropping 0 rehearsed
+  row(s). Raise `max_new_tokens` if the reasoning was truncated.
+```
+
+### What a caller-supplied `prompt` is worth
+
+Same clip, same `max_frames`, only the instruction differing — the blueprint's hardcoded "10 steps or less" versus a coverage instruction:
+
+| | hardcoded | coverage prompt |
+|---|---|---|
+| steps | 10 | **18** |
+| ref steps found at IoU ≥ 0.5 | 4/11 | **7/11** |
+| spoken-only cautions | dropped | present |
+
+The gain is in temporal precision, not verbosity. Note the trap in scoring this: at a *loose* threshold the 10-step version scores **higher** (10/11 vs 9/11 at IoU ≥ 0.3), because MGA tiles the timeline contiguously and fewer steps means longer ones that overlap a reference interval more easily. Coarser segmentation flatters loose-threshold recall while being less useful as a manual.
 
 ## Step 1 — Choose a video
 
@@ -168,7 +186,7 @@ POST {endpoint}/agents/bundles/{bundle_id}/run
 
 **202, not 201.** A client that treats only 201 as success reports a failure while the agent runs unattended on the GPU with nothing collecting its output.
 
-One agent per video. Dev serializes these jobs — four concurrent submissions produced 799–817 s queue waits, not parallelism.
+One agent per video. **Do not assume dev serializes these jobs.** Four concurrent submissions once produced 799–817 s queue waits, which looked like serialization; three concurrent runs on 2026-08-13 instead came up as three concurrent pods and one was SIGKILLed mid-load (`pod.terminated  Error (exit=137)`). Run them one at a time unless you are deliberately testing this.
 
 ## Step 5 — Poll until terminal
 
@@ -229,14 +247,33 @@ Four properties the blueprint does not advertise:
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
 | Client reports failure, run proceeds anyway | `/run` returns **202**, not 201 |
-| A custom `prompt` has no effect | Not wired on the active blueprint. Accepted (201), echoed back, ignored |
-| Manual has ~10 steps no matter how long the video is | The hardcoded prompt says "10 steps or less". Chunk the video |
-| `job.completed`, no ERROR, and **`results: []`** | Seen at `max_new_tokens: 2048`. Raise it to 4096 and rerun |
+| A custom `prompt` has no effect | It is not wired on that blueprint. Accepted (201), echoed back, ignored. Preflight it |
+| Manual has ~10 steps no matter how long the video is | A blueprint whose prompt is hardcoded to "10 steps or less". Check `default_text` |
+| `job.completed`, no ERROR, and **`results: []`** | `max_new_tokens` below the reasoning threshold. Use the blueprint default (16384) |
+| Run dies with `S3 object not found` minutes in | Something re-uploaded your `file_id`. Suffix every upload — see below |
 | Parser returns **0 steps** | A custom `prompt` specified an output format; the parser owns the template. Only reachable on a blueprint that wires `prompt` |
 | Run "hangs" at `running` forever | The `status` field lags; check `/logs` for `pod.terminated` |
 | `Newton generation event stream closed without a terminal event` | Usually a video longer than ~5 minutes |
 | Manual stops halfway through the video | Output-token exhaustion — check whether the last step ends mid-clause, then raise `max_new_tokens` |
 | Run dies ~1 s in: `resolving blueprint: invalid config for 1 node(s)` | A pinned `blueprint_id` that has been superseded. Target the **key** — see below |
+
+## `file_id` is a mutable, org-wide pointer
+
+`file_id` **is the filename**. Uploading the same name again repoints it to a fresh object and orphans the previous one — same `file_id`, new `file_uid`:
+
+```
+upload 1: {"file_id": "clip.mp4", "file_uid": "fil_58shkhqztj9tnbye4dmphzxa2r"}
+upload 2: {"file_id": "clip.mp4", "file_uid": "fil_6zmefmn6mz84jb5zvsevfzan4x"}
+```
+
+That namespace is shared across the org, and the timing makes it lethal: a run resolves its inputs at **submit** time but does not fetch the bytes until after ~7.5 min of model loading. Anything that re-uploads the same name inside that window kills a run that already looked healthy:
+
+```
+ERROR source.running  skipping video "clip.mp4": downloading video
+  "s3://…/files_service/archetypeai/c03580dd-…" from S3 failed: S3 object not found
+```
+
+Nothing in that message implicates the upload that overwrote it, so it reads as a storage fault. **Suffix every upload** — `<stem>-<UTC timestamp>-<4 random hex>.mp4`. The stem alone is not enough: two runs of the same video collide, and so does a colleague running the same file. If the output `id` matters to you, rewrite it back to the plain stem on save, since it is derived from the uploaded name.
 
 ## Target the blueprint KEY, not an id
 
@@ -275,8 +312,8 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 #   ATAI_API_KEY=<dev API key>
 #   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
 
-python3 references/run_mga_agent.py --video my_procedure.mp4          # targets key `mga`, 4096 tokens
-python3 references/run_mga_agent.py --video my_procedure.mp4 --max-new-tokens 8192
+python3 references/run_mga_agent.py --video my_procedure.mp4          # key `mga`, 16384 tokens
+python3 references/run_mga_agent.py --video my_procedure.mp4 --max-frames 32
 python3 references/run_mga_agent.py --score references/sample_data/mga-output-max_new_tokens2048-coverage-prompt.jsonl \
     --reference references/sample_data/40567_i2JWkDyg26A_reference_steps.csv
 ```

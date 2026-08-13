@@ -31,32 +31,38 @@ SIX THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-10)
      is stored on the bundle and silently ignored. This script preflights that.
   6. Videos longer than ~5 minutes fail outright, several minutes in.
 
-THE CONTROL YOU CANNOT REACH (currently `prompt`)
+CHECK WHICH OF YOUR VALUES ARE REAL
 
-Twice now the setting needed for a usable manual has been one the blueprint does
-not expose. Check which of your values are real before spending a run — this
-script preflights it and prints a warning.
+Twice in five days the setting that decided whether the manual was usable was one
+the blueprint did not expose — max_new_tokens (hardcoded at 256), then prompt
+(hardcoded to "10 steps or less"). Both are exposed again today. The lesson is
+not either defect but that an unwired value is accepted with HTTP 201 and echoed
+straight back at you, so it costs a 15-minute run to notice. This script
+preflights every value and warns.
 
-  WAS: max_new_tokens, hardcoded at 256, truncated the manual to 6 steps with the
-       last cut mid-clause. FIXED — it is settable now and defaults to 2048.
-  NOW: `prompt`. The blueprint hardcodes "Generate a concise, ordered list of
-       distinct steps with 10 steps or less.", so a caller's instruction is
-       accepted, reported inert, and ignored. That caps the manual at 10 steps by
-       wording rather than by content: on a 173 s video it bundles up to seven
-       actions into one step and drops two spoken safety cautions that the same
-       video produced as their own steps when the prompt was honoured.
-       Tracked as PLDEV-1730.
+max_new_tokens is a FLOOR, not a ceiling. The model REASONS BEFORE IT ANSWERS and
+pays for the reasoning out of this budget, so setting it too low does not give you
+a shorter manual — it gives you no manual, reported as success: job.completed, no
+ERROR row, `results: []`, 38 bytes. Measured on a 173 s video, 2026-08-13:
 
-⚠️  max_new_tokens: 2048 — the blueprint's OWN default — returned an EMPTY manual
-    on a 173 s video: job.completed, no ERROR row, `results: []`, 39 bytes, after
-    543 s of generation. 4096 on the identical input produced 10 steps. This
-    script therefore defaults to 4096. Count your steps; nothing in the status or
-    the logs distinguishes an empty result from success.
+    2048 ->  0 steps       4096 ->  0 steps
+   16384 -> 18 steps      32768 -> 18 steps      65536 -> 18 steps
+
+The last three are BYTE-IDENTICAL (temperature 0), so the threshold is between 4k
+and 16k and nothing above 16384 helps. Count your steps.
+
+file_id IS THE FILENAME, and it is a mutable pointer in an ORG-WIDE namespace.
+Uploading the same name again repoints it and orphans the previous object. A run
+resolves inputs at submit time but does not fetch the bytes until ~7.5 min of
+model loading later, so a colleague uploading the same filename in that window
+kills your run with `S3 object not found` — blaming storage, not the overwrite.
+upload_name() suffixes every upload for this reason.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import json
 import os
 import sys
@@ -140,7 +146,20 @@ def _read_bytes(path: str) -> bytes:
         return f.read()
 
 
-def upload(path: str) -> str:
+def upload_name(path: str) -> str:
+    """A collision-proof name to upload under: <stem>-<UTC stamp>-<4 hex>.
+
+    file_id IS the filename and it is a mutable pointer in an ORG-WIDE namespace,
+    so a plain basename lets anyone else in your org destroy your in-flight run
+    (and you theirs). The stem keeps it recognisable, the stamp sorts, the random
+    tail is what actually guarantees uniqueness.
+    """
+    stem, ext = os.path.splitext(os.path.basename(path))
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stem}-{stamp}-{uuid.uuid4().hex[:4]}{ext or '.mp4'}"
+
+
+def upload(path: str, name: str | None = None) -> str:
     """POST the video as multipart/form-data.
 
     The DECLARED Content-Type is checked against a MIME allowlist, not the bytes,
@@ -149,10 +168,11 @@ def upload(path: str) -> str:
     """
     key, endpoint = env()
     boundary = uuid.uuid4().hex
+    name = name or os.path.basename(path)
     body = b"".join([
         f"--{boundary}\r\n".encode(),
         f'Content-Disposition: form-data; name="file"; '
-        f'filename="{os.path.basename(path)}"\r\n'.encode(),
+        f'filename="{name}"\r\n'.encode(),
         b"Content-Type: video/mp4\r\n\r\n",
         _read_bytes(path),
         f"\r\n--{boundary}--\r\n".encode(),
@@ -300,15 +320,17 @@ def main() -> None:
                          f"tracks whatever is canonical and active; a pinned id can "
                          f"stop resolving when the blueprint is republished")
     ap.add_argument("--max-frames", type=int, default=64)
-    ap.add_argument("--max-new-tokens", type=int, default=4096,
-                    help="output budget (default 4096). The blueprint's own default "
-                         "of 2048 returned an EMPTY manual on a 173s video — see the "
-                         "module docstring")
+    ap.add_argument("--max-new-tokens", type=int, default=16384,
+                    help="output budget (default 16384, matching the blueprint). A "
+                         "FLOOR, not a ceiling: the model reasons out of this budget, "
+                         "so 4096 returns an EMPTY manual rather than a short one, and "
+                         "nothing above 16384 changes the answer")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT,
-                    help="currently IGNORED: the blueprint hardcodes its instruction "
-                         "(PLDEV-1730). The preflight says so. And never specify an "
-                         "output format here — the results parser owns the template "
-                         "and will return zero steps")
+                    help="the instruction, honoured again as ${values.prompt} since "
+                         "2026-08-12 (PLDEV-1730); the preflight warns if that "
+                         "regresses. Say what to COVER, never how to format — the "
+                         "results parser owns the template and a format-overriding "
+                         "prompt makes it return zero steps")
     ap.add_argument("--name", default="manual generation run")
     ap.add_argument("--output", default="mga-output.jsonl")
     ap.add_argument("--score", metavar="JSONL", help="offline: score an output")
@@ -363,7 +385,7 @@ def main() -> None:
             values.pop(k)
 
     print(f"uploading {args.video} ...")
-    file_id = upload(args.video)
+    file_id = upload(args.video, upload_name(args.video))
     print(f"  file_id={file_id}")
 
     # No `artifacts` map: the mga blueprint pins newton-fusion and whisper itself.
