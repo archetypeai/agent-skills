@@ -14,8 +14,8 @@ where you run this:
     python3 run_tva_agent.py --video assembly.mp4 --sop sop.txt --dry-run
 
     # score or re-read an output offline
-    python3 run_tva_agent.py --score out.jsonl
-    python3 run_tva_agent.py --score out.jsonl --labels 1_pass_2_pass_3_fail
+    python3 run_tva_agent.py --score out.json
+    python3 run_tva_agent.py --score out.json --labels 1_pass_2_pass_3_fail
 
 WHAT MAKES TVA DIFFERENT FROM MGA: the reference procedure arrives AT RUNTIME.
 The `tva` blueprint wires `source.text -> prepare.in` (PrepareSOPNode), so a run
@@ -63,16 +63,43 @@ TERMINAL_EVENTS = ("pod.terminated", "job.completed", "job.failed", "job.cancele
 # The statuses TaskVerificationResultsParserNode emits.
 STATUSES = ("PASSED", "FAILED", "MISSING")
 
-# Sink formats that have produced output, and one that provably cannot. There is
-# no endpoint listing registered connectors, so this is an allowlist of what has
-# run plus the value observed broken. Read from the blueprint document, so a fixed
-# blueprint stops warning with no code change here.
-KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request"}
-KNOWN_BROKEN_SINK_FORMATS = {"json/per-request"}
+# Sink formats observed to produce output. BOTH are good.
+#
+# An earlier version of this file listed `json/per-request` as broken, because the
+# canonical blueprint shipped with it during an ~18-hour window when no connector was
+# registered for it. That was fixed on 2026-08-12, and the denylist then did real
+# damage: it refused every run against the WORKING canonical blueprint while sounding
+# certain. A preflight built on a measured constant goes stale in the worst direction.
+#
+# So: warn on an unrecognised format, never refuse, and say the list may be stale.
+KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request", "json/per-request"}
+KNOWN_BROKEN_SINK_FORMATS: set[str] = set()
 
-# Default output budget. NOT the blueprint's historic 2048 — see the module
-# docstring. Raise further if a `reason` comes back cut mid-sentence.
-DEFAULT_MAX_NEW_TOKENS = 8192
+# Default output budget. Deliberately NOT the ceiling and NOT the blueprint default
+# (16384): the failure mode is repetition, so a bigger budget is more room to LOOP.
+# Measured on a clip with two skipped steps: 5760 returned correct verdicts, 8192
+# returned results:[], 16384 returned results:[] identically. See SKILL.md.
+DEFAULT_MAX_NEW_TOKENS = 5760
+
+# Where a project is expected to keep its procedure. Matches the worked example's
+# layout, so a `sop/` directory beside the script is picked up with no flag. When it
+# is absent — a fresh skill checkout — fall back to the SOP shipped in sample_data,
+# and say which one is in force rather than guessing silently.
+DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
+BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "sample_data", "oring-numbered.txt")
+
+
+def resolve_sop(path: str | None) -> str:
+    """The SOP to run: an explicit --sop, else sop/oring-numbered.txt, else the sample."""
+    if path:
+        return path
+    if os.path.exists(DEFAULT_SOP_PATH):
+        print(f"  --sop not given -> {DEFAULT_SOP_PATH}")
+        return DEFAULT_SOP_PATH
+    print(f"  --sop not given and no {DEFAULT_SOP_PATH} here -> the bundled sample\n"
+          f"    {BUNDLED_SOP_PATH}")
+    return BUNDLED_SOP_PATH
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -144,20 +171,53 @@ def api(method: str, url: str, body=None, raw: bool = False, retries: int = 4,
             time.sleep(wait)
 
 
-def upload(path: str) -> str:
+def remote_bytes(file_id: str) -> bytes | None:
+    """The object currently stored under `file_id`, or None if absent."""
+    _, endpoint = env()
+    status, payload = api("GET", f"{endpoint}/v0.5/files/download/{file_id}",
+                          raw=True, allow_status=True)
+    return payload if status == 200 and isinstance(payload, bytes) else None
+
+
+def pair_names(video: str, sop: str) -> tuple[str, str]:
+    """The ids to upload under, as (video, sop). Stems MATCH and name the SOP.
+
+    A run's inputs arrive as ONE FLAT LIST of file ids with nothing saying which text
+    belongs to which video, so the pipeline pairs them by matching stems. Using the
+    clip's stem alone satisfies that, but then every SOP variant collides on one name
+    per clip — and `file_id` IS the basename, so re-uploading REPLACES the object an
+    already-queued run is going to read. Including the SOP's stem fixes both: the ids
+    still match each other, and they record which SOP produced the run.
+    """
+    v = os.path.splitext(os.path.basename(video))[0]
+    s = os.path.splitext(os.path.basename(sop))[0]
+    return f"{v}-{s}.mp4", f"{v}-{s}.txt"
+
+
+def upload(path: str, rename: str | None = None) -> str:
     """POST a file to /v0.5/files, streamed from disk. Returns the file_id.
 
     The DECLARED Content-Type is enforced against a MIME allowlist, not the bytes:
     `video/mp4` for the clip, `text/plain` for the SOP. The returned `file_id` is
     the BASENAME — that is what connectors.source[].id wants, not the `fil_...`
     `file_uid` in the same response.
+
+    IDEMPOTENT: if an object of the same name already holds the same bytes, this
+    SKIPS the upload. That is not an optimisation. A run pins its inputs at
+    input-resolution time and dev can queue for an hour, so re-uploading the same
+    name in that window kills whatever is already queued — it fails minutes later,
+    inside the run, as `S3 object not found` with `job.completed` on the job.
     """
     _, endpoint = env()
     if not os.path.exists(path):
         sys.exit(f"no such file: {path}")
     ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
     boundary = uuid.uuid4().hex
-    name = os.path.basename(path)
+    name = rename or os.path.basename(path)
+    local = open(path, "rb").read()
+    if remote_bytes(name) == local:
+        print(f"  {name}: identical object already on the platform — skipping upload")
+        return name
     preamble = b"".join([
         f"--{boundary}\r\n".encode(),
         f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'.encode(),
@@ -420,7 +480,10 @@ def show(path: str, labels: str | None = None) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--video", help="the recording to verify (.mp4)")
-    ap.add_argument("--sop", help="reference procedure, ONE STEP PER LINE (.txt)")
+    ap.add_argument("--sop", default=None,
+                    help=f"reference procedure, ONE STEP PER LINE (.txt). Defaults to "
+                         f"{DEFAULT_SOP_PATH} if it exists, else the SOP bundled in "
+                         f"references/sample_data/.")
     ap.add_argument("--blueprint", default="tva",
                     help="blueprint id or KEY (default: tva). A key resolves to "
                          "whatever is canonical and active, but check the sink — "
@@ -433,8 +496,8 @@ def main() -> None:
                          f"(default {DEFAULT_MAX_NEW_TOKENS}). Too low returns an "
                          f"empty result on exactly the clips that contain a defect.")
     ap.add_argument("--name", default="task verification run")
-    ap.add_argument("--output", default=None, help="where to save the JSONL")
-    ap.add_argument("--score", metavar="JSONL",
+    ap.add_argument("--output", default=None, help="where to save the result JSON")
+    ap.add_argument("--score", metavar="FILE",
                     help="print and score an existing output, then stop — offline")
     ap.add_argument("--labels", metavar="1_pass_2_fail_3_pass",
                     help="ground truth for --score, if not in the filename or id")
@@ -447,15 +510,15 @@ def main() -> None:
     if args.score:
         show(args.score, args.labels)
         return
-    if not args.video or not args.sop:
-        sys.exit("--video and --sop are both required "
-                 "(or use --score to read an existing output)")
+    if not args.video:
+        sys.exit("--video is required (or use --score to read an existing output)")
+    args.sop = resolve_sop(args.sop)
 
     steps = load_sop(args.sop)
     values = {"max_frames": args.max_frames,
               "max_new_tokens": args.max_new_tokens}
     clip = os.path.splitext(os.path.basename(args.video))[0]
-    out_path = args.output or f"tva-output-{clip}.jsonl"
+    out_path = args.output or f"tva-output-{clip}.json"
 
     if args.dry_run:
         _, endpoint = env()
@@ -463,9 +526,12 @@ def main() -> None:
         print(json.dumps({"blueprint": args.blueprint, "name": args.name,
                           "values": values}, indent=2))
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
+        v_name, s_name = pair_names(args.video, args.sop)
+        print(f"# stems match ({os.path.splitext(v_name)[0]}): the pipeline pairs a "
+              f"video with its SOP by stem, and nothing else writes to this pair")
         print(json.dumps({"connectors": {"source": [
-            {"type": "file", "id": os.path.basename(args.video), "format": "mp4"},
-            {"type": "file", "id": os.path.basename(args.sop), "format": "txt"},
+            {"type": "file", "id": v_name, "format": "mp4"},
+            {"type": "file", "id": s_name, "format": "txt"},
         ]}}, indent=2))
         print(f"\nSOP ({len(steps)} steps, one per line):")
         for i, s in enumerate(steps, 1):
@@ -500,8 +566,11 @@ def main() -> None:
         print(f"    {i}. {s}")
 
     print(f"\nuploading ...")
-    video_id = upload(args.video)
-    sop_id = upload(args.sop)
+    v_name, s_name = pair_names(args.video, args.sop)
+    video_id = upload(args.video, rename=v_name)
+    sop_id = upload(args.sop, rename=s_name)
+    print(f"  stems match ({os.path.splitext(v_name)[0]}) — nothing else writes to "
+          f"this pair")
     print(f"  video={video_id}  sop={sop_id}")
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and

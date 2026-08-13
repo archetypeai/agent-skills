@@ -76,59 +76,86 @@ POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 
 `POST /agents/bundle` (singular) returns **404**. The `/agents` API is **dev-only** — a prod endpoint 404s on every `/agents` path, which reads like an unregistered blueprint rather than the wrong host.
 
-## ⚠️ Two silent failures — read before spending a run
+## ⚠️ Read before spending a run
 
-Both report success at the HTTP layer. Neither is visible in the `status` field. Each costs the full ~7-minute cold start, because **the platform validates the graph only after downloading and loading both models**.
+Three things will cost you a run or, worse, hand you a confident wrong answer. All
+report success at the HTTP layer.
 
-| | symptom | cost | catch it with |
-|---|---|---|---|
-| **Sink not instantiable** | `pod.terminated exit=1`, `/results` empty | **996 s**, zero output | read `connectors.sink.config.format` before running |
-| **Reasoning overflow** | `job.completed`, no ERROR, `results: []` | 814 s, zero output | `max_new_tokens: 8192`; count the verdicts |
+| | symptom | catch it with |
+|---|---|---|
+| **A false PASS on a skipped step** | three verdicts, all `PASSED`, fluent reasons | you cannot, from the output — see below |
+| **Reasoning overflow** | `job.completed`, no ERROR, `results: []` | count the verdicts; read `dropping N` in the WARN |
+| **Sink not instantiable** | `pod.terminated exit=1`, `/results` empty | read `connectors.sink.config.format` — but do not hard-code a denylist |
 
-### 1. The canonical blueprint has shipped un-instantiable
+### 1. It verifies object PRESENCE, not performance — so `reason` is not evidence
 
-`tva` was republished on 2026-08-11 at 22:01:18 with its sink format changed from `jsonl/per-request` to `json/per-request`, for which no connector is registered:
+Measured over 12 clips of a 3-step assembly with deliberate omissions: **0 of 6** on an
+omitted o-ring, **3 of 3** on an omitted wrench, **1 of 1** on a prop present in no
+clip. The rule that fits all of it: the model reliably answers *"is this thing in the
+video at all?"* and, when it is, **assumes the action happened.** A workstation has its
+parts laid out by definition, so the omissions you deployed the agent to catch are the
+ones in the blind spot.
 
-```
-ERROR  error           instantiating graph: no connector registered for
-                       format="json/per-request" kind="s3"
-ERROR  pod.terminated  Container agent terminated: Error (exit=1)
-```
+`reason` reads like an observation and is not one. Change a single adjective in a SOP
+step and that adjective appears in the model's account of what it saw:
 
-The bundle returns `status: ready`. The run returns `202 running`. The failure appears only in `/logs`. Preflight it — one field read, about a second:
-
-```python
-doc = GET(f"{endpoint}/agents/blueprints/{blueprint}")["document"]
-fmt = doc["connectors"]["sink"]["config"]["format"]
-if fmt != "jsonl/per-request":
-    ...  # will die at graph instantiation after ~7 min of model loading
-```
-
-**This inverts the usual advice.** `atai-manual-generation-agent` concludes *target the blueprint KEY, not an id*, because a pinned id stopped resolving. Here the key resolved fine and produced nothing while a **superseded** id worked. Neither identifier tells you whether the graph will instantiate — **read the document.**
-
-### 2. The output budget is shared with the model's reasoning block
-
-f1-0 emits `<think>…</think>` before its answer, and that reasoning spends `max_new_tokens`. Run out inside it and the parser has nothing to parse:
-
-```
-WARN     parser.running   TaskVerificationResultsParserNode: generation ended inside the
-                          model's reasoning block (no `</think>`), so it never produced an
-                          answer; dropping 0 rehearsed row(s). Raise `max_new_tokens` if
-                          the reasoning was truncated.
-INFO     completed        Agent execution terminated successfully
-SUCCESS  job.completed    Job completed in 814s
-```
-
-Output: `{"id":"1_pass_2_pass_3_fail_A","results":[]}` — 44 bytes, `job.completed`, no ERROR row.
-
-**The budget needed depends on the answer, and this is the part that matters:**
-
-| clip, at `max_new_tokens: 2048` | outcome |
+| the SOP writes | the reason writes |
 |---|---|
-| everything performed correctly | **3 of 3 verdicts**, 678 bytes |
-| one step skipped | **empty** — budget spent inside `<think>` |
+| the **small black rubber** O-ring | "the O-ring" |
+| the **black** O-ring | "the **black** O-ring" |
+| "attaches, places, or aligns" | "**attaches** it to" — the first verb offered |
 
-The clean clip succeeds and the clip containing a defect returns nothing. **For a verification agent that is the worst failure shape: it fails on exactly the inputs you deployed it to catch.** Any accuracy figure gathered without checking for empty results is measuring the easy half of the set. Send **8192**, and count the verdicts in every output.
+Frames for one false pass show the parts never moving during the interval the agent
+itself reported. **Do not surface `reason` to a user as an audit trail, and do not use
+its confidence as a signal** — a fabricated observation is word-for-word as assured as
+a real one.
+
+**Rewriting the SOP does not fix this.** Seven variants were tried — plain,
+attention-directed, scene-anchored, interrogative, conditional, and a faithful port of a
+prompt that reportedly scored 98% on the same clips via a direct query — and every one
+returned the identical wrong verdict or no verdict at all. Budget for human review of
+`PASSED` verdicts; do not budget for prompt engineering.
+
+### 2. The output budget is shared with the reasoning block, and bigger is worse
+
+f1-0 emits `<think>…</think>` before its answer and that reasoning spends
+`max_new_tokens`. Run out inside it and the parser has nothing to parse — the job still
+reports `job.completed` with no ERROR row and `results: []`.
+
+The instinct, and the platform's own WARN, is to raise the budget. **That is wrong
+here.** The window is not the constraint — the served `max_seq_len` is at least 18,754
+and the blueprint defaults to 16,384 — and the model expands its reasoning to fill
+whatever room it is given. On a clip with two skipped steps:
+
+| `max_new_tokens` | result |
+|---|---|
+| **5760** | **21 rows, all verdicts correct** |
+| 8192 | `results: []` |
+| 16384 | `results: []`, identical |
+
+Send **5760**, not the ceiling. The diagnostic that tells you which failure you have is
+the `dropping N rehearsed row(s)` count in the WARN:
+
+| N | what happened | what to do |
+|---|---|---|
+| large (37) | the verdict block was emitted ~12× — repetition | **lower** the budget |
+| small (3) | drafted once, cut at `</think>` | budget is not the lever |
+| `0` | never converged | budget is not the lever |
+
+`N > 0` means the answer was formed and thrown away, so no extra budget was needed at
+all — which is worth saying out loud when you report the failure upstream.
+
+### 3. Read the sink format, but never hard-code which one is broken
+
+`tva` shipped for ~18 hours with a sink format that had no registered connector, and
+every run died at graph instantiation after the full ~7-minute model load. It was fixed
+on 2026-08-12.
+
+The lesson is not "avoid `json/per-request`" — that is the working format today. An
+earlier version of `run_tva_agent.py` encoded it as a denylist and then **refused every
+run against the fixed blueprint while sounding certain.** Warn on an unrecognised
+format, never refuse, and re-test before trusting a constant you measured. Neither the
+key nor a pinned id tells you whether the graph will instantiate: **read the document.**
 
 ## Step 1 — Write the SOP
 
@@ -160,7 +187,20 @@ POST {endpoint}/v0.5/files          # multipart/form-data, field name "file"
 
 Twice: once for the video, once for the SOP. The **declared** `Content-Type` is enforced against a MIME allowlist, not the bytes — `video/mp4` and `text/plain`. Use `file_id` (the basename) in the run payload, **not** `file_uid`; the uid fails at source resolution after the pod has started.
 
-`file_id` *is* the basename, so re-uploading an edited SOP under the same name replaces the copy an earlier run used. Keep the SOP in version control — that, not the platform's file list, is the record of what a past run was checked against.
+### Name the pair so the stems match — and so nothing can overwrite it
+
+A run's inputs arrive as **one flat list of file ids**, with nothing saying which text belongs to which video, so the pipeline pairs them **by matching stems**. Upload as `<clip>-<sop>.mp4` and `<clip>-<sop>.txt`:
+
+```
+1_pass_2_pass_3_pass_A-oring-numbered.mp4
+1_pass_2_pass_3_pass_A-oring-numbered.txt
+```
+
+The clip's stem alone would satisfy the matching, but then **every SOP variant collides on one name per clip.** That matters more than it sounds:
+
+**`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and dev can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job. Three runs were lost to this before the mechanism was clear.
+
+`run_tva_agent.py` does two things about it: `pair_names()` derives the ids from both the clip and the SOP, and `upload()` compares local bytes against `GET /v0.5/files/download/{file_id}` and **skips when they match**. Keep the SOP in version control too — that, not the platform's file list, is the record of what a past run was checked against.
 
 ## Step 3 — Create a bundle (one, for every clip)
 
@@ -169,13 +209,13 @@ Twice: once for the video, once for the SOP. The **declared** `Content-Type` is 
 ```json
 POST {endpoint}/agents/bundles
 {"blueprint": "tva", "name": "task verification run",
- "values": {"max_frames": 64, "max_new_tokens": 8192}}
+ "values": {"max_frames": 64, "max_new_tokens": 5760}}
 → 201 {"id": "bnd_…", "status": "ready"}
 ```
 
 | Value | Default | Notes |
 |---|---|---|
-| `max_new_tokens` | 8192 (was 2048) | **Shared with the `<think>` block.** The default was raised 2048 → 8192 mid-session, almost certainly to fix the overflow above. Set it explicitly — and to 8192 or more, not to the old default. |
+| `max_new_tokens` | **5760** | **Shared with the `<think>` block, and bigger is worse.** The blueprint default has moved 2048 → 8192 → 16384; set it explicitly, and set it BELOW the ceiling — 8192 and 16384 both returned nothing on a clip where 5760 returned correct verdicts. |
 | `max_frames` | 16 | Uniform across the whole video. On a 30 s clip, 16 is one frame every 1.9 s. 64 is the reader/preprocessor batch size. |
 | `size` | 224 | Each frame resized to a square, so 1080p is no better than 480p — only slower to upload. |
 | `parser_compute_stats` | false | Attaches template-conformance stats; useful when the parser returns nothing. |
@@ -198,8 +238,8 @@ inert = [k for k in my_values
 ```json
 POST {endpoint}/agents/bundles/{bundle_id}/run
 {"connectors": {"source": [
-  {"type": "file", "id": "clip.mp4",  "format": "mp4"},
-  {"type": "file", "id": "oring.txt", "format": "txt"}]}}
+  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered.mp4", "format": "mp4"},
+  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered.txt", "format": "txt"}]}}
 → 202 {"id": "agt_…", "status": "running"}
 ```
 
@@ -230,12 +270,12 @@ Between `input_started` and the terminal event there are **zero log rows** acros
 
 ```python
 GET {endpoint}/agents/instances/{agent_id}/results
-→ {"data": [{"data": {"filename": "agt_…__output_clip.jsonl", "ref": "/files/download/…"}}]}
+→ {"data": [{"data": {"filename": "agt_…__output_clip.json", "ref": "/files/download/…"}}]}
 ```
 
-The `ref` is a **relative** platform path resolving under `/v0.5`, and needs the bearer token. **Run outputs do not expire**, so a client that dies — closed laptop, dropped network, Ctrl-C — has abandoned nothing. Re-fetch by agent id rather than re-running; the output filename embeds the input name (`…__output_<clip>.jsonl`), which is enough to reassemble a batch after the fact.
+The `ref` is a **relative** platform path resolving under `/v0.5`, and needs the bearer token. **Run outputs do not expire**, so a client that dies — closed laptop, dropped network, Ctrl-C — has abandoned nothing. Re-fetch by agent id rather than re-running; the output filename embeds the input name (`…__output_<clip>.json`), which is enough to reassemble a batch after the fact.
 
-## Output JSONL — one record per video
+## Output JSON — one record per video
 
 ```json
 {"id":"1_pass_2_pass_3_pass_A","results":[
@@ -284,7 +324,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | whisper download + load | ~35–40 s + ~3 s — **even with no audio track** |
 | **newton-fusion download + load** | **~5 min + ~1 min 40 s** |
 | Generation, 30 s clip | ~5 min |
-| **Total** | **~13 min (754–814 s observed) for a 30-second clip** |
+| **Total** | **754–1614 s of job time.** Budget **20–30 min** wall clock — the queue is on top |
 
 **Cold start is ~7 min on every run and is never cached** — two back-to-back runs on the same GPU each downloaded newton-fusion from scratch. So the marginal cost of one more clip is much lower than the first: batch them.
 
@@ -299,9 +339,9 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | `401` on dev with a working key | That key is for prod |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
-| `job.completed` but **`results: []`** | Budget spent in the `<think>` block. Raise `max_new_tokens` to 8192+ |
+| `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
 | Verdicts for some steps only | The SOP had a wrapped line, or the budget truncated mid-answer |
-| Last `reason` cut mid-sentence | Raise `max_new_tokens` |
+| Last `reason` cut mid-sentence | Raise `max_new_tokens` — this is the one case where raising helps |
 | Every step scores correct on fail clips | A scorer crediting NOT REPORTED as a correct FAIL |
 | Step 3's verdict looks like step 2's | `step` is 0-based; your SOP is 1-based |
 | `MISSING` rows crash the consumer | They carry no `timestamp_start/end` |
@@ -338,12 +378,20 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 #   ATAI_API_KEY=<dev API key>
 #   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
 
-python3 references/run_tva_agent.py --video assembly.mp4 --sop sop.txt
-python3 references/run_tva_agent.py --video assembly.mp4 --sop sop.txt --dry-run
+python3 references/run_tva_agent.py \
+    --video references/sample_data/1_pass_2_pass_3_pass_A.mp4 \
+    --sop   references/sample_data/oring-numbered.txt
+
+# --sop is OPTIONAL. It resolves to sop/oring-numbered.txt if your project has one,
+# else to the SOP bundled in references/sample_data/. The script always prints which
+# is in force, so the procedure a run was checked against is never a guess.
+python3 references/run_tva_agent.py --video clip.mp4
+python3 references/run_tva_agent.py --video clip.mp4 --sop my-sop.txt --dry-run
 
 # offline: read and score a committed output, no key needed
-python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_pass_A.jsonl
-python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl
+python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_pass_A.json
+python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json   # a PASSED verdict that is false
+python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json
 ```
 
 ## File Layout
@@ -355,10 +403,14 @@ skills/atai-task-verification-agent/
 │   ├── .env.example
 │   ├── run_tva_agent.py          stdlib-only: upload video+SOP → bundle → run → logs → results → score
 │   └── sample_data/
-│       ├── README.md             what these are, and why no video ships here
-│       ├── oring_sop.txt         a real 3-step SOP
-│       ├── tva-output-1_pass_2_pass_3_pass_A.jsonl              3 PASSED verdicts, with reasons
-│       └── tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl  the reasoning overflow, 44 bytes
+│       ├── README.md                          what these are, and how to read them together
+│       ├── 1_pass_2_pass_3_pass_A.mp4         all three steps performed
+│       ├── 1_pass_2_pass_3_fail_A.mp4         step 3 skipped — the wrench never appears
+│       ├── oring-numbered.txt                 the 3-step SOP both clips were run against
+│       ├── tva-output-1_pass_2_pass_3_pass_A.json               3 PASSED, with reasons
+│       ├── tva-output-sealant-CORRECT-MISSING.json              correct MISSING on an absent prop
+│       ├── tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json    PASSED on a step never performed
+│       └── tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json the reasoning overflow, 44 bytes
 └── tests/
     └── test_references.py        network-free
 ```

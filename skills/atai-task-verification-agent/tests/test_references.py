@@ -25,9 +25,9 @@ spec.loader.exec_module(tva)
 with open(os.path.join(REFS, "run_tva_agent.py")) as _f:
     RUNNER_SRC = _f.read()
 
-PASS_OUT = os.path.join(DATA, "tva-output-1_pass_2_pass_3_pass_A.jsonl")
-EMPTY_OUT = os.path.join(DATA, "tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.jsonl")
-SOP = os.path.join(DATA, "oring_sop.txt")
+PASS_OUT = os.path.join(DATA, "tva-output-1_pass_2_pass_3_pass_A.json")
+EMPTY_OUT = os.path.join(DATA, "tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json")
+SOP = os.path.join(DATA, "oring-numbered.txt")
 
 
 def code_only(src: str) -> str:
@@ -100,22 +100,26 @@ class TestEndpointResolution(unittest.TestCase):
 
 
 class TestSinkPreflight(unittest.TestCase):
-    """The canonical blueprint has shipped with an un-instantiable sink."""
+    """Both observed sink formats are good; only an UNKNOWN one warns.
+
+    This suite previously asserted that `json/per-request` is broken, which was true
+    for ~18 hours and then actively harmful: the denylist refused every run against
+    the fixed canonical blueprint. The contract now under test is "warn, never
+    refuse, and do not hard-code which format is broken".
+    """
 
     @staticmethod
     def doc(fmt):
         return {"connectors": {"sink": {"key": "RecordsSink",
                                        "config": {"format": fmt}}}}
 
-    def test_known_good_format_passes(self):
+    def test_both_observed_formats_pass(self):
         self.assertIsNone(tva.check_sink(self.doc("jsonl/per-request")))
+        self.assertIsNone(tva.check_sink(self.doc("json/per-request")))
 
-    def test_broken_format_is_named_and_explained(self):
-        msg = tva.check_sink(self.doc("json/per-request"))
-        self.assertIsNotNone(msg)
-        self.assertIn("NO REGISTERED CONNECTOR", msg)
-        # The cost is the point: it fails only after both models are loaded.
-        self.assertIn("7 min", msg)
+    def test_no_format_is_hardcoded_as_broken(self):
+        """A denylist is what went stale. Keep it empty."""
+        self.assertEqual(tva.KNOWN_BROKEN_SINK_FORMATS, set())
 
     def test_unknown_format_still_warns(self):
         self.assertIsNotNone(tva.check_sink(self.doc("parquet/per-request")))
