@@ -36,7 +36,8 @@ committed output predates the current default of 5760.
 | `tva-output-1_pass_2_pass_3_pass_A.json` | Three `PASSED` verdicts with timestamps and reasons. 678 bytes. |
 | `tva-output-sealant-CORRECT-MISSING.json` | The all-pass clip, run with step 3 replaced by *"The worker squeezes thread sealant from a tube onto the manifold port"* — a prop that appears in **no** clip. Steps 1–2 `PASSED`, step 3 **correctly** `MISSING`: *"No thread sealant tube is shown or used in the video."* |
 | `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproducible — its clip ships. |
-| `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
+| `tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json` | The **same clip at an adequate budget**: steps 1–2 `PASSED`, step 3 correctly `MISSING` — *"no wrench is introduced"*. This is what the shipped default returns. |
+| `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | The **same clip at `max_new_tokens: 2048`**: `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
 
 ## Read these two together — they are the whole finding
 
@@ -56,9 +57,24 @@ O-ring, and placing it onto the cap groove"* describes something that never occu
 
 **Do not surface `reason` to a user as an audit trail.**
 
-## Why the empty one is here
+## Why the empty one is here — and note which budget produced it
 
-Not a broken file — it is what the platform returns when the output budget is spent
+`…-mnt2048-EMPTY.json` and `…-CORRECT-MISSING.json` are **the same clip and the same
+SOP**. Only `max_new_tokens` differs:
+
+| budget | result |
+|---|---|
+| 2048 | `results: []` |
+| adequate (5760, the shipped default) | 3 verdicts, step 3 correctly `MISSING` |
+
+So running that clip today returns **correct verdicts, not the empty result** — you have
+to ask for 2048 to see the failure:
+
+```sh
+python3 ../run_tva_agent.py --video 1_pass_2_pass_3_fail_A.mp4 --max-new-tokens 2048
+```
+
+The empty file is not broken — it is what the platform returns when the budget is spent
 inside the model's `<think>` block before any verdict is emitted:
 
 ```
@@ -67,10 +83,9 @@ WARN  parser.running  TaskVerificationResultsParserNode: generation ended inside
                       answer; dropping 0 rehearsed row(s).
 ```
 
-The pair matters more than either file alone. Same SOP, same settings: the clean clip
-returned three verdicts and the clip with a skipped step returned nothing. **Harder
-judgements reason longer, so the failure correlates with the inputs a verification
-agent exists to catch.**
+**Harder judgements reason longer, so the failure correlates with the inputs a
+verification agent exists to catch** — at 2048 the all-pass clip returned three verdicts
+while this one, with a step skipped, returned nothing.
 
 Note what does *not* fix it: raising the budget. That WARN suggests it, and on these
 clips 8192 and 16384 both returned nothing where 5760 returned correct verdicts. Read
@@ -81,7 +96,7 @@ the `dropping N` count instead — see SKILL.md.
 | clip | reproduces |
 |---|---|
 | `1_pass_2_pass_3_pass_A.mp4` | the 3-`PASSED` output, and the sealant correct-rejection |
-| `1_pass_2_pass_3_fail_A.mp4` | the empty result (at `max_new_tokens: 2048`) |
+| `1_pass_2_pass_3_fail_A.mp4` | a correct `MISSING` at the default, **and** the empty result at `--max-new-tokens 2048` |
 | `1_fail_2_pass_3_pass_A.mp4` | **the false pass** |
 
 The remaining nine labelled takes, a batch sweep and an offline scorer are in the worked

@@ -410,6 +410,7 @@ skills/atai-task-verification-agent/
 │       ├── oring-numbered.txt                 the 3-step SOP both clips were run against
 │       ├── tva-output-1_pass_2_pass_3_pass_A.json               3 PASSED, with reasons
 │       ├── tva-output-sealant-CORRECT-MISSING.json              correct MISSING on an absent prop
+│       ├── tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json  correct MISSING on a skipped step
 │       ├── tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json    PASSED on a step never performed
 │       └── tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json the reasoning overflow, 44 bytes
 └── tests/
