@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import datetime
 import json
 import mimetypes
 import os
@@ -179,19 +180,42 @@ def remote_bytes(file_id: str) -> bytes | None:
     return payload if status == 200 and isinstance(payload, bytes) else None
 
 
-def pair_names(video: str, sop: str) -> tuple[str, str]:
+def run_suffix() -> str:
+    """`<UTC timestamp>-<4 hex>`, generated ONCE per run and shared by its inputs.
+
+    An org shares ONE FLAT file namespace and `file_id` IS the basename, so two people
+    running the same clip write to the same object. A run pins its inputs at
+    input-resolution time and dev can queue for an hour, so the second upload destroys
+    the first's queued run — surfacing minutes later, inside a run that already started,
+    as `S3 object not found` with `job.completed` on the job.
+
+    Each part earns its place:
+      the original stem  recognisable in an org-wide file list
+      the UTC timestamp  sorts and greps; which upload was yours, and when
+      4 hex              what actually guarantees it — two people starting in the same
+                         second is precisely the case being fixed
+    """
+    return (datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-" + uuid.uuid4().hex[:4])
+
+
+def pair_names(video: str, sop: str, suffix: str | None = None) -> tuple[str, str]:
     """The ids to upload under, as (video, sop). Stems MATCH and name the SOP.
 
     A run's inputs arrive as ONE FLAT LIST of file ids with nothing saying which text
     belongs to which video, so the pipeline pairs them by matching stems. Using the
     clip's stem alone satisfies that, but then every SOP variant collides on one name
-    per clip — and `file_id` IS the basename, so re-uploading REPLACES the object an
-    already-queued run is going to read. Including the SOP's stem fixes both: the ids
-    still match each other, and they record which SOP produced the run.
+    per clip. Including the SOP's stem records which procedure a run was checked
+    against, and `suffix` (see run_suffix) makes the pair unique across CONCURRENT
+    USERS.
+
+    BOTH halves get the same suffix — a per-file suffix would break the very pairing
+    this exists to protect.
     """
     v = os.path.splitext(os.path.basename(video))[0]
     s = os.path.splitext(os.path.basename(sop))[0]
-    return f"{v}-{s}.mp4", f"{v}-{s}.txt"
+    stem = f"{v}-{s}" + (f"-{suffix}" if suffix else "")
+    return f"{stem}.mp4", f"{stem}.txt"
 
 
 def upload(path: str, rename: str | None = None) -> str:
@@ -526,9 +550,11 @@ def main() -> None:
         print(json.dumps({"blueprint": args.blueprint, "name": args.name,
                           "values": values}, indent=2))
         print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
-        v_name, s_name = pair_names(args.video, args.sop)
+        v_name, s_name = pair_names(args.video, args.sop, run_suffix())
         print(f"# stems match ({os.path.splitext(v_name)[0]}): the pipeline pairs a "
-              f"video with its SOP by stem, and nothing else writes to this pair")
+              f"video with its SOP by stem, and the -<UTC>-<hex> tail keeps concurrent "
+              f"users from\n# overwriting each other's inputs. Generated per run, so "
+              f"the REAL run will differ.")
         print(json.dumps({"connectors": {"source": [
             {"type": "file", "id": v_name, "format": "mp4"},
             {"type": "file", "id": s_name, "format": "txt"},
@@ -566,7 +592,7 @@ def main() -> None:
         print(f"    {i}. {s}")
 
     print(f"\nuploading ...")
-    v_name, s_name = pair_names(args.video, args.sop)
+    v_name, s_name = pair_names(args.video, args.sop, run_suffix())
     video_id = upload(args.video, rename=v_name)
     sop_id = upload(args.sop, rename=s_name)
     print(f"  stems match ({os.path.splitext(v_name)[0]}) — nothing else writes to "

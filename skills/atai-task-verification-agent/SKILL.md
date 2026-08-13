@@ -191,18 +191,29 @@ Twice: once for the video, once for the SOP. The **declared** `Content-Type` is 
 
 ### Name the pair so the stems match — and so nothing can overwrite it
 
-A run's inputs arrive as **one flat list of file ids**, with nothing saying which text belongs to which video, so the pipeline pairs them **by matching stems**. Upload as `<clip>-<sop>.mp4` and `<clip>-<sop>.txt`:
+A run's inputs arrive as **one flat list of file ids**, with nothing saying which text belongs to which video, so the pipeline pairs them **by matching stems**. Upload as:
 
 ```
-1_pass_2_pass_3_pass_A-oring-numbered.mp4
-1_pass_2_pass_3_pass_A-oring-numbered.txt
+1_pass_2_pass_3_pass_A-oring-numbered-20260813T193901Z-56ce.mp4
+1_pass_2_pass_3_pass_A-oring-numbered-20260813T193901Z-56ce.txt
 ```
 
-The clip's stem alone would satisfy the matching, but then **every SOP variant collides on one name per clip.** That matters more than it sounds:
+| part | why |
+|---|---|
+| the clip stem | recognisable in an org-wide file list |
+| the SOP stem | an id says WHICH procedure a run was checked against |
+| `<UTC timestamp>` | sorts and greps; tells you which upload was yours and when |
+| `<4 hex>` | what actually guarantees uniqueness — **two people starting in the same second is exactly the case being fixed** |
+
+**Both halves must share the suffix** — the pipeline matches them by stem, so a per-file suffix would break the pairing it exists to protect. `run_tva_agent.py` generates one per run with `run_suffix()`.
+
+The last two parts are not decoration. **An org shares ONE flat file namespace**, so without them two people verifying the same clip write to the same object:
 
 **`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and dev can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job.
 
-`run_tva_agent.py` does two things about it: `pair_names()` derives the ids from both the clip and the SOP, and `upload()` compares local bytes against `GET /v0.5/files/download/{file_id}` and **skips when they match**. Keep the SOP in version control too — that, not the platform's file list, is the record of what a past run was checked against.
+A unique suffix makes that **impossible by construction** rather than something to defend against. `upload()` also still compares local bytes against `GET /v0.5/files/download/{file_id}` and skips when they match, which matters if you pass explicit names.
+
+Two consequences: unique ids mean the skip never fires on the default path, so each run re-uploads its video (~0.8 s for 8 MB against a ~1000 s run — noise), and **uploads accumulate**, because this API has no file-cleanup endpoint. Keep the SOP in version control too: that, not the platform's file list, is the record of what a past run was checked against.
 
 ## Step 3 — Create a bundle (one, for every clip)
 
@@ -240,8 +251,8 @@ inert = [k for k in my_values
 ```json
 POST {endpoint}/agents/bundles/{bundle_id}/run
 {"connectors": {"source": [
-  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered.mp4", "format": "mp4"},
-  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered.txt", "format": "txt"}]}}
+  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered-20260813T193901Z-56ce.mp4", "format": "mp4"},
+  {"type": "file", "id": "1_pass_2_pass_3_pass_A-oring-numbered-20260813T193901Z-56ce.txt", "format": "txt"}]}}
 → 202 {"id": "agt_…", "status": "running"}
 ```
 
@@ -344,7 +355,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
 | `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
 | **A step that was skipped came back `PASSED`** | **Expected, and not fixable from the SOP.** The part was on screen, so the action was assumed — see §1. Human-review every `PASSED` |
-| `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue. Do not re-upload what is already there |
+| `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue — often a colleague on the same org. Give every upload a `<UTC>-<hex>` tail |
 | Verdicts for some steps only | The SOP had a wrapped line, or the budget truncated mid-answer |
 | Last `reason` cut mid-sentence | Raise `max_new_tokens` — this is the one case where raising helps |
 | Every step scores correct on fail clips | A scorer crediting NOT REPORTED as a correct FAIL |
