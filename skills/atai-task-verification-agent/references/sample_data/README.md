@@ -1,13 +1,13 @@
 # Sample data
 
-Real artifacts from real runs against `tva` on dev, 2026-08-11 to 2026-08-12. Two
+Real artifacts from real runs against `tva` on dev, 2026-08-11 to 2026-08-12. Three
 clips ship, so the skill can be exercised **live** as well as offline.
 
 Offline — no API key, no network, no GPU:
 
 ```sh
 python3 ../run_tva_agent.py --score tva-output-1_pass_2_pass_3_pass_A.json
-python3 ../run_tva_agent.py --score tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json
+python3 ../run_tva_agent.py --score tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json
 python3 ../run_tva_agent.py --score tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json
 ```
 
@@ -31,10 +31,11 @@ committed output predates the current default of 5760.
 |---|---|
 | `1_pass_2_pass_3_pass_A.mp4` | All three steps performed. 7.5 MB. |
 | `1_pass_2_pass_3_fail_A.mp4` | Step 3 skipped — **the wrench never enters frame.** 5.2 MB. |
+| `1_fail_2_pass_3_pass_A.mp4` | Step 1 skipped — **the O-ring is never fitted**, though the rings sit on the mat throughout. 7.5 MB. |
 | `oring-numbered.txt` | The 3-step SOP both clips were run against, one step per line. |
 | `tva-output-1_pass_2_pass_3_pass_A.json` | Three `PASSED` verdicts with timestamps and reasons. 678 bytes. |
 | `tva-output-sealant-CORRECT-MISSING.json` | The all-pass clip, run with step 3 replaced by *"The worker squeezes thread sealant from a tube onto the manifold port"* — a prop that appears in **no** clip. Steps 1–2 `PASSED`, step 3 **correctly** `MISSING`: *"No thread sealant tube is shown or used in the video."* |
-| `tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Its clip is not shipped — see below. |
+| `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproducible — its clip ships. |
 | `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
 
 ## Read these two together — they are the whole finding
@@ -42,7 +43,7 @@ committed output predates the current default of 5760.
 | output | what the model was asked | what it answered |
 |---|---|---|
 | `sealant-CORRECT-MISSING` | did the worker apply sealant? *(no such prop anywhere in the video)* | `MISSING` ✅ |
-| `1_fail…B-FALSE-PASS` | did the worker fit the O-ring? *(the rings are on the mat, untouched)* | `PASSED` ❌ |
+| `1_fail…A-FALSE-PASS` | did the worker fit the O-ring? *(the rings are on the mat, untouched)* | `PASSED` ❌ |
 
 Both actions are absent from the footage. The only difference is whether the **object**
 is on screen.
@@ -75,11 +76,16 @@ Note what does *not* fix it: raising the budget. That WARN suggests it, and on t
 clips 8192 and 16384 both returned nothing where 5760 returned correct verdicts. Read
 the `dropping N` count instead — see SKILL.md.
 
-## What cannot be reproduced from here
+## Every output here is reproducible
 
-**Both shipped clips have step 1 performed correctly**, so the false pass above cannot
-be reproduced locally — it needs a clip where the O-ring is skipped. The twelve
-labelled takes, including six such clips, are committed in the worked example:
+| clip | reproduces |
+|---|---|
+| `1_pass_2_pass_3_pass_A.mp4` | the 3-`PASSED` output, and the sealant correct-rejection |
+| `1_pass_2_pass_3_fail_A.mp4` | the empty result (at `max_new_tokens: 2048`) |
+| `1_fail_2_pass_3_pass_A.mp4` | **the false pass** |
+
+The remaining nine labelled takes, a batch sweep and an offline scorer are in the worked
+example:
 [task-verification-agent-example](https://github.com/archetypeai/task-verification-agent-example).
 
 ## Ground truth in the filename

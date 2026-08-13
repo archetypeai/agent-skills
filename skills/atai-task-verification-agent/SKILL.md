@@ -390,7 +390,7 @@ python3 references/run_tva_agent.py --video clip.mp4 --sop my-sop.txt --dry-run
 
 # offline: read and score a committed output, no key needed
 python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_pass_A.json
-python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json   # a PASSED verdict that is false
+python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json   # a PASSED verdict that is false
 python3 references/run_tva_agent.py --score references/sample_data/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json
 ```
 
@@ -406,10 +406,11 @@ skills/atai-task-verification-agent/
 │       ├── README.md                          what these are, and how to read them together
 │       ├── 1_pass_2_pass_3_pass_A.mp4         all three steps performed
 │       ├── 1_pass_2_pass_3_fail_A.mp4         step 3 skipped — the wrench never appears
+│       ├── 1_fail_2_pass_3_pass_A.mp4         step 1 skipped — the o-ring is never fitted
 │       ├── oring-numbered.txt                 the 3-step SOP both clips were run against
 │       ├── tva-output-1_pass_2_pass_3_pass_A.json               3 PASSED, with reasons
 │       ├── tva-output-sealant-CORRECT-MISSING.json              correct MISSING on an absent prop
-│       ├── tva-output-1_fail_2_pass_3_pass_B-FALSE-PASS.json    PASSED on a step never performed
+│       ├── tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json    PASSED on a step never performed
 │       └── tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json the reasoning overflow, 44 bytes
 └── tests/
     └── test_references.py        network-free
