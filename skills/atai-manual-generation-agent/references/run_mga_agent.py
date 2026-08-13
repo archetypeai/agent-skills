@@ -376,7 +376,7 @@ def main() -> None:
                           "values": values}, indent=2))
         print(f"POST {endpoint}/agents/bundles/<id>/run")
         print(json.dumps({"connectors": {"source": [
-            {"type": "file", "id": os.path.basename(args.video),
+            {"type": "file", "id": upload_name(args.video),
              "format": "mp4"}]}}, indent=2))
         return
 
@@ -392,8 +392,12 @@ def main() -> None:
               "normally, then the pod may die ~1s in with 'resolving blueprint: "
               "invalid config'. Target the key 'mga' instead.")
     ignored = inert_values(bp, values)
+    print(f"  honoured: {[k for k in values if k not in ignored]}")
     if ignored:
         print(f"  WARNING: {ignored} not wired on this blueprint; accepted and ignored.")
+        if "prompt" in ignored:
+            print("    The blueprint's own instruction applies instead:\n"
+                  f"    {bp['document']['connectors']['source']['config'].get('default_text')!r}")
         for k in ignored:
             values.pop(k)
 
