@@ -155,7 +155,8 @@ def main():
                         help="use the variant bundle that also emits the Newton "
                              "Omega encoder embedding for each window — one "
                              "embedding_{variate} column per sensor channel, "
-                             "each a 768-d vector")
+                             "each a 768-d vector. Expect a much larger output "
+                             "file: 314 MB vs 221 KB on the sample slice")
     parser.add_argument("--bundle-id",
                         help="run this bundle id directly, skipping the name lookup")
     parser.add_argument("--window-size", type=int, default=16,
