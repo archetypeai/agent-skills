@@ -1,5 +1,7 @@
 # Archetype AI Agent Skills
 
+[![skills.sh](https://www.skills.sh/b/archetypeai/agent-skills)](https://www.skills.sh/archetypeai/agent-skills)
+
 Agent skills for building applications with [Archetype AI's Newton](https://www.archetypeai.io/) — a real-time sensor intelligence platform that understands physical world data through foundation models.
 
 Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
@@ -11,9 +13,16 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agent API — bundle the canonical `osm` blueprint with a fitted classifier artifact, run one agent per input CSV, poll, and download per-window state predictions |
+| [atai-design-system](skills/atai-design-system/) | Build a Newton demo front-end with the Archetype AI Design System — scaffold via the `ds` CLI (`@archetypeai/ds-cli`) and compose the published Svelte 5 primitives + OKLCH tokens (`@archetypeai/ds-{lib-tokens,ui-svelte-console,ui-svelte-labs}`) instead of hand-rolling UI |
+| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agent API — resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions |
 
 More skills are in review and will be added to this table as they land.
+
+## Building with the Design System
+
+When starting a new demo front-end, don't hand-roll the UI — scaffold with the [atai-design-system](skills/atai-design-system/) skill and build on top of what it generates. The `ds` CLI stands up a SvelteKit + Tailwind v4 project wired to the published Archetype AI Design System packages (branded tokens, fonts, and Svelte 5 primitives), and writes an agent config (`CLAUDE.md`/`AGENTS.md` + `ds-manifest.json`) that documents every available component, its usage recipes, and variant axes.
+
+Use that scaffolded project as the baseline for your demo: the tokens, brand styling, and component library are already in place, so you can focus on the Newton integration (fusion or Omega calls via the model skills) and the demo-specific views.
 
 ## Example apps
 
@@ -32,7 +41,19 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 
 ## Quick Start
 
-### Claude Code
+### Any coding agent (recommended)
+
+Install via the [skills.sh](https://www.skills.sh/) CLI — it detects your coding agents (Claude Code, Cursor, Codex, Copilot, and 20+ others) and installs to the right location for each:
+
+```bash
+# Install into the current project
+npx skills add archetypeai/agent-skills
+
+# Or install globally (available in all projects)
+npx skills add archetypeai/agent-skills -g
+```
+
+### Manual (Claude Code)
 
 ```bash
 # Add as global skills (available in all projects)
@@ -48,6 +69,8 @@ cp -r skills/* your-project/.claude/skills/
 /atai-newton-fusion-model          # Multimodal (text/image/video) queries on the C 2.6 fusion model
 /atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
 /atai-newton-omega-model-data-prep # Clean / split / featurize time-series before the Omega model
+/atai-design-system                # Scaffold + build a Newton demo front-end with the Archetype AI Design System
+/atai-operational-state-monitoring-agent # Managed OSM agent: pre-packaged bundle, per-window state predictions
 ```
 
 ## Architecture
