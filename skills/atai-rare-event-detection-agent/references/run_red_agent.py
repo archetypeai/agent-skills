@@ -373,7 +373,9 @@ def main() -> None:
                     help=f"run '{QUICK_START_BUNDLE_EMBEDDINGS}' instead — each "
                          "prediction row also carries the Newton Omega encoder "
                          "embedding for its window: one embedding_{variate} "
-                         "column per sensor channel, each a 768-d vector")
+                         "column per sensor channel, each a 768-d vector. "
+                         "Expect a much larger output file: 740 MB vs 381 KB "
+                         "on the sample slice")
     ap.add_argument("--bundle-name", default=None,
                     help="run a different bundle by its exact name (default: "
                          f"'{QUICK_START_BUNDLE}'). Canonical bundles win when "

@@ -153,7 +153,7 @@ client-side and prefer `is_canonical: true`. Two bundles are published:
 | Name | What you get |
 |------|--------------|
 | `RED Quick Start (Pump Breakdown)` | Per-window predictions from a pump-breakdown classifier fit to two labelled Kaggle pump-sensor incidents |
-| `RED Quick Start (Pump Breakdown, Embeddings)` | The same, plus the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per sensor channel, each a 768-d vector (the same embeddings `atai-newton-omega-model` gets from `/query`, here computed server-side as part of the run; `output_embeddings: true`) |
+| `RED Quick Start (Pump Breakdown, Embeddings)` | The same, plus the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per sensor channel, each a 768-d vector (the same embeddings `atai-newton-omega-model` gets from `/query`, here computed server-side as part of the run; `output_embeddings: true`). **The output file gets dramatically larger**: 740 MB vs 381 KB on the sample slice, ~1,900× |
 
 Both pin the classifier artifact (`red-classifier` slot) and its windowing
 (`window_size=64, step_size=1`), so there is **nothing to create and no
