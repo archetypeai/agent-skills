@@ -162,7 +162,7 @@ Runtime scales with window count (dev deployment, solo runs, `step_size=1`):
 | ~3,940  | ~22 min  |
 | ~4,185  | ~27 min  |
 
-Classifier load is ~30 s of that; the rest is mostly Omega-encoding the windows. Concurrent runs divide the same GPU workers — sequential is faster per run and barely slower in total. Dev workers can be heavily contended; a run occasionally takes far longer than the table.
+Classifier load is ~30 s of that; the rest is mostly Omega-encoding the windows. (The ~4,185 row re-verified end-to-end on 2026-08-13/14: 21m53s and 27m18s.) Concurrent runs divide the same GPU workers — sequential is faster per run and barely slower in total. Dev workers can be contended; a run occasionally takes longer than the table.
 
 ## Common Pitfalls
 
@@ -226,7 +226,7 @@ python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per w
 python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
 ```
 
-Expect ~20–25 min for the ~4,185 step-1 windows of the sample slice; the script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
+Expect **~20–30 min** for the ~4,185 step-1 windows of the sample slice (two verified end-to-end runs: 21m53s and 27m18s); the script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
 
 ## File Layout
 
