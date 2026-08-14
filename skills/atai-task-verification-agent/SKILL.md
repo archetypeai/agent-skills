@@ -189,9 +189,18 @@ POST {endpoint}/v0.5/files          # multipart/form-data, field name "file"
 
 Twice: once for the video, once for the SOP. The **declared** `Content-Type` is enforced against a MIME allowlist, not the bytes — `video/mp4` and `text/plain`. Use `file_id` (the basename) in the run payload, **not** `file_uid`; the uid fails at source resolution after the pod has started.
 
-### Name the pair so the stems match — and so nothing can overwrite it
+### Name the pair so it says what it is, and so nothing can overwrite it
 
-A run's inputs arrive as **one flat list of file ids**, with nothing saying which text belongs to which video, so the pipeline pairs them **by matching stems**. Upload as:
+A run's inputs arrive as **one flat list of file ids** with nothing saying which text belongs to which video, so the pipeline works it out from the names. Matching is **substring, not equality** — a `<stem>.txt` pairs with any video whose name *contains* `<stem>`:
+
+| you pass | what happens |
+|---|---|
+| **1 video + 1 SOP** | that procedure applies **whether or not the names match** |
+| 1 SOP + N videos | the same procedure applies to every video, stems irrelevant |
+| N SOPs + N videos | each video takes the SOP whose stem it contains; **longest match wins**, with a warning |
+| a video no SOP matches | falls back to `default_text`, and is **skipped** if that is unset |
+
+So for a 1:1 run — what this script does — naming cannot break pairing. It still matters for two other reasons: **substring matching is loose** (`file-1.txt` pairs with `cam-file-1-run.mp4`, and short or overlapping stems mis-pair in multi-input runs), and an id is the only record of which procedure a run used. Upload as:
 
 ```
 1_pass_2_pass_3_pass_A-oring-numbered-20260813T193901Z-56ce.mp4

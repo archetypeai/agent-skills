@@ -203,11 +203,15 @@ def pair_names(video: str, sop: str, suffix: str | None = None) -> tuple[str, st
     """The ids to upload under, as (video, sop). Stems MATCH and name the SOP.
 
     A run's inputs arrive as ONE FLAT LIST of file ids with nothing saying which text
-    belongs to which video, so the pipeline pairs them by matching stems. Using the
-    clip's stem alone satisfies that, but then every SOP variant collides on one name
-    per clip. Including the SOP's stem records which procedure a run was checked
-    against, and `suffix` (see run_suffix) makes the pair unique across CONCURRENT
-    USERS.
+    belongs to which video, so the pipeline infers it from the names — by SUBSTRING,
+    not equality: a `<stem>.txt` pairs with any video whose name CONTAINS `<stem>`.
+    With a single SOP, as here, it applies to the video whether or not the names
+    relate at all, so for a 1:1 run naming cannot break pairing.
+
+    It still earns its keep. Including the SOP's stem records which procedure a run
+    was checked against — the only such record, since the platform's file list holds
+    only whatever was uploaded last. And `suffix` (see run_suffix) makes the pair
+    unique across CONCURRENT USERS, which is the part that prevents lost runs.
 
     BOTH halves get the same suffix — a per-file suffix would break the very pairing
     this exists to protect.
