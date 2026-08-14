@@ -76,8 +76,6 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > known `--bundle-id` for that environment). Please contact
 > support@archetypeai.dev.
 
-The full Agent API surface is specified in [`references/openapi.yaml`](references/openapi.yaml); [`references/agent-cli`](references/agent-cli) wraps every endpoint for interactive use.
-
 ## Step 1 — Upload the input CSV
 
 ```sh
@@ -199,9 +197,14 @@ Then run the returned bundle id as in Step 3. Notes: the `fit-classifier` artifa
 Each run leaves an agent instance behind; the pre-packaged bundle is canonical and shared — **do not delete it**. Delete your own agent instances (and any bundle you created yourself):
 
 ```sh
-python3 references/agent-cli agents delete agt_...    # your run's instance
-python3 references/agent-cli bundles delete bnd_...   # only a bundle YOU created (cascades)
+curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"       # your run's instance
+curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID"        # only a bundle YOU created
 ```
+
+(`DELETE` on a running instance returns 409 — cancel first with
+`POST /agents/instances/{id}/cancel`.)
 
 ## Local Setup
 
@@ -230,8 +233,6 @@ skills/atai-operational-state-monitoring-agent/
 ├── SKILL.md                  ← this file
 ├── references/
 │   ├── run_osm_agent.py      ← the whole managed flow, stdlib-only (upload → resolve pre-packaged bundle → run → poll → download → score)
-│   ├── agent-cli             ← hand-rolled CLI covering every Agent API endpoint (incl. delete cascades)
-│   ├── openapi.yaml          ← Agent API spec (under development)
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_data/
 │       ├── volve_states_opt_slice_04.csv         ← 4,200-row six-state eval slice (prepared + z-scored)
