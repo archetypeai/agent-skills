@@ -371,8 +371,9 @@ def main() -> None:
                          "<stem>_labels.csv next to it enables scoring.")
     ap.add_argument("--embeddings", action="store_true",
                     help=f"run '{QUICK_START_BUNDLE_EMBEDDINGS}' instead — each "
-                         "prediction row also carries the Omega encoder "
-                         "embedding as embedding_{variate} columns")
+                         "prediction row also carries the Newton Omega encoder "
+                         "embedding for its window: one embedding_{variate} "
+                         "column per sensor channel, each a 768-d vector")
     ap.add_argument("--bundle-name", default=None,
                     help="run a different bundle by its exact name (default: "
                          f"'{QUICK_START_BUNDLE}'). Canonical bundles win when "

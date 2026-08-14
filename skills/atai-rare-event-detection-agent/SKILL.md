@@ -153,7 +153,7 @@ client-side and prefer `is_canonical: true`. Two bundles are published:
 | Name | What you get |
 |------|--------------|
 | `RED Quick Start (Pump Breakdown)` | Per-window predictions from a pump-breakdown classifier fit to two labelled Kaggle pump-sensor incidents |
-| `RED Quick Start (Pump Breakdown, Embeddings)` | The same, plus each row carries the Omega encoder embedding as `embedding_{variate}` columns (`output_embeddings: true`) |
+| `RED Quick Start (Pump Breakdown, Embeddings)` | The same, plus the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per sensor channel, each a 768-d vector (the same embeddings `atai-newton-omega-model` gets from `/query`, here computed server-side as part of the run; `output_embeddings: true`) |
 
 Both pin the classifier artifact (`red-classifier` slot) and its windowing
 (`window_size=64, step_size=1`), so there is **nothing to create and no
@@ -210,11 +210,14 @@ end. The runner's scorer accepts either.) `predicted_state` is the class name
 or `INVALID_STATE`; `p_<class>` columns are per-class probabilities when
 `output_probabilities` is on (the default).
 
-**The Embeddings bundle adds `embedding_{variate}` columns** — one per input
-channel, each a 768-d vector — and the size cost is dramatic: on the same
-537-window slice, **45.5 MB vs 23 KB** (~85 KB/row with 10 channels, ~2,000×
-the plain output). Use it only when you actually want the vectors alongside
-the predictions (client-side similarity, drift monitoring, projections).
+**The Embeddings bundle adds the Newton Omega embedding for each window** —
+one `embedding_{variate}` column per sensor channel, each a 768-d vector —
+and the size cost is dramatic: on the same 537-window slice, **45.5 MB vs
+23 KB** (~85 KB/row with 10 channels, ~2,000× the plain output). Use it when
+you want the vectors alongside the predictions — client-side similarity,
+drift monitoring, projections, or downstream ML per
+[`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns —
+without paying one `/query` call per window.
 
 ## Bring your own classifier (advanced)
 
