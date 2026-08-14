@@ -13,8 +13,8 @@ description: >
   the run/poll/results lifecycle, the output CSV schema
   (`finish_timestamp, start_timestamp, predicted_state, invalid,
   p_<class>…`), the Embeddings bundle variant (per-row Omega embeddings,
-  ~2,000× larger output), bring-your-own-classifier via the `red` and
-  `red-fitting` blueprints, and why incident-level detection must be scored
+  ~2,000× larger output), bring-your-own-classifier via the canonical `red`
+  blueprint, and why incident-level detection must be scored
   separately from window-level accuracy. Do NOT use for classifying every
   operating regime from a full labelled library
   (`atai-operational-state-monitoring-agent`), for unnamed anomalies against
@@ -51,9 +51,9 @@ Quick Start" bundles** with a pump-breakdown classifier and its windowing
 (`window_size=64, step_size=1`) already pinned. One run = one agent instance =
 one input file. You upload the CSV, **resolve the pre-packaged bundle by
 name**, run it, poll until terminal, and download one output CSV of per-window
-predictions. (Detecting *your own* fault catalog means fitting your own
-classifier and creating your own bundle — see "Bring your own classifier"
-below.)
+predictions. (Detecting *your own* fault catalog means a classifier fitted
+for your data — Archetype AI does that with you; see "Bring your own
+classifier" below.)
 
 ## When to Apply
 
@@ -110,8 +110,8 @@ default endpoint.
 
 > **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
 > deployment (`https://api.dev.u1.archetypeai.app`) — the pre-packaged Quick
-> Start bundles, the canonical `red` blueprint, the `red-fitting` blueprint,
-> the Agent API surface, and the runtime numbers below. If name resolution
+> Start bundles, the canonical `red` blueprint, the Agent API surface, and
+> the runtime numbers below. If name resolution
 > reports `no bundle named … found`, the pre-packaged bundle isn't published
 > in that environment yet (Staging/Prod rollout pending) — point at Dev, or
 > pass a known `--bundle-id` for that environment. Please contact
@@ -223,8 +223,11 @@ without paying one `/query` call per window.
 ## Bring your own classifier (advanced)
 
 The pre-packaged bundles run Archetype AI's pump-breakdown classifier. To
-detect **your own** fault catalog, fit your own classifier (below) and create
-your own bundle from the canonical `red` blueprint, then run it as in Step 3:
+detect **your own** fault catalog you need a classifier fitted on your data.
+The fitting pipeline is not accessible to external users yet — contact
+support@archetypeai.dev and Archetype AI will fit one with you and hand back
+the classifier artifact. With that artifact you create your own bundle from
+the canonical `red` blueprint, then run it as in Step 3:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
@@ -244,8 +247,6 @@ the `artifacts` map must be keyed by.
 > old key still returns **HTTP 201 `status: ready`** at bundle creation and only
 > fails ~30 s into the run with `repeated failures polling JOS job` — with no
 > mention of the artifact. Bundles created before the fix must be recreated.
-> `red-fitting`'s `output` value still defaults to the old spelling, which is
-> harmless only because the runner ignores it (below).
 
 `step_size` is normally the only value worth setting. Everything else —
 `window_size`, `data_columns`, `timestamp_column`, `encoder_model` — is
@@ -253,69 +254,6 @@ inherited from the classifier's own `parameters` metadata via
 `${models.classifier.parameters.window_size:1024}`, which is why the payload is
 so small. Omit `step_size` and you inherit the stride the classifier was fit
 with.
-
-### Fitting the classifier — the `red-fitting` blueprint
-
-RED's classifier is fitted by a second blueprint whose sink uses
-**`strategy: centroid`** — one mean prototype per class, which is the design's
-nearest-prototype head. The kNN knobs (`k`, `weights`) are absent by design:
-with one candidate per class there is nothing to vote on.
-
-```sh
-curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
-    "blueprint": "red-fitting",
-    "name": "pump breakdown fit",
-    "values": {"window_size": 64, "step_size": 1, "metric": "L2",
-               "strategy": "centroid", "timestamp_column": "timestamp",
-               "data_columns": ["sensor_02", "sensor_04"],
-               "states": ["normal", "pump_breakdown"]}
-  }'
-```
-
-Then run it over one CSV per class. Four things about this are not discoverable
-from the blueprint's API response:
-
-- **The class label comes from the FILENAME.** Each input file is matched to the
-  class whose name appears in it (case-insensitively, longest match wins), so
-  `shots_pump_breakdown_inc01.csv` → `pump_breakdown`. A renamed file silently
-  mislabels every window in it. Each shot file must therefore contain **only**
-  rows of its own class.
-- **`states` is not a blueprint value.** The runner strips it and uses it as the
-  class vocabulary for that filename matching.
-- **The fitted artifact is always `fit-classifier.safetensors`.** The `output`
-  value is accepted and then ignored, so no artifact is ever named what you asked
-  for. (The blueprint's own default is the stale `rad-classifier.safetensors`,
-  which is harmless precisely because it never reaches disk.) Read the real
-  filename off `/results`; building an `s3://` URI from the requested name points
-  at nothing, and the inference run then fails at artifact load with
-  `repeated failures polling JOS job` — naming the poller, not the missing file.
-- **`red-fitting` is not canonical** (`is_canonical: false`), so it is org-scoped
-  and an org **admin** must register it once before anyone can fit. The `red`
-  inference blueprint *is* canonical and needs no setup.
-
-The artifact's durable location follows the JOS convention:
-
-```
-s3://<bucket>/jos/jobs/<job_id>/agent/worker-0/outputs/output/fit-classifier.safetensors
-```
-
-Use that raw `s3://` form as the bundle artifact — the `/results` `ref` for a
-fitted artifact is presigned and expires.
-
-The result is tiny and worth reading in full:
-
-```
-tensors   ids [K] U64 · vectors [K, D] F32 · weights [K] F32
-metadata  parameters = {window_size, step_size, data_columns, encoder_model,
-                        timestamp_column}     <- inference inherits these
-          classifier = {config: {strategy: "centroid", metric, …},
-                        labels: ["normal", "pump_breakdown"]}
-          index      = {backend: "ball_tree", metric, dim, n: K}
-```
-
-K rows for K classes. A two-class, 10-channel classifier is **62 KB** —
-`vectors [2, 7680]`, since Omega emits 768 dims per variate and concatenates.
 
 ## Scoring: window-level accuracy is misleading here
 
@@ -378,7 +316,7 @@ Two structural facts follow from majority labelling:
   clear queue, the full 8,735-window sample slice completes end-to-end in
   **86–109 s** (~100 win/s; both bundle variants verified, the Embeddings
   run including its 740 MB download). Under load, the same platform has run
-  at ~2.2 win/s — a 12,059-window fit once took ~90 min, and two contended
+  at ~2.2 win/s — a 12,059-window run once took ~90 min, and two contended
   537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
   those historical per-window-count timings are contention artifacts, not
   intrinsic rates. Treat the **audit events, not the clock**, as the signal.
@@ -395,9 +333,9 @@ Two structural facts follow from majority labelling:
   the three scoring views above. `--embeddings` switches to the Embeddings
   bundle; `--bundle-name`/`--bundle-id` run any other bundle.
 - `references/.env.example` — the two required environment variables.
-- `references/sample_data/` — prepared pump slices: three single-class shot
-  files for fitting and a held-out slice with a ground-truth sidecar for running
-  and scoring. See its README for full data attribution.
+- `references/sample_data/` — a prepared, held-out pump slice with a
+  ground-truth sidecar for running and scoring. See its README for full data
+  attribution.
 
 The full seven-stage build behind the pre-packaged classifier (raw CSV →
 preflight → prep → grid search → fit → run → evaluate, including the

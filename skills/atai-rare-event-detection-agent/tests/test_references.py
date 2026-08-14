@@ -12,9 +12,8 @@ network. They lock in the invariants verified against dev:
     INVALID_STATE windows, reports the false-alarm rate only over windows with
     zero fault rows, and reports incident-level detection separately — a slice
     can score high accuracy while missing its incident entirely.
-  * The shipped slices satisfy what the blueprint validates: a strictly regular
-    cadence, monotonic timestamps, a sidecar aligned row-for-row, and shot files
-    that are single-class and unlabelled (the class comes from the filename).
+  * The shipped slice satisfies what the blueprint validates: a strictly
+    regular cadence, monotonic timestamps, and a sidecar aligned row-for-row.
 
 Run:
     python -m unittest discover -s skills/atai-rare-event-detection-agent/tests
@@ -137,11 +136,6 @@ class SampleDataTests(unittest.TestCase):
 
     INFERENCE = SAMPLE / "pump_eval_inc04.csv"
     LABELS = SAMPLE / "pump_eval_inc04_labels.csv"
-    SHOTS = {
-        "pump_nshot_normal.csv": "normal",
-        "pump_nshot_pump_breakdown_inc01.csv": "pump_breakdown",
-        "pump_nshot_pump_breakdown_inc02.csv": "pump_breakdown",
-    }
 
     @staticmethod
     def _read(path):
@@ -169,26 +163,6 @@ class SampleDataTests(unittest.TestCase):
         self.assertEqual(labels[-1], "normal")
         self.assertLess(labels.count(FAULT) / len(labels), 0.10,
                         "the fault class should be rare — that is the point")
-
-    def test_shot_files_are_single_class_and_unlabelled(self):
-        """The fitting runner takes each file's class from its FILENAME."""
-        for name, cls in self.SHOTS.items():
-            path = SAMPLE / name
-            self.assertTrue(path.exists(), f"{name} missing")
-            with open(path) as f:
-                header = f.readline().strip().split(",")
-            self.assertEqual(header[0], "timestamp")
-            self.assertNotIn("label", header,
-                             "shot files carry no label column")
-            self.assertIn(cls, name,
-                          "the class name must appear in the filename")
-
-    def test_filename_class_match_is_unambiguous(self):
-        """Longest match wins, so 'normal' must not also match a fault file."""
-        classes = sorted(set(self.SHOTS.values()), key=len, reverse=True)
-        for name, expected in self.SHOTS.items():
-            hits = [c for c in classes if c.lower() in name.lower()]
-            self.assertEqual(max(hits, key=len), expected, name)
 
 
 class BundleShapeTests(unittest.TestCase):

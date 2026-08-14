@@ -5,17 +5,7 @@ below), z-scored per variate on a strictly regular 1-minute cadence — the shap
 the `red` blueprint requires. Ten channels, selected for fault separation using
 build-region data only.
 
-**For fitting** (`red-fitting`) — single-class files. The fitting runner takes
-each file's class from its **filename**, so these contain no label column and no
-rows of the other class:
-
-| File | Rows | Class |
-|---|---|---|
-| `pump_nshot_normal.csv` | 8,192 | `normal` |
-| `pump_nshot_pump_breakdown_inc01.csv` | 945 | `pump_breakdown` (incident #1) |
-| `pump_nshot_pump_breakdown_inc02.csv` | 3,111 | `pump_breakdown` (incident #2) |
-
-**For running and scoring** (`red`) — a held-out slice with a row-aligned
+**For running and scoring** — a held-out slice with a row-aligned
 ground-truth sidecar:
 
 | File | Rows | Contents |
@@ -23,8 +13,8 @@ ground-truth sidecar:
 | `pump_eval_inc04.csv` | 8,798 | 4,096 normal → 606 fault → 4,096 normal |
 | `pump_eval_inc04_labels.csv` | 8,798 | `timestamp,label` |
 
-Incident #4 is a genuinely held-out event — the prototypes come from incidents
-#1–#2 only — and at 606 rows it is the shortest incident this configuration
+Incident #4 is a genuinely held-out event — the pre-packaged classifier's
+prototypes come from incidents #1–#2 only — and at 606 rows it is the shortest incident this configuration
 reliably catches. Its 8,192 rows of normal context are what make the false-alarm
 rate meaningful: it is measured over ~8,000 windows containing zero fault rows.
 

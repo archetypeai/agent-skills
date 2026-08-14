@@ -26,17 +26,12 @@ import argparse
 import csv
 import json
 import os
-import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-
-JOS_S3_BUCKET = "atai-platform-dev-platform-data-us-west-2"
-JOS_OUTPUT_TEMPLATE = ("s3://{bucket}/jos/jobs/{job_id}/agent/worker-0/"
-                       "outputs/output/{filename}")
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -164,16 +159,6 @@ def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
         print(f"  {time.strftime('%H:%M:%S')} status={status}")
     return status
 
-
-def jos_job_id(agent_id: str) -> str | None:
-    """The JOS job id is announced in the agent's events at dispatch."""
-    events = request("GET", f"{agents_base()}/instances/{agent_id}/events")
-    job_id = None
-    for ev in events.get("data", []):
-        m = re.search(r"dispatched to JOS as (job_\w+)", str(ev.get("message", "")))
-        if m:
-            job_id = m.group(1)
-    return job_id
 
 
 def download_results(agent_id: str, out_path: str) -> str | None:
