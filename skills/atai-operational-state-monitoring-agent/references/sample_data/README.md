@@ -14,10 +14,9 @@ uniform). Expect macro-F1 ≈ 0.83 on this slice — lower than the classifier's
 of the field's life. Concatenated segments contain timestamp seams; the
 platform marks windows straddling them `INVALID_STATE` (~45 windows).
 
-Produced by the prep stage of
-[operational-state-monitoring-agent-example](https://github.com/archetypeai/operational-state-monitoring-agent-example)
-(label by ACTC code → segment on gaps/collisions → global per-channel
-z-score → cut slices; no row is used twice across slices and shots).
+Produced by Archetype AI's OSM data-prep pipeline (label by ACTC code →
+segment on gaps/collisions → global per-channel z-score → cut slices; no row
+is used twice across slices and shots).
 
 ## Attribution
 

@@ -44,7 +44,7 @@ You don't build or host anything: the platform ships **canonical "OSM Quick Star
 **Do not use this skill when:**
 - You want interactive, per-window embeddings to do ML client-side — use [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
 - The raw CSV still needs cleaning / gap-aware segmentation / normalization — see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md); the OSM agent assumes prepared, z-scored input
-- You want to run **your own** fitted classifier rather than the pre-packaged one — the supported path is a **tailored bundle created with Archetype AI** (contact support@archetypeai.dev); the underlying mechanics (blueprint `osm` + a `fit-classifier` S3 artifact) are in the [OSM example repo](https://github.com/archetypeai/operational-state-monitoring-agent-example) (Stages 5–6) and the "Bring your own classifier" note below
+- You want to run **your own** fitted classifier rather than the pre-packaged one — the supported path is a **tailored bundle created with Archetype AI** (contact support@archetypeai.dev); the underlying mechanics (blueprint `osm` + a `fit-classifier` S3 artifact) are in the "Bring your own classifier" note below
 
 ## Endpoints
 
@@ -192,7 +192,7 @@ curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: applicat
   }'
 ```
 
-Then run the returned bundle id as in Step 3. Notes: the `fit-classifier` artifact **must be an `s3://` URI** (platform file ids and `https://` URLs fail with ENOENT; the files API's MIME allowlist rejects safetensors anyway); it must be in the **platform schema** (`ids`/`vectors`/`weights` tensors + `index`/`classifier` manifests), and `values.window_size` **must match the window the classifier was fitted with** (a mismatch silently degrades accuracy instead of erroring). Fitting the artifact is out of scope here — see the [OSM example repo](https://github.com/archetypeai/operational-state-monitoring-agent-example) (Stages 4–5, plus its `run_osm_fit.py` for fitting on the platform without local weights).
+Then run the returned bundle id as in Step 3. Notes: the `fit-classifier` artifact **must be an `s3://` URI** (platform file ids and `https://` URLs fail with ENOENT; the files API's MIME allowlist rejects safetensors anyway); it must be in the **platform schema** (`ids`/`vectors`/`weights` tensors + `index`/`classifier` manifests), and `values.window_size` **must match the window the classifier was fitted with** (a mismatch silently degrades accuracy instead of erroring). Fitting the artifact is out of scope here — for a classifier fitted and packaged for your own data, contact support@archetypeai.dev.
 
 ## Cleanup
 
