@@ -34,10 +34,17 @@ You don't build or host anything: the platform ships **canonical "OSM Quick Star
 - Demo or evaluate the managed OSM path as a **deployed, repeatable batch job**
 - Score the managed predictions on held-out slices against a ground-truth sidecar
 
+> **Your own data?** As of today, this skill runs the **pre-packaged OSM
+> Quick Start bundles**, whose classifier is fit to the Volve six-state
+> drilling data. To classify your own data with states that match it, contact
+> **support@archetypeai.dev** — Archetype AI will work with you to create
+> agent bundles tailored to your data. (The "Bring your own classifier"
+> section below documents the underlying mechanics.)
+
 **Do not use this skill when:**
 - You want interactive, per-window embeddings to do ML client-side — use [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
 - The raw CSV still needs cleaning / gap-aware segmentation / normalization — see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md); the OSM agent assumes prepared, z-scored input
-- You want to run **your own** fitted classifier rather than the pre-packaged one — that means creating your own bundle (blueprint `osm` + a `fit-classifier` S3 artifact); see the [OSM example repo](https://github.com/archetypeai/operational-state-monitoring-agent-example) (Stages 5–6) and the "Bring your own classifier" note below
+- You want to run **your own** fitted classifier rather than the pre-packaged one — the supported path is a **tailored bundle created with Archetype AI** (contact support@archetypeai.dev); the underlying mechanics (blueprint `osm` + a `fit-classifier` S3 artifact) are in the [OSM example repo](https://github.com/archetypeai/operational-state-monitoring-agent-example) (Stages 5–6) and the "Bring your own classifier" note below
 
 ## Endpoints
 
