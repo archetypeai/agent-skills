@@ -52,7 +52,7 @@ BUNDLE_NAME = "OSM Quick Start (Volve Six State)"
 BUNDLE_NAME_EMBEDDINGS = "OSM Quick Start (Volve Six State, Embeddings)"
 
 POLL_INTERVAL_S = 15
-TIMEOUT_S = 2 * 60 * 60   # generous headroom over the ~22-27 min observed solo runtimes
+TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; keep generous margin
 
 
 def load_dotenv(path=".env"):

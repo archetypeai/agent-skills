@@ -116,7 +116,7 @@ curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: applicat
   }'
 ```
 
-Each run creates a **new agent instance** (`agt_…`) — one agent per input file. With no sink configured, the runner writes one output per input, named after the input file. **Run agents sequentially**: concurrent runs share the deployment's GPU workers, and three at once run ~3× slower each than a solo run.
+Each run creates a **new agent instance** (`agt_…`) — one agent per input file. With no sink configured, the runner writes one output per input, named after the input file. **Run agents sequentially**: concurrent runs share the deployment's workers, and three at once run ~3× slower each than running them one at a time.
 
 ## Step 4 — Poll until terminal
 
@@ -149,20 +149,19 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 - **`finish_timestamp` is the window-END timestamp** — a prediction means "the state *now*, given the last `window_size` samples"; `start_timestamp` is the window's first sample. Score each window against the ground-truth label of its final row (end-row labeling on `finish_timestamp`).
 - **`p_<state>` columns are emitted in alphabetical state order**, not library order.
 - **`predicted_state=INVALID_STATE`** marks windows straddling a timestamp seam (backward jump between concatenated segments) — the platform validates timestamp monotonicity strictly. Exclude these when scoring; count them.
-- The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
+- The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels — verified: a 314 MB output for the 4,185-window sample slice, with predictions identical to the base bundle's); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
 - Runs are **deterministic**: a fresh agent on the same input + bundle reproduces predictions exactly.
 
 ## Runtime
 
-Runtime scales with window count (dev deployment, solo runs, `step_size=1`):
+**Runtime is dominated by worker contention, not window count.** The same ~4,185-window sample slice, measured end-to-end (verified runs, 2026-08-13/14):
 
-| Windows | Observed |
-|--------:|---------:|
-| ~1,750  | ~12 min  |
-| ~3,940  | ~22 min  |
-| ~4,185  | ~27 min  |
+| Queue state | End-to-end | Notes |
+|---|---:|---|
+| Empty (verified) | **~96 s** | job time 41 s: ~16 s queued, ~14 s model loading (classifier 5.7 s + omega:1.5 7.8 s), **~26 s to encode+classify** (~160 win/s) — incl. downloading a 314 MB embeddings output |
+| Busy (verified) | 21m53s – 27m18s | same slice, same bundle — ~2.2 win/s effective, ~17× slower |
 
-Classifier load is ~30 s of that; the rest is mostly Omega-encoding the windows. (The ~4,185 row re-verified end-to-end on 2026-08-13/14: 21m53s and 27m18s.) Concurrent runs divide the same GPU workers — sequential is faster per run and barely slower in total. Dev workers can be contended; a run occasionally takes longer than the table.
+Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); sequential remains the predictable default.
 
 ## Common Pitfalls
 
@@ -171,7 +170,7 @@ Classifier load is ~30 s of that; the rest is mostly Omega-encoding the windows.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agent API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
 - **`failed` ≠ failed until you check `/results`.** The job poller can flake after a successful job; output present ⇒ the run succeeded.
-- **Don't run agents concurrently.** Shared GPU workers make N parallel runs ~N× slower each.
+- **Prefer sequential runs.** Workers are shared: under load, N parallel runs ran ~N× slower each; with an empty queue, concurrent runs completed at full speed. Sequential stays the predictable default.
 - **Sampling-rate warnings are expected on irregular data.** The bundle loosens the tolerance for Volve's irregular sampling (Δt 1–27 s); expect warnings, not failures.
 - **Score with end-row labeling on `finish_timestamp` and exclude `INVALID_STATE`.** Predictions are keyed to the window-end timestamp; seam windows are invalidated.
 
@@ -226,7 +225,7 @@ python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per w
 python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
 ```
 
-Expect **~20–30 min** for the ~4,185 step-1 windows of the sample slice (two verified end-to-end runs: 21m53s and 27m18s); the script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
+Expect **~2 min** for the ~4,185 step-1 windows of the sample slice when the worker queue is clear (verified: 96 s end-to-end, Embeddings variant) — and **~22–27 min** when workers are contended (also verified, same slice). The queue state isn't visible to you; the run's own audit events are the signal. The script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
 
 ## File Layout
 
