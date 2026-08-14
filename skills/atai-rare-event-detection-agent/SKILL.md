@@ -294,19 +294,22 @@ Two structural facts follow from majority labelling:
 
 ## Verified platform behavior
 
-- **Artifacts must be `s3://` URIs.** The files API's MIME allowlist rejects
-  `.safetensors`, and `ClassifierNode` resolves artifact strings as
-  filesystem/S3 paths only — a platform `file_id` or an `https://` URL fails
-  with ENOENT without attempting a fetch.
+- **Bundle artifacts must be `s3://` URIs** (bring-your-own-classifier path
+  only). Pass the URI Archetype AI hands you **verbatim**: the platform
+  resolves artifact strings as S3/filesystem paths only, so a platform
+  `file_id` or an `https://` URL is accepted at bundle creation and then
+  fails at run time with ENOENT, without attempting a fetch. There is no
+  upload route either — the files API rejects `.safetensors`.
 - **All-`INVALID_STATE` output means input validation, not a model problem.**
   The blueprint defaults to `validate_monotonic_timestamps: true` and
   `sample_rate_interval_tolerance: 0.05`. A common cause is a timestamp bug in
   prep: with pandas 2.x+, `astype("int64") // 10**9` divides by 1000× too much
   when parsing yields microsecond resolution, collapsing a 1-minute cadence so
   every timestamp is equal. Use `astype("datetime64[s]").astype("int64")`.
-- **Two NaN-interpolation nodes exist** that OSM's graph lacks:
-  `ValueInterpolationNode` and `InWindowsInterpolationNode` repair short NaN
-  runs server-side (`window_interpolation_max_gap` defaults to 16).
+- **Short NaN runs are repaired server-side** (unlike the OSM sibling's
+  graph): gaps up to `window_interpolation_max_gap` samples (default 16) are
+  interpolated inside the run, so your prep only needs to handle longer
+  outages.
 - **Output timestamps are floats.** The platform emits `1530962520.0` where the
   input carried integer seconds — join on the numeric value, not the string.
 - **A `failed` status can hide a successful run.** We have seen
