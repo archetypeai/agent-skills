@@ -68,6 +68,13 @@ below.)
 - Score a few-shot detector honestly, where standard accuracy is meaningless
   because the positive class is under 1% of windows
 
+> **Your own data?** As of today, this skill runs the **pre-packaged RED
+> Quick Start bundles**, whose classifier is fit to the Kaggle pump-breakdown
+> data. To detect faults in your own data, contact
+> **support@archetypeai.dev** — Archetype AI will work with you to create
+> agent bundles tailored to your data and fault catalog. (The "Bring your own
+> classifier" section below documents the underlying mechanics.)
+
 **Do not use this skill when:**
 - The user has a full labelled library across all regimes and wants "which state
   is the asset in?" — use
@@ -382,10 +389,11 @@ Two structural facts follow from majority labelling:
   files for fitting and a held-out slice with a ground-truth sidecar for running
   and scoring. See its README for full data attribution.
 
-The full seven-stage build (raw CSV → preflight → prep → grid search → fit →
-run → evaluate), including the channel-leakage audits this data requires, lives
-in the
-[RED example repo](https://github.com/archetypeai/rare-event-detection-agent-example).
+The full seven-stage build behind the pre-packaged classifier (raw CSV →
+preflight → prep → grid search → fit → run → evaluate, including the
+channel-leakage audits this data requires) is Archetype AI-internal — for a
+detector fitted and packaged for your own data, contact
+support@archetypeai.dev.
 
 ## Data attribution
 

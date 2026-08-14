@@ -13,7 +13,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-rare-event-detection-agent](skills/atai-rare-event-detection-agent/) | Run the managed RED agent over the Agent API — bundle the canonical `red` blueprint with a fitted nearest-prototype classifier, run one agent per input CSV, poll, and download per-window rare-event predictions |
+| [atai-rare-event-detection-agent](skills/atai-rare-event-detection-agent/) | Run the managed RED agent over the Agent API — resolve the pre-packaged "RED Quick Start" bundle by name (nearest-prototype classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window rare-event predictions |
 | [atai-design-system](skills/atai-design-system/) | Build a Newton demo front-end with the Archetype AI Design System — scaffold via the `ds` CLI (`@archetypeai/ds-cli`) and compose the published Svelte 5 primitives + OKLCH tokens (`@archetypeai/ds-{lib-tokens,ui-svelte-console,ui-svelte-labs}`) instead of hand-rolling UI |
 
 More skills are in review and will be added to this table as they land.
@@ -70,6 +70,7 @@ cp -r skills/* your-project/.claude/skills/
 /atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
 /atai-newton-omega-model-data-prep # Clean / split / featurize time-series before the Omega model
 /atai-design-system                # Scaffold + build a Newton demo front-end with the Archetype AI Design System
+/atai-rare-event-detection-agent   # Managed RED agent: pre-packaged bundle, per-window rare-event predictions
 ```
 
 ## Architecture

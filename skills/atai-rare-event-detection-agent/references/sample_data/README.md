@@ -34,19 +34,16 @@ section.
 
 ## Regenerating, or using other slices
 
-These come from Stage 2 of the
-[RED example repo](https://github.com/archetypeai/rare-event-detection-agent-example):
-
-```sh
-# with data/raw/sensor.csv downloaded from Kaggle
-python3 prep/prepare_pump_events.py
-```
-
-That also produces eval slices for incidents #3, #5, #6 and #7. Do not skip the
-prep: the raw data contains two distinct leakage mechanisms — five channels that
-go NaN *only* inside fault episodes, and several that read a saturated zero when
-the pump stops — and the prep script audits both. Interpolating the first group
-would teach a model "sensor offline = fault" rather than any pump behaviour.
+These slices were produced by Archetype AI's internal prep pipeline from the
+Kaggle source below (per-channel selection + z-scoring + slicing around the
+labelled incidents; the source has seven breakdown episodes, so equivalent
+eval slices exist for incidents #3, #5, #6 and #7). If you prep your own
+slices from the raw Kaggle data, don't skip a leakage audit: the raw data
+contains two distinct leakage mechanisms — five channels that go NaN *only*
+inside fault episodes, and several that read a saturated zero when the pump
+stops. Interpolating the first group would teach a model "sensor offline =
+fault" rather than any pump behaviour. For prepared slices or a detector
+tailored to your own data, contact support@archetypeai.dev.
 
 ## Data attribution
 
