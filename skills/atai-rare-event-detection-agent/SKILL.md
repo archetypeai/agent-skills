@@ -212,8 +212,9 @@ or `INVALID_STATE`; `p_<class>` columns are per-class probabilities when
 
 **The Embeddings bundle adds the Newton Omega embedding for each window** —
 one `embedding_{variate}` column per sensor channel, each a 768-d vector —
-and the size cost is dramatic: on the same 537-window slice, **45.5 MB vs
-23 KB** (~85 KB/row with 10 channels, ~2,000× the plain output). Use it when
+and the size cost is dramatic: **740 MB vs 381 KB** on the full 8,735-window
+sample slice (~85 KB/row with 10 channels, ~2,000× the plain output —
+verified, with predictions identical to the plain bundle's). Use it when
 you want the vectors alongside the predictions — client-side similarity,
 drift monitoring, projections, or downstream ML per
 [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns —
@@ -332,6 +333,12 @@ and it is *not* derivable from window averages.
 **False-alarm rate** — fault predictions on windows containing **zero** fault
 rows. Unlike precision this stays comparable across window sizes.
 
+A verified quick-start run on the shipped slice (8,735 windows) shows the
+three views in action: accuracy **0.9883**, `pump_breakdown` precision 0.8602
+/ recall 0.9934 / F1 0.9220, false-alarm rate **0.0076**, and the incident
+**DETECTED 21 samples after onset** — one run, three different-looking
+numbers, each answering a different operational question.
+
 Why all three: a slice can score **0.9941 accuracy while missing its incident
 entirely**. With 42 fault rows against 8,192 normal ones, predicting `normal`
 everywhere is 99.4% correct and 100% useless. Nothing in the window-level table
@@ -367,17 +374,17 @@ Two structural facts follow from majority labelling:
 - **A `failed` status can hide a successful run.** We have seen
   `repeated failures polling JOS job` on a job that completed. Always check
   `/results` before re-running.
-- **Encoder throughput is ~2.2 windows/s and roughly independent of window
-  size** (measured 1.85–2.34 win/s across `w=32`…`w=256`, an 8× range in samples
-  per window). Budget by *window count*: a 12,059-window fit takes ~90 minutes,
-  and inference is ~2.1–2.3 win/s. A local reference encoder on one M-series GPU
-  runs ~15× faster, which suggests per-window overhead rather than compute.
-- **Run agents sequentially.** Concurrent runs share dev's GPU workers; five at
-  once ran roughly 5× slower each. Total GPU work is unchanged, so what
-  concurrency costs is feedback, not throughput. Contention is also **highly
-  variable**: two concurrent 537-window Quick Start runs on a busy Dev took
-  ~2.5 h wall-clock (~0.1 win/s effective) against the ~2.2 win/s solo rate —
-  budget generously and treat the events stream, not the clock, as the signal.
+- **Runtime is dominated by worker contention, not window count.** With a
+  clear queue, the full 8,735-window sample slice completes end-to-end in
+  **86–109 s** (~100 win/s; both bundle variants verified, the Embeddings
+  run including its 740 MB download). Under load, the same platform has run
+  at ~2.2 win/s — a 12,059-window fit once took ~90 min, and two contended
+  537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
+  those historical per-window-count timings are contention artifacts, not
+  intrinsic rates. Treat the **audit events, not the clock**, as the signal.
+- **Prefer sequential runs.** Workers are shared: under load, five
+  concurrent runs ran ~5× slower each; with a clear queue, concurrent runs
+  completed at full speed. Sequential stays the predictable default.
 - **Cancel with `POST /agents/instances/{id}/cancel`.** Killing a local client
   does not stop the job — `DELETE` returns 409 while running.
 
