@@ -6,8 +6,8 @@ NO network. They lock in the verified invariants:
     stripped before mounting /agents (the files API keeps its own /v0.5).
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
     endpoint.
-  * The pre-packaged bundle is resolved by EXACT name via the plural read
-    endpoint (GET /agents/bundles?query=...) with no bundle creation;
+  * The pre-packaged bundle is resolved by EXACT name via
+    GET /agents/bundles?query=... with no bundle creation;
     --embeddings selects the variant, --bundle-id skips the lookup; the run
     body binds the source connector to the upload's file_id (the filename),
     not the fil_ uid.
@@ -69,9 +69,9 @@ class TestRequestBodies(unittest.TestCase):
                 {"id": "bnd_base", "name": run_osm_agent.BUNDLE_NAME},
                 {"id": "bnd_emb", "name": run_osm_agent.BUNDLE_NAME_EMBEDDINGS},
             ]},
-            ("POST", "/agents/bundle/bnd_base/run"): {"id": "agt_1", "status": "running"},
-            ("POST", "/agents/bundle/bnd_emb/run"): {"id": "agt_1", "status": "running"},
-            ("POST", "/agents/bundle/bnd_pinned/run"): {"id": "agt_1", "status": "running"},
+            ("POST", "/agents/bundles/bnd_base/run"): {"id": "agt_1", "status": "running"},
+            ("POST", "/agents/bundles/bnd_emb/run"): {"id": "agt_1", "status": "running"},
+            ("POST", "/agents/bundles/bnd_pinned/run"): {"id": "agt_1", "status": "running"},
             ("GET", "/agents/instances/agt_1"): {"id": "agt_1", "status": "completed"},
             ("GET", "/agents/instances/agt_1/events"): {"data": []},
             ("GET", "/agents/instances/agt_1/results"): {
@@ -112,9 +112,9 @@ class TestRequestBodies(unittest.TestCase):
         paths = [p for m, p, b in calls]
         # resolved by name via the plural read endpoint; NO bundle creation
         self.assertIn("/agents/bundles", paths)
-        self.assertNotIn("/agents/bundle", paths)  # the singular create POST
+        self.assertNotIn("/agents/bundle", paths)  # no create, and no singular paths
         run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
-        self.assertEqual(run[1], "/agents/bundle/bnd_base/run")  # exact-name match
+        self.assertEqual(run[1], "/agents/bundles/bnd_base/run")  # exact-name match
         self.assertEqual(run[2]["connectors"]["source"],
                          [{"type": "file", "id": "volve_states_opt_slice_04.csv"}])
 
@@ -122,14 +122,14 @@ class TestRequestBodies(unittest.TestCase):
         calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
                                 "--embeddings"])
         run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
-        self.assertEqual(run[1], "/agents/bundle/bnd_emb/run")
+        self.assertEqual(run[1], "/agents/bundles/bnd_emb/run")
 
     def test_bundle_id_override_skips_lookup(self):
         calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
                                 "--bundle-id", "bnd_pinned"])
         self.assertNotIn("/agents/bundles", [p for m, p, b in calls])
         run = next((m, p, b) for m, p, b in calls if p.endswith("/run"))
-        self.assertEqual(run[1], "/agents/bundle/bnd_pinned/run")
+        self.assertEqual(run[1], "/agents/bundles/bnd_pinned/run")
 
 
 class TestEvaluate(unittest.TestCase):

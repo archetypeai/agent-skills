@@ -52,12 +52,12 @@ Authorization: Bearer <API_KEY> on every call
 
 The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. If your `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending `/agents`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint.
 
-> **⚠️ Singular vs plural — the bundle API is split.** Reads are **plural**
-> (`GET /agents/bundles` to list/search, `GET /agents/bundles/{id}` to fetch
-> one); create and run are **singular** (`POST /agents/bundle`,
-> `POST /agents/bundle/{id}/run`). Using `GET /agents/bundle` (singular)
-> 404s. This skill only needs the plural read (to resolve by name) and the
-> singular run.
+> **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
+> `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch),
+> `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). The
+> singular forms (`POST /agents/bundle`, `POST /agents/bundle/{id}/run`,
+> `GET /agents/bundle/{id}`) now return **404** — earlier revisions of this
+> skill described a singular/plural split that predates this migration.
 
 > **⚠️ Availability — Dev-verified.** The pre-packaged "OSM Quick Start"
 > bundles are confirmed on the **Dev** deployment
@@ -66,7 +66,8 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > `no bundle named … found`, the bundle isn't in that environment yet.
 > Resolving by name is portable, so the skill starts working there
 > automatically once the bundles land; until then, point it at Dev (or pass a
-> known `--bundle-id` for that environment).
+> known `--bundle-id` for that environment). Please contact
+> support@archetypeai.dev.
 
 The full Agent API surface is specified in [`references/openapi.yaml`](references/openapi.yaml); [`references/agent-cli`](references/agent-cli) wraps every endpoint for interactive use.
 
@@ -105,7 +106,7 @@ The bundle already pins the classifier and its windowing (`window_size=16, step_
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundle/$BUNDLE_ID/run" -d '{
+  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID/run" -d '{
     "connectors": {"source": [{"type": "file", "id": "sensor_slice.csv"}]}
   }'
 ```
@@ -161,7 +162,7 @@ Classifier load is ~30 s of that; the rest is mostly Omega-encoding the windows.
 ## Common Pitfalls
 
 - **Resolve by name, not by id.** The pre-packaged bundle's id changes across dev/staging/prod; only the name is stable. And **match the name exactly** — the base name is a substring of the `…, Embeddings)` name, so a substring `query=` returns both.
-- **Reads are plural, run is singular.** `GET /agents/bundles` (list/search) and `GET /agents/bundles/{id}` (fetch); `POST /agents/bundle/{id}/run` (run). `GET /agents/bundle/…` (singular) 404s.
+- **The bundle API is plural everywhere** (as of 2026-08-11). `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch), `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). Every singular form (`/agents/bundle/…`) 404s.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agent API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
 - **`failed` ≠ failed until you check `/results`.** The job poller can flake after a successful job; output present ⇒ the run succeeded.
@@ -175,7 +176,7 @@ The pre-packaged bundle runs Archetype AI's six-state Volve classifier. To run *
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundle" -d '{
+  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
     "blueprint": "osm",
     "name": "my OSM run",
     "values": {"window_size": 16, "step_size": 1,

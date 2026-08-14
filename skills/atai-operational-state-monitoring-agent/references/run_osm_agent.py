@@ -10,9 +10,10 @@ finds one and runs it. It resolves the bundle **by name** so it is portable
 across dev/staging/prod (the bundle *id* changes per environment; the name
 does not); pass `--bundle-id` to skip the lookup.
 
-Stdlib-only. The bundle API is split singular/plural: reads are plural
-(`GET /agents/bundles`, `GET /agents/bundles/{id}`), create/run are singular
-(`POST /agents/bundle`, `POST /agents/bundle/{id}/run`).
+Stdlib-only. The bundle API is plural everywhere (as of 2026-08-11):
+`GET /agents/bundles[?query=…]`, `GET /agents/bundles/{id}`,
+`POST /agents/bundles`, `POST /agents/bundles/{id}/run` — the singular forms
+now return 404.
 
 Auth / endpoint come from the environment (a local .env is loaded if present):
   ATAI_API_KEY        Bearer token (required).
@@ -73,20 +74,34 @@ def host_base():
     return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
 
 
-def request(method, url, body=None, headers=None):
+def request(method, url, body=None, headers=None, retries=4):
+    """Call the API, retrying transient network failures.
+
+    Polls run for the better part of an hour, and a single DNS hiccup or
+    socket timeout would otherwise kill the client while the platform job
+    carries on unattended. Only *network* errors retry; an HTTP status is a
+    real answer from the server and still exits.
+    """
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read() or b"null")
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
-        sys.exit(f"{method} {url} failed ({e.code}): {detail}")
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return json.loads(resp.read() or b"null")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            sys.exit(f"{method} {url} failed ({e.code}): {detail}")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == retries:
+                sys.exit(f"{method} {url} failed after {retries + 1} attempts: {e}")
+            wait = 5 * (2 ** attempt)
+            print(f"  network error ({e}); retrying in {wait}s [{attempt + 1}/{retries}]")
+            time.sleep(wait)
 
 
 def upload_file(path):
@@ -123,7 +138,13 @@ def resolve_bundle(agents, name):
     if not exact:
         seen = [b.get("name") for b in rows]
         sys.exit(f"no bundle named {name!r} found (query returned {seen}). "
-                 f"Is it published in this environment? Pass --bundle-id to pin one.")
+                 f"Is it published in this environment? Pass --bundle-id to "
+                 f"pin one, or contact support@archetypeai.dev.")
+    # Prefer the canonical (platform-published) bundle over any same-named
+    # org bundle that would otherwise shadow it.
+    for bundle in exact:
+        if bundle.get("is_canonical"):
+            return bundle["id"]
     return exact[0]["id"]
 
 
@@ -167,7 +188,7 @@ def main():
     # 3. Run the bundle. No sink is given, so the runner writes one output per
     #    input, named after the input file.
     print("starting agent run ...")
-    agent = request("POST", f"{agents}/bundle/{bundle_id}/run", body={
+    agent = request("POST", f"{agents}/bundles/{bundle_id}/run", body={
         "connectors": {"source": [{"type": "file", "id": file_id}]},
     })
     agent_id = agent["id"]
@@ -200,7 +221,9 @@ def main():
     if agent["status"] != "completed":
         print(f"  note: status={agent['status']} ({agent.get('error')}) "
               f"but output exists — treating as succeeded")
-    print(f"results ({results['total']}):")
+    # The results envelope is {data, has_more, next_cursor} — no `total` field
+    # (removed when the list envelopes were standardized).
+    print(f"results ({len(results['data'])}):")
     for output in results["data"]:
         print(f"  {output['data']['filename']}  ({output['data']['num_bytes']} bytes)")
 
