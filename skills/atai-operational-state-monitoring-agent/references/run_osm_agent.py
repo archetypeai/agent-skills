@@ -24,7 +24,7 @@ Auth / endpoint come from the environment (a local .env is loaded if present):
 Usage:
   python3 run_osm_agent.py                      # default sample slice
   python3 run_osm_agent.py --csv my_slice.csv
-  python3 run_osm_agent.py --embeddings         # variant that also emits embeddings
+  python3 run_osm_agent.py --embeddings         # + Newton Omega embedding per window
   python3 run_osm_agent.py --bundle-id bnd_...  # skip name lookup (pin an id)
 """
 from __future__ import annotations
@@ -152,8 +152,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=DEFAULT_CSV, help="input CSV to run inference on")
     parser.add_argument("--embeddings", action="store_true",
-                        help="use the variant bundle that also emits per-variate "
-                             "encoder embeddings (embedding_{variate} columns)")
+                        help="use the variant bundle that also emits the Newton "
+                             "Omega encoder embedding for each window — one "
+                             "embedding_{variate} column per sensor channel, "
+                             "each a 768-d vector")
     parser.add_argument("--bundle-id",
                         help="run this bundle id directly, skipping the name lookup")
     parser.add_argument("--window-size", type=int, default=16,

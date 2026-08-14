@@ -101,7 +101,7 @@ Two bundles are published:
 | Name | Emits |
 |---|---|
 | `OSM Quick Start (Volve Six State)` | per-window state predictions |
-| `OSM Quick Start (Volve Six State, Embeddings)` | the above **plus** `embedding_{variate}` columns (the encoder embedding per prediction) |
+| `OSM Quick Start (Volve Six State, Embeddings)` | the above **plus** the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per sensor channel, each a 768-d vector (the same embeddings `atai-newton-omega-model` gets from `/query`, here computed server-side as part of the run) |
 
 **Select the EXACT name match, not the first result** — the base name is a substring of the embeddings name, so a `query=` for the base name returns *both*. Pick `b["name"] == "OSM Quick Start (Volve Six State)"` and take its `id`.
 
@@ -149,7 +149,7 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 - **`finish_timestamp` is the window-END timestamp** — a prediction means "the state *now*, given the last `window_size` samples"; `start_timestamp` is the window's first sample. Score each window against the ground-truth label of its final row (end-row labeling on `finish_timestamp`).
 - **`p_<state>` columns are emitted in alphabetical state order**, not library order.
 - **`predicted_state=INVALID_STATE`** marks windows straddling a timestamp seam (backward jump between concatenated segments) — the platform validates timestamp monotonicity strictly. Exclude these when scoring; count them.
-- The **Embeddings** bundle adds `embedding_{variate}` columns (~76 KB/row extra); the base bundle omits them.
+- The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
 - Runs are **deterministic**: a fresh agent on the same input + bundle reproduces predictions exactly.
 
 ## Runtime
@@ -222,7 +222,7 @@ ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
 EOF
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
-python3 run_osm_agent.py --embeddings           # variant that also emits embeddings
+python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per window
 python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
 ```
 
