@@ -211,14 +211,16 @@ curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
 ```bash
 # No third-party deps — references/run_osm_agent.py is stdlib-only.
 
-# Drop a .env next to where you run (BOTH variables required, no default endpoint;
-# note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself):
+cd skills/atai-operational-state-monitoring-agent/references
+
+# Create the .env IN THIS DIRECTORY — the script reads ./.env from where it
+# runs (the file is gitignored). BOTH variables required, no default endpoint;
+# note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
 EOF
 
-cd skills/atai-operational-state-monitoring-agent/references
 python3 run_osm_agent.py                        # default sample slice, base bundle
 python3 run_osm_agent.py --embeddings           # variant that also emits embeddings
 python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
