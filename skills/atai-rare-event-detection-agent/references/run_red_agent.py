@@ -137,7 +137,7 @@ def resolve_bundle(agents: str, name: str) -> dict:
         return exact[0]
     sys.exit(f"no bundle named '{name}' found in this environment — the "
              f"pre-packaged bundles may not be published here yet (verified on "
-             f"Dev; Staging/Prod rollout pending). Pass --bundle-id for this "
+             f"Dev and Staging; Prod rollout pending). Pass --bundle-id for this "
              f"environment as a fallback, or contact support@archetypeai.dev.")
 
 

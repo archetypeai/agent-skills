@@ -108,14 +108,16 @@ default endpoint.
 > `GET /agents/bundle/{id}`) now return **404** — earlier docs (and the OSM
 > sibling skill) describing a singular/plural split predate this migration.
 
-> **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
-> deployment (`https://api.dev.u1.archetypeai.app`) — the pre-packaged Quick
-> Start bundles, the canonical `red` blueprint, the Agent API surface, and
-> the runtime numbers below. If name resolution
-> reports `no bundle named … found`, the pre-packaged bundle isn't published
-> in that environment yet (Staging/Prod rollout pending) — point at Dev, or
-> pass a known `--bundle-id` for that environment. Please contact
-> support@archetypeai.dev.
+> **⚠️ Availability — verified on Dev and Staging.** Everything here is
+> verified against the **Dev** deployment
+> (`https://api.dev.u1.archetypeai.app`), and the full run/score cycle is
+> also verified on **Staging** (`https://api.stage.u1.archetypeai.app`) —
+> the same names resolved to different per-environment `bnd_…` ids and both
+> bundles produced **byte-identical outputs** to the Dev runs'. Prod rollout
+> is pending: if name resolution reports `no bundle named … found`, the
+> pre-packaged bundle isn't published in that environment yet — point at Dev
+> or Staging, or pass a known `--bundle-id` for that environment. Please
+> contact support@archetypeai.dev.
 
 ## The five-step lifecycle
 
@@ -157,9 +159,11 @@ client-side and prefer `is_canonical: true`. Two bundles are published:
 
 Both pin the classifier artifact (`red-classifier` slot) and its windowing
 (`window_size=64, step_size=1`), so there is **nothing to create and no
-classifier URI to supply**. (For reference, on Dev these currently resolve to
-`bnd_47c7pesmwx8yct495bwtm9f05z` and `bnd_01cr02sex781592xa2xhcvby8z` — pin ids
-only as a last resort, since they differ in staging/prod.)
+classifier URI to supply**. (For reference: on Dev these currently resolve to
+`bnd_47c7pesmwx8yct495bwtm9f05z` and `bnd_01cr02sex781592xa2xhcvby8z`, on
+Staging to `bnd_5bxwyza05e9bj983qtdkbrtadn` and
+`bnd_33ew7j2ehk9mxrfh9g4jf2qydx` — the per-environment drift is why you
+resolve by name; pin ids only as a last resort.)
 
 ### 3. Run the bundle — one agent per input file
 
@@ -312,13 +316,17 @@ Two structural facts follow from majority labelling:
   outages.
 - **Output timestamps are floats.** The platform emits `1530962520.0` where the
   input carried integer seconds — join on the numeric value, not the string.
+- **Runs are deterministic across environments.** The same input through the
+  same-named bundle produced **byte-identical outputs on Dev and Staging**
+  (verified with `cmp` on both the 381 KB base output and the 740 MB
+  embeddings output).
 - **A `failed` status can hide a successful run.** We have seen
   `repeated failures polling JOS job` on a job that completed. Always check
   `/results` before re-running.
 - **Runtime is dominated by worker contention, not window count.** With a
   clear queue, the full 8,735-window sample slice completes end-to-end in
-  **86–109 s** (~100 win/s; both bundle variants verified, the Embeddings
-  run including its 740 MB download). Under load, the same platform has run
+  **84–109 s** (~100 win/s; both bundle variants verified on both Dev and
+  Staging, the Embeddings runs including their 740 MB downloads). Under load, the same platform has run
   at ~2.2 win/s — a 12,059-window run once took ~90 min, and two contended
   537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
   those historical per-window-count timings are contention artifacts, not
