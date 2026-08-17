@@ -1,0 +1,416 @@
+---
+name: atai-anomaly-discovery-agent
+description: >
+  Run Archetype AI's managed Anomaly Discovery (AD) agent over the Agent API —
+  upload a prepared sensor CSV, create a bundle from the canonical `ad`
+  blueprint pinning a fitted LOF detector, run it (one agent per input file),
+  poll status + audit events, and download a per-window anomaly score. Use this
+  skill when the user wants to flag "this no longer looks like normal
+  operation" from **normal-only reference data** — no fault library, no
+  labelled examples of the thing being detected, because none exist. Covers
+  the fit → bundle → run → poll → results lifecycle, the output CSV schema
+  (`finish_timestamp, start_timestamp, predicted_label, invalid,
+  anomaly_score`), how Local Outlier Factor produces scores near 1.0 and why
+  the threshold lives inside the artifact, the per-asset framing (one detector
+  per machine), the validation settings that silently invalidate every window
+  above 1 kHz, the 50 MiB checkpoint limit that aborts long inputs, and why
+  anomaly detection must be scored by lead time and false-alarm rate rather
+  than precision and recall. Do NOT use for classifying every operating regime
+  from a labelled library (`atai-operational-state-monitoring-agent`), for
+  detecting a *named* recurring fault from a few labelled shots
+  (`atai-rare-event-detection-agent`), for client-side embedding + KNN over
+  `/query` (`atai-newton-omega-model`), or for cleaning and windowing raw CSVs
+  (`atai-newton-omega-model-data-prep`).
+---
+
+# AD Agent — Managed Anomaly Discovery via the Agent API
+
+The AD agent answers one question: **does this window still look like normal
+operation?** It is fitted on normal data only — a reference period from a
+healthy asset — and everything it flags afterwards is, by construction,
+something it was never shown.
+
+That premise is the whole reason the agent exists. Its two siblings both need
+examples of what you are looking for: OSM needs a labelled library of every
+state, RED needs a handful of shots of a named fault. Neither is available when
+a machine has never failed, which is the normal condition of most industrial
+assets — and the condition under which a monitoring system is most valuable.
+
+The graph is the first canonical blueprint with a **forked** topology:
+
+```
+source → interpolate → window → windowInterpolate → samplingRate → limitValues
+       → tee ─┬→ encoder (omega:1.5) ─────→ fuse.emb ─┐
+              └→ features (ChannelFeatures) → fuse.feat ─┴→ detector (LOF) → sink
+```
+
+Both branches see the same window: the Omega encoder produces a 768-dimensional
+embedding, `ChannelFeatures` produces a handful of per-channel statistics, and
+`ConcatColumnsNode` fuses them before the detector head. That fork has
+consequences documented under **Verified platform behavior** — it is why long
+inputs abort and why only one feature mode is reachable.
+
+## When to Apply
+
+- Flag departures from normal on an asset with **no fault history** — nothing
+  has broken yet, so no labelled example of the failure can exist
+- Monitor an asset whose failure modes are **unknown or unenumerable**, where a
+  named catalog would be a guess
+- Get a **continuous score** rather than a class — "how far from normal", not
+  "which of these six states"
+- Deploy per-asset detectors as repeatable batch jobs with **no client-side ML**
+- Score a detector honestly when the data has no per-window ground truth, which
+  is the usual case for run-to-failure data
+
+> **Your own data?** There is **no pre-packaged "AD Quick Start" bundle** — the
+> two sibling skills resolve one by name, and this one cannot, because a
+> detector is asset-specific by construction: it encodes one machine's notion of
+> normal. You supply a detector artifact and create a bundle from the canonical
+> `ad` blueprint (below). To have one fitted for your data, contact
+> **support@archetypeai.dev**.
+
+**Do not use this skill when:**
+- The user has a labelled library across all regimes and wants "which state is
+  the asset in?" — use
+  [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md)
+- The fault is **named** and a couple of labelled incidents exist — use
+  [`atai-rare-event-detection-agent`](../atai-rare-event-detection-agent/SKILL.md).
+  AD will flag it, but it cannot tell you *which* fault it is
+- You want per-window embeddings to do ML client-side — use
+  [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
+- The raw CSV still needs cleaning, gap-aware segmentation or normalization —
+  see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
+  AD assumes prepared input with a documented sampling rate
+
+## Endpoints
+
+```
+Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
+            GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
+Agent API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Authorization: Bearer <API_KEY> on every call
+```
+
+The Agent API is **versionless** — `/agents`, not `/v0.5/agents`. If
+`ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending
+`/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
+default endpoint.
+
+> **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
+> `GET /agents/bundles`, `GET /agents/bundles/{id}`, `POST /agents/bundles`,
+> `POST /agents/bundles/{id}/run`. The singular forms return **404**.
+
+> **⚠️ There is no `/agents/bundles/{id}/runs` endpoint.** To find a bundle's
+> runs, filter `GET /agents/instances` by `bundle_id` — and it paginates
+> (`data`, `has_more`, `next_cursor`), so a single-page fetch silently misses
+> older runs. On Dev this means walking thousands of instances; capture the
+> `agt_…` id from the run response instead.
+
+> **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
+> deployment (`https://api.dev.u1.archetypeai.app`): the canonical `ad`
+> blueprint, the Agent API surface, and the numbers below.
+
+## The five-step lifecycle
+
+### 1. Upload the input CSV
+
+```sh
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
+  -F "file=@bearing_eval.csv;type=text/csv" \
+  "$ATAI_API_ENDPOINT/v0.5/files"
+```
+
+The response carries a `file_id`, which the platform sets to the **filename**.
+
+> **⚠️ Re-uploading a filename can kill a run already using it.** File ids
+> *are* filenames, so a second upload of the same name replaces the record and
+> orphans the object an in-flight run already resolved. That run then dies with
+> an error naming a UUID and nothing else:
+> `Object not found: files_service/archetypeai/2d579dbe-…`. Upload under
+> timestamped names when anyone else might be running.
+
+### 2. Create a bundle from the canonical `ad` blueprint
+
+Unlike OSM and RED there is nothing to resolve by name. You pin a detector:
+
+```sh
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
+    "blueprint": "ad",
+    "name": "AD bearing outer race",
+    "values": {"threshold": 1.762,
+               "validate_monotonic_timestamps": false,
+               "sample_rate_interval_tolerance": null,
+               "max_temporal_gap": 60.0,
+               "output_score": true},
+    "artifacts": {"ad-detector": "s3://…/fit-detector.safetensors"}
+  }'
+```
+
+Three values matter more than the rest:
+
+- **`ad-detector` must be an `s3://` URI.** The files API rejects safetensors
+  by MIME type, and the detector node resolves artifact strings as
+  filesystem/S3 paths only — a platform file id or an `https://` URL fails with
+  ENOENT without attempting a fetch. **A wrong artifact key is accepted at
+  creation** (HTTP 201, `status: ready`) and only fails ~30 s into the run, with
+  an error naming the job poller rather than the artifact. The key is
+  `ad-detector`; a second blueprint `ada` exists with key `ada-detector`.
+- **`validate_monotonic_timestamps: false` is required above 1 kHz.**
+  Timestamps are stored as `u64` **milliseconds**, so above 1 kHz consecutive
+  samples share a millisecond and no window is ever strictly increasing. Left at
+  the blueprint default of `true`, **every window is marked invalid, and the run
+  still reports `completed`** — the tell is an empty `/results`, not the
+  runtime.
+- **`sample_rate_interval_tolerance: null`** for burst-sampled data. If the
+  within-burst interval and the between-burst interval differ by orders of
+  magnitude, no single tolerance describes both.
+
+Everything else — `window_size`, `step_size`, `data_columns`, `feature_names`,
+`encoder_model` — is read from the detector's own `parameters` metadata. Unlike
+OSM, **the window does not need pinning**: the fitting step records it and the
+`ad` blueprint reads it back.
+
+### 3. Run the bundle — one agent per input file
+
+```sh
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID/run" -d '{
+    "connectors": {"source": [{"type": "file", "id": "bearing_eval.csv"}]}
+  }'
+```
+
+Each run is a new agent (`agt_…`). **Capture that id** — see the pagination
+warning above. Reuse one bundle across every input of the same asset; the
+detector does not change between files.
+
+### 4. Poll until terminal — and do not trust `status`
+
+```sh
+curl -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"
+curl -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/logs"
+```
+
+> **⚠️ `status` is not a reliable terminal signal — `/logs` is.** Pods have
+> terminated with `Error (exit=1)` while `status` still read `running`, hours
+> later. Treat an `error`-level or `pod.terminated` log event as terminal
+> regardless of status, or a client polls to its timeout. Note **`/logs`**, not
+> `/events` — the latter carries only lifecycle info.
+
+### 5. Download the results
+
+```sh
+curl -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
+```
+
+One row per window:
+
+```
+finish_timestamp,start_timestamp,predicted_label,invalid,anomaly_score
+0.05,0.0,normal,false,1.0234712
+```
+
+- **`anomaly_score`** is the LOF score. **1.0 means "as dense as its
+  neighbours"** — see below. Present when `output_score: true`.
+- **`predicted_label`** is `anomaly_label` when the score exceeds the threshold,
+  else `normal_label`. It is threshold-derived, so it adds no information the
+  score lacks.
+- **`invalid`** arrives as the **string** `"false"`, not a boolean.
+- With `output_embeddings: true` there is one `embedding_{variate}` column per
+  channel at 768-d, **plus** an `embedding_{variate}_features` column carrying
+  the `ChannelFeatures` output — one per branch of the `tee`. Filter by name and
+  check the length; matching any key beginning `embedding` will hand you the
+  short feature vector as if it were an embedding.
+
+**Verify the run before trusting it:** `/results` must be non-empty, and
+`invalid` must not be `"true"` on every row. Both failure modes report
+`completed`.
+
+## How the score behaves, and why the threshold is in the artifact
+
+The head is **Local Outlier Factor** in novelty mode. LOF asks whether a point
+sits in a sparser neighbourhood than its neighbours do — it is a **ratio of
+densities**, not a distance:
+
+```
+LOF(p) = mean( local density of p's k nearest reference points ) / local density of p
+```
+
+which is why **1.0 is the neutral value** and why real scores hover just above
+it. Measured on one fitted detector, scoring its own reference set: median
+**1.043**, 99th percentile **1.397**, worst reference window **2.156**. A
+threshold of 1.762 was crossed by **0.09%** of the reference data, and a
+late-life failure reached **17**.
+
+Two consequences for anyone reading the output:
+
+- **The useful range is narrow and the tail is long.** Plot it on a log axis;
+  a linear one puts every value that matters in the bottom tenth.
+- **The threshold is chosen at fit time and stored in the artifact.** Overriding
+  `threshold` in bundle `values` is scoring a different detector than the one
+  that was validated. The blueprint defaults it to
+  `${models.detector.parameters.threshold}` for exactly that reason.
+
+LOF suits this problem because it assumes nothing about the shape of normal — no
+Gaussian, no single cluster — and needs no anomalies to fit.
+
+## One detector per asset
+
+A detector encodes **one machine's** notion of normal, fitted on that machine's
+own baseline. Running it against a different asset is a transfer test, not a
+deployment, and the scores are not comparable to the ones it was validated on.
+
+This is not a limitation to work around; it is the framing that makes the
+false-alarm rate meaningful. Pooling assets into one detector means the
+reference set spans several machines' normals, and the manifold inflates until
+everything looks normal.
+
+## Getting a detector
+
+The fitting blueprint (`ad-fitting`) is **org-scoped** (`is_canonical: false`),
+so an admin must register it before anyone in the org can fit, and it is not
+available to external users. Contact **support@archetypeai.dev** to have a
+detector fitted for your data.
+
+For readers who do have access, two gotchas that cost real time:
+
+- **`ad-fitting` requires a `states` list**, and it is not in the blueprint's
+  documented values. AD is one-class, so it reads like a value that cannot
+  apply — but the fitting runner is shared with `osm-fitting` and
+  `red-fitting`, and rejects the run outright:
+  `fitting run requires user_values.states: a non-empty list of class labels`.
+  Pass `["normal"]`. The bundle is created and reports `status: ready` before
+  the run dies ~20 s in, because creation validates the values *schema* and not
+  the runner's requirements.
+- **The runner labels each reference file by its FILENAME**, matching the
+  `states` vocabulary case-insensitively with the longest match winning. A file
+  named `bearing_ref_set2_brg1.csv` contains no `normal` and matches nothing.
+  Upload reference files under names containing the state — e.g.
+  `…-normal-<stamp>.csv`. Getting this wrong mislabels windows rather than
+  erroring.
+
+## Scoring: lead time and false-alarm rate, not precision and recall
+
+Run-to-failure data has **no per-window ground truth**. The binary labels in
+common circulation are a cut someone placed by hand partway along a gradual
+degradation curve, so precision and recall computed against them largely measure
+where that line was drawn.
+
+Score these four things instead:
+
+1. **Detected or missed**, per asset, with **lead time** — operating hours from
+   detection to the end of the recording, on an operating-time axis that
+   excludes periods when the machine was stopped. Wall-clock time is not machine
+   life: on one experiment here it overstated bearing life by 59%.
+2. **False alarms** on assets that never failed. No true positive is possible
+   there, so every crossing is a false alarm and the denominator is unambiguous.
+   **Exclude the reference region** — scoring a detector on its own fit window
+   flatters it.
+3. **Per failure mode**, marking which modes were unseen when the configuration
+   was chosen. A mode that informed the hyperparameter search is not held out,
+   even though no fault data ever entered the fit.
+4. **Window-level precision/recall across a *range* of candidate onset cuts**,
+   reported as a range and never as a single number.
+
+> **Require a sustained crossing, and know that survivors trip it too.** A
+> single window over the threshold is noise; N consecutive observations is a
+> detection. But on the reference dataset here, **six of eight assets that never
+> failed** eventually tripped a three-observation rule — five of them only in
+> their final hours, when the failing asset beside them was shaking the whole
+> rig. One healthy asset tripped it 24.3 hours out while a real failure tripped
+> at 4.8. Report the crossing **rate** over windows, which stays defensible
+> because survivor crossings are few and late; a per-asset hit rate does not.
+
+## Verified platform behavior
+
+Verified on Dev, 2026-08-11 → 2026-08-17.
+
+- **Only the fused feature mode is reachable.** The design admits three —
+  embeddings, hand-crafted features, or both — but the `ad` blueprint exposes
+  only `feature_names`, and the graph always routes the encoder into `fuse`.
+  An empty `feature_names` is accepted at bundle creation and then fails at
+  graph instantiation with `ChannelFeaturesNode requires at least one feature`.
+- **Inputs over ~50 MiB abort in `ConcatColumnsNode`:**
+  `checkpoint boundary reached with unequal buffered rows per port ([0, 2]); the
+  branches are not row-aligned`. The runner checkpoints at a byte threshold, and
+  the forked graph cannot be snapshotted while rows sit inside the encoder's
+  GPU batch — the signal reaches `fuse` ahead of its own data. Deterministic,
+  not contention: the same file failed alone and eight-way parallel, and passed
+  when truncated. **`runner_config.checkpointing` is accepted by the bundle API
+  and never reaches the runner**, so it cannot be disabled. Split inputs under
+  the threshold and reassemble the outputs. (The *edge* runtime reports the
+  graph as `{enabled: false, supported: false}` and declines to checkpoint
+  instead of aborting.)
+- **Runtime is dominated by worker contention, not window count.** Budget by the
+  audit events, not the clock. Single-channel throughput measured ~48 windows/s;
+  a 1,968-window file completed in ~1.6 min with a clear queue. Do not read a
+  fast run as a broken one — see the `/results` check above.
+- **Re-running the same input is not bit-identical.** Two runs of the same
+  840-window slice with the same detector: max absolute score difference
+  **4.2×10⁻⁵**, median relative **0.0002%**, **100%** label agreement. That is
+  the platform's noise floor; differences larger than that are real.
+
+## End-to-end verification (Dev, 2026-08-17)
+
+`python3 run_ad_agent.py` with no arguments — upload → create bundle from the
+canonical `ad` blueprint → run → poll → download → score, on the bundled
+120-snapshot transition slice:
+
+```
+windows           240   invalid 0
+snapshots         120
+score median/max  1.708 / 2.687
+crossings         105  (43.75% of windows)
+DETECTED          snapshot 47  ->  56.0 operating hours before end of record
+```
+
+Job timings from the audit events: 16 s queued, 2.7 s downloading Omega, 5.3 s
+loading it, detector load 2 ms, **job completed in 16 s** with a clear queue.
+
+**Cross-checked against an independent path.** The same bearing scored as a full
+984-snapshot lifetime through the example repo's offline scorer detects at
+snapshot **650** with a **55.5 h** lead. This slice starts at snapshot 600, so
+snapshot 47 here is snapshot 647 there — three snapshots and half an hour apart,
+from a different runner, a different input length and a different scorer. That
+agreement is the check worth having; a single number reproduced by the code that
+produced it is not.
+
+Two bugs this run caught, which no unit test would have:
+
+- The runner first reported every successful run as **failed**, because it
+  treated any log message containing "terminated" as terminal failure — and the
+  happy path logs `Agent execution terminated successfully`.
+- The `/results` reference is nested one level: `data[].data.filename`, not a
+  top-level `name`. Reading the top level yields an empty filename and a 404 on
+  a bare `/files/download/` URL.
+
+## References
+
+- [`references/run_ad_agent.py`](references/run_ad_agent.py) — stdlib-only
+  runner: upload → create-or-reuse a bundle → run → poll (status **and** logs) →
+  download → score against a ground-truth sidecar (lead time, crossing rate,
+  sustained-crossing rule). Runs the bundled sample with no arguments.
+- [`references/sample_data/`](references/sample_data/) — a prepared bearing
+  slice spanning the transition from normal to anomalous, plus its ground-truth
+  sidecar. See the README there.
+- [`references/.env.example`](references/.env.example) — the two required
+  variables.
+
+## Data attribution
+
+The sample data is derived from the **IMS Bearing Data Set**, generated by the
+NSF I/UCRC Center for Intelligent Maintenance Systems (University of Cincinnati)
+with support from Rexnord Corp., and distributed by NASA's Prognostics Center of
+Excellence.
+
+> Qiu, H., Lee, J., Lin, J., and Yu, G. (2006). "Wavelet Filter-based Weak
+> Signature Detection Method and its Application on Rolling Element Bearing
+> Prognostics." *Journal of Sound and Vibration* 289, 1066–1090.
+
+Publicly available from NASA's Prognostics Data Repository for research
+purposes.
