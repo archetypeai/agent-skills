@@ -109,12 +109,16 @@ default endpoint.
 > older runs. On Dev this means walking thousands of instances; capture the
 > `agt_…` id from the run response instead.
 
-> **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
-> deployment (`https://api.dev.u1.archetypeai.app`): the pre-packaged Quick
-> Start bundles, the canonical `ad` blueprint, the Agent API surface, and the
-> numbers below. If name resolution reports no match, the pre-packaged bundle
-> isn't published in that environment yet — point at Dev, or pass a known
-> `--bundle-id` for that environment. Please contact support@archetypeai.dev.
+> **⚠️ Availability — verified on Dev and Staging.** Everything here is
+> verified against the **Dev** deployment
+> (`https://api.dev.u1.archetypeai.app`), and the full run/score cycle is
+> also verified on **Staging** (`https://api.stage.u1.archetypeai.app`) —
+> the same names resolved to different per-environment `bnd_…` ids, with
+> **240/240 label agreement** and scores within the platform noise floor of
+> the Dev runs'. Prod rollout is pending: if name resolution reports no
+> match, the pre-packaged bundle isn't published in that environment yet —
+> point at Dev or Staging, or pass a known `--bundle-id` for that
+> environment. Please contact support@archetypeai.dev.
 
 ## The five-step lifecycle
 
@@ -371,10 +375,14 @@ Verified on Dev, 2026-08-11 → 2026-08-17.
   when scheduling was contended. Other tenants' jobs aren't visible to you, so
   the run's own audit events are the only queue-state signal. Do not read a
   fast run as a broken one — see the `/results` check above.
-- **Re-running the same input is not bit-identical.** Two runs of the same
-  840-window slice with the same detector: max absolute score difference
-  **4.2×10⁻⁵**, median relative **0.0002%**, **100%** label agreement. That is
-  the platform's noise floor; differences larger than that are real.
+- **Re-running the same input is not bit-identical — on one environment or
+  across them.** Two runs of the same 840-window slice with the same detector:
+  max absolute score difference **4.2×10⁻⁵**, median relative **0.0002%**,
+  **100%** label agreement. The same holds Dev vs Staging on the bundled slice
+  (both bundle variants): 240/240 label agreement, max score difference
+  2.9×10⁻⁵. That is the platform's noise floor; differences larger than that
+  are real. (The OSM and RED siblings *are* byte-identical across
+  environments — the difference is this graph's forked GPU batching.)
 
 ## End-to-end verification (Dev, 2026-08-17)
 
@@ -396,6 +404,11 @@ end-to-end** with a clear queue (job time 18 s: ~10 s queued, Omega download
 3.8 s + load 6.4 s, detector load 3 ms) and downloading the 2.0 MB output.
 The base run of the identical input minutes earlier took ~9 min wall-clock
 under contention — the runtime bullet above, demonstrated back-to-back.
+
+The same cycle passed on **Staging** with zero code changes: both bundles
+resolved by name to their Staging ids, base in **49 s** and Embeddings in
+**33 s** end-to-end, identical scoring (240/240 labels vs the Dev outputs,
+scores within the noise floor).
 
 **Cross-checked against an independent path.** The same bearing scored as a full
 984-snapshot lifetime through an independent offline scorer (Archetype

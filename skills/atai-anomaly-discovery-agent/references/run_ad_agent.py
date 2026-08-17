@@ -164,8 +164,8 @@ def resolve_quick_start(name: str) -> str:
     bundle_id = find_bundle(name)
     if not bundle_id:
         sys.exit(f"no bundle named {name!r} found — the pre-packaged bundle "
-                 "is not published in this environment yet (it currently "
-                 "lives on Dev). Pass --bundle-id for this environment as a "
+                 "is not published in this environment yet (verified on "
+                 "Dev and Staging). Pass --bundle-id for this environment as a "
                  "fallback, or contact support@archetypeai.dev.")
     return bundle_id
 
