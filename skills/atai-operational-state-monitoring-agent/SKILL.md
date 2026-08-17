@@ -15,7 +15,8 @@ description: >
   sidecar. Do NOT use for client-side embedding + KNN over `/query` (that's
   `atai-newton-omega-model`), for cleaning / windowing raw CSVs
   (`atai-newton-omega-model-data-prep`), or for fitting a classifier
-  artifact yourself (see the OSM example repo).
+  artifact yourself (contact support@archetypeai.dev for a classifier
+  tailored to your data).
 ---
 
 # OSM Agent — Managed State Classification via the Agent API
@@ -107,7 +108,7 @@ Two bundles are published:
 
 **Select the EXACT name match, not the first result** — the base name is a substring of the embeddings name, so a `query=` for the base name returns *both*. Pick `b["name"] == "OSM Quick Start (Volve Six State)"` and take its `id`.
 
-The bundle already pins the classifier and its windowing (`window_size=16, step_size=1`, plus the Volve-sized validation tolerances), so there is **nothing to create and no classifier URI to supply**. (For reference, on Dev these currently resolve to `bnd_7877k9t49g9sdbgy9q92dakv3e` and `bnd_7vs5a4v58c8s3v14qpatx1y1eh` — but pin ids only as a last resort, since they differ in staging/prod.)
+The bundle already pins the classifier and its windowing (`window_size=16, step_size=1`, plus the Volve-sized validation tolerances), so there is **nothing to create and no classifier URI to supply**. (For reference: on Dev these currently resolve to `bnd_7877k9t49g9sdbgy9q92dakv3e` and `bnd_7vs5a4v58c8s3v14qpatx1y1eh`, on Staging to `bnd_5xp4qw63x78mn9jxcqh8sgx3fv` and `bnd_0ay54a67x29s49ys99q97yyy69` — the per-environment drift is why you resolve by name; pin ids only as a last resort.)
 
 ## Step 3 — Run the bundle
 
@@ -127,7 +128,7 @@ GET $ATAI_API_ENDPOINT/agents/instances/{agent_id}          # status: running | 
 GET $ATAI_API_ENDPOINT/agents/instances/{agent_id}/events   # audit log (level, created_at, message)
 ```
 
-Poll every ~15 s, echoing new audit events (`run started`, `dispatched to JOS as job_…`, `JOS job completed`). Runtime scales with window count — see the table below.
+Poll every ~15 s, echoing new audit events (`run started`, `dispatched to JOS as job_…`, `JOS job completed`). Runtime is dominated by worker contention, not window count — see the Runtime section below.
 
 **A `failed` status can hide a successful run.** Observed live: a job whose container logged "terminated successfully" (output present) surfaced as `status=failed` with `error: repeated failures polling JOS job` — the service's job poller flaked, not the job. Before re-running a "failed" agent, check `/results`; if the output is there, the run succeeded.
 
@@ -152,7 +153,7 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 - **`p_<state>` columns are emitted in alphabetical state order**, not library order.
 - **`predicted_state=INVALID_STATE`** marks windows straddling a timestamp seam (backward jump between concatenated segments) — the platform validates timestamp monotonicity strictly. Exclude these when scoring; count them.
 - The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels — verified: **314 MB vs the base bundle's 221 KB** on the 4,185-window sample slice, ~1,400×, with predictions identical); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
-- Runs are **deterministic**: a fresh agent on the same input + bundle reproduces predictions exactly.
+- Runs are **deterministic across environments**: the same input through the same-named bundle produced **byte-identical outputs on Dev and Staging** (verified with `cmp` on both the 221 KB base output and the 314 MB embeddings output).
 
 ## Runtime
 
@@ -160,7 +161,7 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 
 | Queue state | End-to-end | Notes |
 |---|---:|---|
-| Empty (verified) | **~96 s** | job time 41 s: ~16 s queued, ~14 s model loading (classifier 5.7 s + omega:1.5 7.8 s), **~26 s to encode+classify** (~160 win/s) — incl. downloading a 314 MB embeddings output |
+| Empty (verified) | **~63–96 s** | Dev: 96 s (job time 41 s: ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s); Staging: 63 s base / 75 s embeddings — both incl. downloading the 314 MB embeddings output where applicable |
 | Busy (verified) | 21m53s – 27m18s | same slice, same bundle — ~2.2 win/s effective, ~17× slower |
 
 Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); sequential remains the predictable default.
@@ -219,7 +220,7 @@ cd skills/atai-operational-state-monitoring-agent/references
 # note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
 EOF
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
