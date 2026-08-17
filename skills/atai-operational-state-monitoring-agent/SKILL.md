@@ -66,14 +66,16 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > `GET /agents/bundle/{id}`) now return **404** — earlier revisions of this
 > skill described a singular/plural split that predates this migration.
 
-> **⚠️ Availability — Dev-verified.** The pre-packaged "OSM Quick Start"
-> bundles are confirmed on the **Dev** deployment
-> (`https://api.dev.u1.archetypeai.app`). They are rolling out to Staging and
-> Prod but **may not be published there yet** — if name resolution returns
-> `no bundle named … found`, the bundle isn't in that environment yet.
-> Resolving by name is portable, so the skill starts working there
-> automatically once the bundles land; until then, point it at Dev (or pass a
-> known `--bundle-id` for that environment). Please contact
+> **⚠️ Availability — verified on Dev and Staging.** The pre-packaged
+> "OSM Quick Start" bundles are confirmed on **Dev**
+> (`https://api.dev.u1.archetypeai.app`) and **Staging**
+> (`https://api.stage.u1.archetypeai.app`) — the full run/score cycle was
+> verified on both, resolving different per-environment `bnd_…` ids by the
+> same names and producing **byte-identical outputs**. Prod rollout is
+> pending: if name resolution returns `no bundle named … found`, the bundle
+> isn't in that environment yet. Resolving by name is portable, so the skill
+> starts working there automatically once the bundles land; until then, point
+> at Dev or Staging (or pass a known `--bundle-id`). Please contact
 > support@archetypeai.dev.
 
 ## Step 1 — Upload the input CSV
