@@ -89,14 +89,25 @@ class TestEndpointResolution(unittest.TestCase):
         with self.assertRaises(SystemExit):
             tva.env()
 
-    def test_non_dev_endpoint_warns(self):
-        # The /agents API is dev-only; prod 404s on every agent path, which reads
-        # like a missing blueprint rather than the wrong host.
+    def test_prod_endpoint_warns_and_staging_does_not(self):
+        # The /agents API is on Dev and Staging (both verified); Prod 404s on
+        # every agent path, which reads like a missing blueprint rather than
+        # the wrong host. The note prints ONCE per endpoint — env() runs on
+        # every api() call, and a per-call note buried the poll output.
+        tva._ENDPOINT_NOTED.clear()
         os.environ["ATAI_API_ENDPOINT"] = "https://api.u1.archetypeai.app"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             tva.env()
-        self.assertIn("dev-only", buf.getvalue())
+            tva.env()
+        self.assertEqual(buf.getvalue().count("NOTE:"), 1)
+        self.assertIn("Prod returns 404", buf.getvalue())
+
+        os.environ["ATAI_API_ENDPOINT"] = "https://api.stage.u1.archetypeai.app"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            tva.env()
+        self.assertEqual(buf.getvalue(), "")
 
 
 class TestSinkPreflight(unittest.TestCase):

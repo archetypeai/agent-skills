@@ -80,7 +80,7 @@ GET    {endpoint}/agents/instances/{agent_id}/results output refs
 POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 ```
 
-`POST /agents/bundle` (singular) returns **404**. The `/agents` API is **dev-only** — a prod endpoint 404s on every `/agents` path, which reads like an unregistered blueprint rather than the wrong host.
+`POST /agents/bundle` (singular) returns **404**. The `/agents` API is live on **Dev and Staging** (this skill is verified end-to-end on both) — a Prod endpoint 404s on every `/agents` path, which reads like an unregistered blueprint rather than the wrong host.
 
 ## ⚠️ Read before spending a run
 
@@ -358,7 +358,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | Symptom | Cause |
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
-| `404` on every `/agents` path | Prod endpoint. The Agent API is dev-only |
+| `404` on every `/agents` path | Prod endpoint. The Agent API is on Dev and Staging only |
 | `401` on dev with a working key | That key is for prod |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
@@ -391,8 +391,8 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 # No third-party deps — references/run_tva_agent.py is stdlib-only.
 # Drop a .env next to where you run it (BOTH required, NO /v0.5 suffix:
 # the script mounts /agents and /v0.5/files itself):
-#   ATAI_API_KEY=<dev API key>
-#   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+#   ATAI_API_KEY=<your API key for that environment>
+#   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
 
 python3 references/run_tva_agent.py \
     --video references/sample_data/1_pass_2_pass_3_pass_A.mp4 \

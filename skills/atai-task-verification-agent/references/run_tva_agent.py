@@ -87,6 +87,7 @@ DEFAULT_MAX_NEW_TOKENS = 5760
 # is absent — a fresh skill checkout — fall back to the SOP shipped in sample_data,
 # and say which one is in force rather than guessing silently.
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
+_ENDPOINT_NOTED: set[str] = set()   # env() runs per API call; warn once
 BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "sample_data", "oring-numbered.txt")
 
@@ -129,9 +130,12 @@ def env() -> tuple[str, str]:
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (put it in .env)")
     endpoint = re.sub(r"/v\d+(\.\d+)?$", "", endpoint).rstrip("/")
-    if "api.dev" not in endpoint:
-        print(f"  NOTE: {endpoint} is not the dev endpoint. The /agents API is "
-              f"dev-only; prod returns 404 for every /agents path.")
+    if ("api.dev" not in endpoint and "api.stage" not in endpoint
+            and endpoint not in _ENDPOINT_NOTED):
+        _ENDPOINT_NOTED.add(endpoint)
+        print(f"  NOTE: {endpoint} is not the Dev or Staging endpoint. The "
+              f"/agents API is verified on those two; Prod returns 404 for "
+              f"every /agents path.")
     return key, endpoint
 
 
