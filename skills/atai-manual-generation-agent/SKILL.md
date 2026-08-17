@@ -31,6 +31,16 @@ video ─► sample frames ─┐
 
 MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit and no `artifacts` map to pass**. A run is upload → bundle → run → download.
 
+> **Availability — verified on Dev and Staging.** The canonical `mga`
+> blueprint resolves by key on both **Dev** (`https://api.dev.u1.archetypeai.app`)
+> and **Staging** (`https://api.stage.u1.archetypeai.app`), and the full
+> upload → bundle → run → score cycle is verified on both: the same 173 s
+> video produced an **identical manual** (18/18 instruction texts and
+> timestamps) on each, with the same ~15 min runtime (Staging job time
+> 902 s: whisper 42 s, newton-fusion download+load ~6.8 min, processing
+> ~2.6× realtime). If the blueprint key doesn't resolve in an environment,
+> contact support@archetypeai.dev.
+
 ## When to Apply
 
 **Use when** the user wants a written procedure extracted from a recording — a maintenance manual from a repair video, an SOP from a screen capture, work instructions from an assembly clip — and wants each step tied to a time range in the source.
@@ -357,8 +367,8 @@ default endpoint, and the endpoint takes **no `/v0.5` suffix** (the script mount
 `/agents` and `/v0.5/files` itself):
 
 ```
-ATAI_API_KEY=<dev API key>
-ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+ATAI_API_KEY=<your API key for that environment>
+ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
 ```
 
 ```sh

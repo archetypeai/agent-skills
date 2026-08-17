@@ -3,8 +3,8 @@
 
 Stdlib only — no pip install, no virtualenv. Put a .env next to where you run:
 
-    ATAI_API_KEY=<dev API key>
-    ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # NO /v0.5 suffix
+    ATAI_API_KEY=<your API key>
+    ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1; NO /v0.5 suffix
 
     python3 run_mga_agent.py --video procedure.mp4
     python3 run_mga_agent.py --video procedure.mp4 --blueprint mga    # active blueprint
@@ -15,7 +15,7 @@ Budget ~15 minutes per run: ~7.5 min of model download and load happens on EVERY
 run (nothing is cached), then roughly 2.5x realtime processing. The platform
 serializes these, so concurrent submissions queue rather than parallelize.
 
-SIX THINGS THAT WILL BITE YOU (all verified on dev, 2026-08-10)
+SIX THINGS THAT WILL BITE YOU (verified on Dev 2026-08-10; the full run re-verified on Staging 2026-08-17 with an identical 18-step manual)
 
   1. `POST /agents/bundle` is 404. The endpoint is PLURAL: /agents/bundles.
   2. Starting a run returns HTTP 202, not 201. Treat only 201 as success and you
