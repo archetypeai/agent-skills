@@ -359,7 +359,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
 | `404` on every `/agents` path | Prod endpoint. The Agent API is on Dev and Staging only |
-| `401` on dev with a working key | That key is for prod |
+| `401` with a key that works elsewhere | API keys are **environment-scoped** — Dev, Staging and Prod each need their own (verified: a Dev key 401s on Staging) |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
 | `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
