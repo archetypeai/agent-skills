@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Run the managed Anomaly Discovery agent end to end, then score the output.
 
-    python3 run_ad_agent.py                       # bundled sample, default detector
+    python3 run_ad_agent.py                       # pre-packaged Quick Start bundle
+    python3 run_ad_agent.py --embeddings          # + Newton Omega embedding per window
     python3 run_ad_agent.py --csv my_asset.csv --detector s3://.../fit-detector.safetensors
     python3 run_ad_agent.py --bundle-id bnd_...   # reuse a bundle you already have
     python3 run_ad_agent.py --score-only ad-output.csv
 
-Unlike the OSM and RED runners there is no pre-packaged bundle to resolve by
-name: a detector encodes ONE asset's notion of normal, so you supply one and
-this creates a bundle from the canonical `ad` blueprint around it. Bundles are
-reused by name when one already exists, so repeated runs do not litter the org.
+By default this resolves the pre-packaged "AD Quick Start" bundle by NAME —
+bundle ids are environment-scoped, the name is the stable handle. The bundle
+pins a detector fitted on one bearing's healthy baseline, and the bundled
+sample slice is from that same bearing: a detector encodes ONE asset's notion
+of normal. To score a different asset, pass --detector with the s3:// URI of
+a detector fitted for it (contact support@archetypeai.dev) and this creates a
+bundle from the canonical `ad` blueprint around it, reusing it by name on
+repeat runs.
 
 Scoring is deliberately not precision/recall — run-to-failure data has no
 per-window ground truth. See `score()` and SKILL.md.
@@ -31,16 +36,16 @@ import urllib.parse
 import urllib.request
 import uuid
 
-# The detector published by the anomaly-discovery-agent-example repo, fitted on
-# set 2's healthy baseline. It scores the bundled sample, which is from that
-# same bearing — a detector belongs to one asset.
-DEFAULT_DETECTOR = (
-    "s3://atai-platform-dev-platform-data-us-west-2/jos/jobs/"
-    "job_0331mvzhvr9r6tyd3hm1gts3qg/agent/worker-0/outputs/output/fit-detector.safetensors"
-)
+# The pre-packaged bundles. Resolve by NAME: ids are environment-scoped.
+# Both pin the same detector, fitted on set 2 bearing 1's healthy baseline —
+# the bundled sample slice is from that same bearing.
+QUICK_START_BUNDLE = "AD Quick Start (Bearing Breakdown)"
+QUICK_START_BUNDLE_EMBEDDINGS = "AD Quick Start (Bearing Breakdown, Embeddings)"
+# The threshold the quick-start detector was validated with. The bundle pins
+# it; the runner only needs it client-side for scoring.
 DEFAULT_THRESHOLD = 1.762
-# Three consecutive snapshots over the line. One window is noise; this is the
-# same rule the example repo's offline scorer uses, so numbers are comparable.
+# Three consecutive snapshots over the line. One window is noise; the same
+# rule an independent offline scorer used, so numbers stay comparable.
 SUSTAIN = 3
 
 
@@ -144,12 +149,25 @@ def upload_file(path: str) -> str:
 # --------------------------------------------------------------------------
 
 def find_bundle(name: str) -> str | None:
-    """Reuse a bundle of this name if one exists. NOTE the plural endpoint."""
+    """Exact-name lookup, preferring canonical bundles. NOTE the plural
+    endpoint, and that ?query= is a substring search over name AND id — the
+    base quick-start name is a substring of the Embeddings one, so the exact
+    match below is what actually selects."""
     res = request("GET", f"{agents_base()}/bundles?query={urllib.parse.quote(name)}&limit=100")
-    for b in res.get("data", res) if isinstance(res, dict) else res:
-        if (b.get("name") or "") == name:
-            return b.get("id")
-    return None
+    matches = [b for b in (res.get("data", res) if isinstance(res, dict) else res)
+               if (b.get("name") or "") == name]
+    matches.sort(key=lambda b: not b.get("is_canonical", False))
+    return matches[0].get("id") if matches else None
+
+
+def resolve_quick_start(name: str) -> str:
+    bundle_id = find_bundle(name)
+    if not bundle_id:
+        sys.exit(f"no bundle named {name!r} found — the pre-packaged bundle "
+                 "is not published in this environment yet (it currently "
+                 "lives on Dev). Pass --bundle-id for this environment as a "
+                 "fallback, or contact support@archetypeai.dev.")
+    return bundle_id
 
 
 def create_bundle(name: str, detector: str, threshold: float, embeddings: bool) -> str:
@@ -358,13 +376,26 @@ def main() -> None:
     ap.add_argument("--csv", default="sample_data/bearing_eval_set2_brg1_transition.csv")
     ap.add_argument("--labels", default=None,
                     help="ground-truth sidecar (default: <csv stem>_labels.csv)")
-    ap.add_argument("--detector", default=DEFAULT_DETECTOR,
-                    help="s3:// URI of the fitted detector")
-    ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    ap.add_argument("--detector", default=None,
+                    help="s3:// URI of a detector fitted for YOUR asset — "
+                         "creates a bundle from the canonical `ad` blueprint "
+                         "around it instead of the pre-packaged Quick Start "
+                         "bundle (contact support@archetypeai.dev for one)")
+    ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
+                    help="scoring threshold; the quick-start detector was "
+                         "validated at 1.762 and its bundle pins that")
     ap.add_argument("--bundle-id", default=None, help="reuse an existing bundle")
-    ap.add_argument("--bundle-name", default="AD skill sample (set2 brg1)")
+    ap.add_argument("--bundle-name", default=None,
+                    help="resolve a different bundle by exact name, or name "
+                         "the bundle created for --detector "
+                         "(default: 'AD run (<detector stem>)')")
     ap.add_argument("--embeddings", action="store_true",
-                    help="also emit per-window Omega embeddings (much larger output)")
+                    help="use the Quick Start variant that also emits the "
+                         "Newton Omega encoder embedding for each window — "
+                         "one embedding_{variate} column per channel plus an "
+                         "embedding_{variate}_features column, 768-d vectors. "
+                         "Expect a much larger output file: 2.0 MB vs 10 KB "
+                         "on the bundled slice")
     ap.add_argument("--output", default="ad-output.csv")
     ap.add_argument("--score-only", metavar="OUTPUT_CSV", default=None,
                     help="skip the platform and score an output you already have")
@@ -389,14 +420,23 @@ def main() -> None:
     print(f"  file_id={file_id}")
 
     bundle_id = args.bundle_id
-    if not bundle_id:
-        bundle_id = find_bundle(args.bundle_name)
+    if not bundle_id and args.detector:
+        # Bring-your-own-detector path: create (or reuse by name) a bundle
+        # from the canonical `ad` blueprint around the supplied artifact.
+        name = args.bundle_name or (
+            "AD run (" + args.detector.rsplit("/", 1)[-1].rsplit(".", 1)[0] + ")")
+        bundle_id = find_bundle(name)
         if bundle_id:
-            print(f"reusing bundle {bundle_id} ({args.bundle_name!r})")
+            print(f"reusing bundle {bundle_id} ({name!r})")
         else:
-            bundle_id = create_bundle(args.bundle_name, args.detector,
+            bundle_id = create_bundle(name, args.detector,
                                       args.threshold, args.embeddings)
-            print(f"created bundle {bundle_id} ({args.bundle_name!r})")
+            print(f"created bundle {bundle_id} ({name!r})")
+    elif not bundle_id:
+        name = args.bundle_name or (
+            QUICK_START_BUNDLE_EMBEDDINGS if args.embeddings else QUICK_START_BUNDLE)
+        bundle_id = resolve_quick_start(name)
+        print(f"resolved bundle {bundle_id} ({name!r})")
 
     agent_id = run_bundle(bundle_id, file_id)
     print(f"agent {agent_id} — polling (status is not authoritative; watching /logs)")

@@ -2,13 +2,14 @@
 name: atai-anomaly-discovery-agent
 description: >
   Run Archetype AI's managed Anomaly Discovery (AD) agent over the Agent API —
-  upload a prepared sensor CSV, create a bundle from the canonical `ad`
-  blueprint pinning a fitted LOF detector, run it (one agent per input file),
+  upload a prepared sensor CSV, resolve the pre-packaged "AD Quick Start"
+  bundle by name (portable across dev/staging/prod; a fitted LOF detector and
+  its threshold are already pinned), run it (one agent per input file),
   poll status + audit events, and download a per-window anomaly score. Use this
   skill when the user wants to flag "this no longer looks like normal
   operation" from **normal-only reference data** — no fault library, no
   labelled examples of the thing being detected, because none exist. Covers
-  the fit → bundle → run → poll → results lifecycle, the output CSV schema
+  the resolve → run → poll → results lifecycle, the output CSV schema
   (`finish_timestamp, start_timestamp, predicted_label, invalid,
   anomaly_score`), how Local Outlier Factor produces scores near 1.0 and why
   the threshold lives inside the artifact, the per-asset framing (one detector
@@ -62,12 +63,14 @@ inputs abort and why only one feature mode is reachable.
 - Score a detector honestly when the data has no per-window ground truth, which
   is the usual case for run-to-failure data
 
-> **Your own data?** There is **no pre-packaged "AD Quick Start" bundle** — the
-> two sibling skills resolve one by name, and this one cannot, because a
-> detector is asset-specific by construction: it encodes one machine's notion of
-> normal. You supply a detector artifact and create a bundle from the canonical
-> `ad` blueprint (below). To have one fitted for your data, contact
-> **support@archetypeai.dev**.
+> **Your own data?** The pre-packaged **"AD Quick Start" bundles** pin a
+> detector fitted on **one specific bearing's** healthy baseline (the bundled
+> sample slice is from that same bearing). A detector is asset-specific by
+> construction — it encodes one machine's notion of normal — so running your
+> own asset through the quick-start bundle is a transfer test, not a
+> deployment. For your own data, contact **support@archetypeai.dev**:
+> Archetype AI will fit a detector with you, and you create a bundle from the
+> canonical `ad` blueprint around it ("Bring your own detector", below).
 
 **Do not use this skill when:**
 - The user has a labelled library across all regimes and wants "which state is
@@ -107,8 +110,11 @@ default endpoint.
 > `agt_…` id from the run response instead.
 
 > **⚠️ Dev-only for now.** Everything here is verified against the **Dev**
-> deployment (`https://api.dev.u1.archetypeai.app`): the canonical `ad`
-> blueprint, the Agent API surface, and the numbers below.
+> deployment (`https://api.dev.u1.archetypeai.app`): the pre-packaged Quick
+> Start bundles, the canonical `ad` blueprint, the Agent API surface, and the
+> numbers below. If name resolution reports no match, the pre-packaged bundle
+> isn't published in that environment yet — point at Dev, or pass a known
+> `--bundle-id` for that environment. Please contact support@archetypeai.dev.
 
 ## The five-step lifecycle
 
@@ -129,48 +135,31 @@ The response carries a `file_id`, which the platform sets to the **filename**.
 > `Object not found: files_service/archetypeai/2d579dbe-…`. Upload under
 > timestamped names when anyone else might be running.
 
-### 2. Create a bundle from the canonical `ad` blueprint
+### 2. Resolve the pre-packaged bundle by name
 
-Unlike OSM and RED there is nothing to resolve by name. You pin a detector:
+Two canonical bundles are published. **Names are the stable handles** — the
+`bnd_…` ids differ per environment, so resolve by name:
+
+| Name | What you get |
+|---|---|
+| `AD Quick Start (Bearing Breakdown)` | per-window `anomaly_score` + `predicted_label` |
+| `AD Quick Start (Bearing Breakdown, Embeddings)` | the above **plus** the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per channel and one `embedding_{variate}_features` column, 768-d vectors (the same embeddings [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) gets from `/query`, computed server-side as part of the run). **The output file gets much larger**: 2.0 MB vs 10 KB on the bundled slice, ~200× with one channel |
+
+Both pin the same detector — fitted on one bearing's healthy baseline, with
+its validated threshold (1.762) and the input-validation settings the data
+needs (`validate_monotonic_timestamps: false`,
+`sample_rate_interval_tolerance: null`) already set. Nothing to configure.
 
 ```sh
-curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
-  -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
-    "blueprint": "ad",
-    "name": "AD bearing outer race",
-    "values": {"threshold": 1.762,
-               "validate_monotonic_timestamps": false,
-               "sample_rate_interval_tolerance": null,
-               "max_temporal_gap": 60.0,
-               "output_score": true},
-    "artifacts": {"ad-detector": "s3://…/fit-detector.safetensors"}
-  }'
+curl -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/bundles?query=AD%20Quick%20Start&limit=100"
 ```
 
-Three values matter more than the rest:
-
-- **`ad-detector` must be an `s3://` URI.** The files API rejects safetensors
-  by MIME type, and the detector node resolves artifact strings as
-  filesystem/S3 paths only — a platform file id or an `https://` URL fails with
-  ENOENT without attempting a fetch. **A wrong artifact key is accepted at
-  creation** (HTTP 201, `status: ready`) and only fails ~30 s into the run, with
-  an error naming the job poller rather than the artifact. The key is
-  `ad-detector`; a second blueprint `ada` exists with key `ada-detector`.
-- **`validate_monotonic_timestamps: false` is required above 1 kHz.**
-  Timestamps are stored as `u64` **milliseconds**, so above 1 kHz consecutive
-  samples share a millisecond and no window is ever strictly increasing. Left at
-  the blueprint default of `true`, **every window is marked invalid, and the run
-  still reports `completed`** — the tell is an empty `/results`, not the
-  runtime.
-- **`sample_rate_interval_tolerance: null`** for burst-sampled data. If the
-  within-burst interval and the between-burst interval differ by orders of
-  magnitude, no single tolerance describes both.
-
-Everything else — `window_size`, `step_size`, `data_columns`, `feature_names`,
-`encoder_model` — is read from the detector's own `parameters` metadata. Unlike
-OSM, **the window does not need pinning**: the fitting step records it and the
-`ad` blueprint reads it back.
+`?query=` is a case-insensitive **substring** search over name *and* id
+(`?name=`/`?search=` are silently ignored), and the base name is a substring
+of the Embeddings name — so a query for the base name returns *both*.
+**Select the exact name match**, preferring `is_canonical: true`, and take its
+`id`.
 
 ### 3. Run the bundle — one agent per input file
 
@@ -221,11 +210,14 @@ finish_timestamp,start_timestamp,predicted_label,invalid,anomaly_score
   else `normal_label`. It is threshold-derived, so it adds no information the
   score lacks.
 - **`invalid`** arrives as the **string** `"false"`, not a boolean.
-- With `output_embeddings: true` there is one `embedding_{variate}` column per
-  channel at 768-d, **plus** an `embedding_{variate}_features` column carrying
-  the `ChannelFeatures` output — one per branch of the `tee`. Filter by name and
-  check the length; matching any key beginning `embedding` will hand you the
-  short feature vector as if it were an embedding.
+- With `output_embeddings: true` (the Embeddings quick-start bundle) there is
+  one `embedding_{variate}` column per channel at 768-d, **plus** an
+  `embedding_{variate}_features` column carrying the `ChannelFeatures` output —
+  one per branch of the `tee`. Filter by name and check the length; matching
+  any key beginning `embedding` will hand you the short feature vector as if it
+  were an embedding. Verified on the bundled slice: **2.0 MB vs the base
+  bundle's 10 KB** (~200× with one channel), scores within the platform's
+  noise floor of the base bundle's and **240/240 label agreement**.
 
 **Verify the run before trusting it:** `/results` must be non-empty, and
 `invalid` must not be `"true"` on every row. Both failure modes report
@@ -270,29 +262,55 @@ false-alarm rate meaningful. Pooling assets into one detector means the
 reference set spans several machines' normals, and the manifold inflates until
 everything looks normal.
 
-## Getting a detector
+## Bring your own detector (advanced)
 
-The fitting blueprint (`ad-fitting`) is **org-scoped** (`is_canonical: false`),
-so an admin must register it before anyone in the org can fit, and it is not
-available to external users. Contact **support@archetypeai.dev** to have a
-detector fitted for your data.
+The quick-start detector encodes one bearing's notion of normal. For your own
+asset you need a detector fitted on **its** healthy baseline. The fitting
+pipeline is not accessible to external users yet — contact
+**support@archetypeai.dev** and Archetype AI will fit one with you and hand
+back the detector artifact. With that artifact you create your own bundle from
+the canonical `ad` blueprint, then run it as in step 3:
 
-For readers who do have access, two gotchas that cost real time:
+```sh
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
+    "blueprint": "ad",
+    "name": "AD bearing outer race",
+    "values": {"threshold": 1.762,
+               "validate_monotonic_timestamps": false,
+               "sample_rate_interval_tolerance": null,
+               "max_temporal_gap": 60.0,
+               "output_score": true},
+    "artifacts": {"ad-detector": "s3://…/fit-detector.safetensors"}
+  }'
+```
 
-- **`ad-fitting` requires a `states` list**, and it is not in the blueprint's
-  documented values. AD is one-class, so it reads like a value that cannot
-  apply — but the fitting runner is shared with `osm-fitting` and
-  `red-fitting`, and rejects the run outright:
-  `fitting run requires user_values.states: a non-empty list of class labels`.
-  Pass `["normal"]`. The bundle is created and reports `status: ready` before
-  the run dies ~20 s in, because creation validates the values *schema* and not
-  the runner's requirements.
-- **The runner labels each reference file by its FILENAME**, matching the
-  `states` vocabulary case-insensitively with the longest match winning. A file
-  named `bearing_ref_set2_brg1.csv` contains no `normal` and matches nothing.
-  Upload reference files under names containing the state — e.g.
-  `…-normal-<stamp>.csv`. Getting this wrong mislabels windows rather than
-  erroring.
+Three values matter more than the rest:
+
+- **`ad-detector` must be an `s3://` URI — pass the one you receive
+  verbatim.** The platform resolves artifact strings as filesystem/S3 paths
+  only, so a platform file id or an `https://` URL fails with ENOENT without
+  attempting a fetch (and there is no upload route — the files API rejects
+  safetensors by MIME type). **A wrong artifact key is accepted at creation**
+  (HTTP 201, `status: ready`) and only fails ~30 s into the run, with an error
+  naming the job poller rather than the artifact. The key is `ad-detector`; a
+  second blueprint `ada` exists with key `ada-detector`.
+- **`validate_monotonic_timestamps: false` is required above 1 kHz.**
+  Timestamps are stored as `u64` **milliseconds**, so above 1 kHz consecutive
+  samples share a millisecond and no window is ever strictly increasing. Left at
+  the blueprint default of `true`, **every window is marked invalid, and the run
+  still reports `completed`** — the tell is an empty `/results`, not the
+  runtime.
+- **`sample_rate_interval_tolerance: null`** for burst-sampled data. If the
+  within-burst interval and the between-burst interval differ by orders of
+  magnitude, no single tolerance describes both.
+
+Everything else — `window_size`, `step_size`, `data_columns`, `feature_names`,
+`encoder_model`, `threshold` — is read from the detector's own `parameters`
+metadata, which is why the quick-start bundles needed no window pinning and why
+overriding `threshold` means scoring a different detector than the one that was
+validated.
 
 ## Scoring: lead time and false-alarm rate, not precision and recall
 
@@ -346,9 +364,12 @@ Verified on Dev, 2026-08-11 → 2026-08-17.
   the threshold and reassemble the outputs. (The *edge* runtime reports the
   graph as `{enabled: false, supported: false}` and declines to checkpoint
   instead of aborting.)
-- **Runtime is dominated by worker contention, not window count.** Budget by the
-  audit events, not the clock. Single-channel throughput measured ~48 windows/s;
-  a 1,968-window file completed in ~1.6 min with a clear queue. Do not read a
+- **Runtime is dominated by worker contention, not window count.** Budget by
+  the audit events, not the clock. The bundled 240-window slice, run through
+  the two quick-start bundles minutes apart: **33 s end-to-end** (job time
+  18 s) with a clear queue vs **~9 min wall-clock** for the identical input
+  when scheduling was contended. Other tenants' jobs aren't visible to you, so
+  the run's own audit events are the only queue-state signal. Do not read a
   fast run as a broken one — see the `/results` check above.
 - **Re-running the same input is not bit-identical.** Two runs of the same
   840-window slice with the same detector: max absolute score difference
@@ -357,9 +378,9 @@ Verified on Dev, 2026-08-11 → 2026-08-17.
 
 ## End-to-end verification (Dev, 2026-08-17)
 
-`python3 run_ad_agent.py` with no arguments — upload → create bundle from the
-canonical `ad` blueprint → run → poll → download → score, on the bundled
-120-snapshot transition slice:
+`python3 run_ad_agent.py` with no arguments — upload → resolve
+`AD Quick Start (Bearing Breakdown)` by name → run → poll → download → score,
+on the bundled 120-snapshot transition slice:
 
 ```
 windows           240   invalid 0
@@ -369,12 +390,16 @@ crossings         105  (43.75% of windows)
 DETECTED          snapshot 47  ->  56.0 operating hours before end of record
 ```
 
-Job timings from the audit events: 16 s queued, 2.7 s downloading Omega, 5.3 s
-loading it, detector load 2 ms, **job completed in 16 s** with a clear queue.
+`--embeddings` resolves the Embeddings bundle and scored **identically**
+(240/240 labels, scores within the noise floor), completing in **33 s
+end-to-end** with a clear queue (job time 18 s: ~10 s queued, Omega download
+3.8 s + load 6.4 s, detector load 3 ms) and downloading the 2.0 MB output.
+The base run of the identical input minutes earlier took ~9 min wall-clock
+under contention — the runtime bullet above, demonstrated back-to-back.
 
 **Cross-checked against an independent path.** The same bearing scored as a full
-984-snapshot lifetime through the example repo's offline scorer detects at
-snapshot **650** with a **55.5 h** lead. This slice starts at snapshot 600, so
+984-snapshot lifetime through an independent offline scorer (Archetype
+AI-internal) detects at snapshot **650** with a **55.5 h** lead. This slice starts at snapshot 600, so
 snapshot 47 here is snapshot 647 there — three snapshots and half an hour apart,
 from a different runner, a different input length and a different scorer. That
 agreement is the check worth having; a single number reproduced by the code that
@@ -392,9 +417,11 @@ Two bugs this run caught, which no unit test would have:
 ## References
 
 - [`references/run_ad_agent.py`](references/run_ad_agent.py) — stdlib-only
-  runner: upload → create-or-reuse a bundle → run → poll (status **and** logs) →
-  download → score against a ground-truth sidecar (lead time, crossing rate,
-  sustained-crossing rule). Runs the bundled sample with no arguments.
+  runner: upload → resolve the Quick Start bundle by name → run → poll (status
+  **and** logs) → download → score against a ground-truth sidecar (lead time,
+  crossing rate, sustained-crossing rule). Runs the bundled sample with no
+  arguments; `--embeddings` switches to the Embeddings bundle;
+  `--detector s3://…` creates a bundle around your own detector instead.
 - [`references/sample_data/`](references/sample_data/) — a prepared bearing
   slice spanning the transition from normal to anomalous, plus its ground-truth
   sidecar. See the README there.

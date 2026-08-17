@@ -104,9 +104,50 @@ def test_bundle_uses_the_ad_detector_artifact_key(monkeypatch):
     assert captured["body"]["blueprint"] == "ad"
 
 
-def test_detector_default_is_an_s3_uri():
-    """The files API rejects safetensors and the node resolves paths only."""
-    assert runner.DEFAULT_DETECTOR.startswith("s3://")
+def test_quick_start_bundle_names_are_the_stable_handles():
+    """Bundle ids are environment-scoped; the NAMES resolve everywhere."""
+    src = (REFS / "run_ad_agent.py").read_text()
+    assert 'QUICK_START_BUNDLE = "AD Quick Start (Bearing Breakdown)"' in src
+    assert ('QUICK_START_BUNDLE_EMBEDDINGS = '
+            '"AD Quick Start (Bearing Breakdown, Embeddings)"') in src
+    # No real bnd_… id may be hardcoded — that would silently pin one
+    # environment (prose like "bnd_…" in help text is fine).
+    import re
+    assert re.findall(r"bnd_[a-z0-9]{10,}", src) == []
+
+
+def test_resolution_selects_the_exact_canonical_match(monkeypatch):
+    """?query= is a substring search and the base name is a substring of the
+    Embeddings name, so a base-name query returns BOTH — the exact match with
+    is_canonical preference is what selects."""
+    def fake_request(method, url, body=None, raw=False, retries=3):
+        assert "/bundles?query=" in url                       # plural + query
+        return {"data": [
+            {"id": "bnd_emb", "name": "AD Quick Start (Bearing Breakdown, Embeddings)",
+             "is_canonical": True},
+            {"id": "bnd_copy", "name": "AD Quick Start (Bearing Breakdown)",
+             "is_canonical": False},
+            {"id": "bnd_base", "name": "AD Quick Start (Bearing Breakdown)",
+             "is_canonical": True},
+        ]}
+
+    monkeypatch.setattr(runner, "request", fake_request)
+    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
+    monkeypatch.setenv("ATAI_API_KEY", "k")
+    assert runner.find_bundle("AD Quick Start (Bearing Breakdown)") == "bnd_base"
+
+
+def test_unresolved_bundle_points_at_support(monkeypatch):
+    """The name-not-found path must give the user a way forward."""
+    monkeypatch.setattr(runner, "request",
+                        lambda m, u, body=None, raw=False, retries=3: {"data": []})
+    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
+    monkeypatch.setenv("ATAI_API_KEY", "k")
+    with pytest.raises(SystemExit) as excinfo:
+        runner.resolve_quick_start("AD Quick Start (Bearing Breakdown)")
+    message = str(excinfo.value)
+    assert "support@archetypeai.dev" in message
+    assert "--bundle-id" in message
 
 
 def test_run_request_shape(monkeypatch):
