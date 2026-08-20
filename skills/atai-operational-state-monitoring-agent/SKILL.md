@@ -113,7 +113,7 @@ curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: applicat
   }'
 ```
 
-Each run creates a **new agent instance** (`agt_…`) — one agent per input file. With no sink configured, the runner writes one output per input, named after the input file. **Run agents sequentially**: concurrent runs share the deployment's workers, and three at once run ~3× slower each than running them one at a time.
+Each run creates a **new agent instance** (`agt_…`) — one agent per input file. With no sink configured, the runner writes one output per input, named after the input file. **Run agents sequentially.** Whether concurrent runs queue depends on what else is running on the deployment at that moment: they queue when other workloads hold the workers, and run as concurrent jobs when they don't. Workers are shared either way, so three at once have run ~3× slower each than one at a time. Other tenants' workloads aren't visible to you, so neither outcome is predictable from your side.
 
 ## Step 4 — Poll until terminal
 
@@ -160,7 +160,7 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 | Empty (verified) | **~1–2 min** | 63–107 s for the base bundle, 70–75 s for embeddings including the 314 MB download. One run's job breakdown: 41 s total — ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s |
 | Busy (verified) | 21m53s – 27m18s | same slice, same bundle — ~2.2 win/s effective, ~17× slower |
 
-Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); sequential remains the predictable default.
+Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); whether they queue or run side by side depends on what else holds the workers, so sequential remains the predictable default.
 
 ## Common Pitfalls
 
@@ -169,7 +169,7 @@ Budget by the **audit events, not the clock** — you cannot see other tenants' 
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agent API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
 - **`failed` ≠ failed until you check `/results`.** The job poller can flake after a successful job; output present ⇒ the run succeeded.
-- **Prefer sequential runs.** Workers are shared: under load, N parallel runs ran ~N× slower each; with an empty queue, concurrent runs completed at full speed. Sequential stays the predictable default.
+- **Prefer sequential runs.** Whether concurrent runs queue depends on what else is running on the deployment at that moment: they queue when other workloads hold the workers, and run as concurrent jobs when they don't. Under load, N parallel runs ran ~N× slower each; with an empty queue, concurrent runs completed at full speed. There is no serialization to rely on and no parallelism to count on — sequential stays the predictable default.
 - **Sampling-rate warnings are expected on irregular data.** The bundle loosens the tolerance for Volve's irregular sampling (Δt 1–27 s); expect warnings, not failures.
 - **Score with end-row labeling on `finish_timestamp` and exclude `INVALID_STATE`.** Predictions are keyed to the window-end timestamp; seam windows are invalidated.
 
