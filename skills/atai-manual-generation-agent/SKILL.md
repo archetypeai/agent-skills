@@ -17,7 +17,7 @@ description: >
   (`atai-operational-state-monitoring-agent`).
 ---
 
-# MGA Agent — Managed Manual Generation via the Agent API
+# MGA Agent — Managed Manual Generation via the Agents API
 
 The MGA agent turns a procedure video into an ordered manual with timestamps. You hand the platform an `.mp4`; it samples frames, transcribes the audio, fuses both in one pass, and returns steps you can trace back to the recording:
 
@@ -54,7 +54,7 @@ MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion
 
 ## Endpoints
 
-The Agent API is mounted **without a version prefix**; the files API is under `/v0.5`.
+The Agents API is mounted **without a version prefix**; the files API is under `/v0.5`.
 
 ```
 POST   {endpoint}/v0.5/files                          upload the video
