@@ -119,9 +119,41 @@ returned the identical wrong verdict or no verdict at all. Budget for human revi
 f1-0 emits `<think>…</think>` before its answer and that reasoning spends
 `max_new_tokens`. Run out inside it and the parser has nothing to parse — the job still
 reports `job.completed` with no ERROR row and `results: []`. **Check `/results` is
-non-empty before trusting any run.** That check is the durable part of this section.
+non-empty before trusting any run.** That check is the one thing in this section that
+never goes stale.
 
-**Measured 2026-08-11/12**, on a clip with two skipped steps against a 21-step SOP:
+**What the budget actually changed, measured 2026-08-20 on Prod.** Every shipped clip
+against the shipped 3-step SOP, at four budgets — 12 runs, 36 verdicts:
+
+| clip | 2048 | 5760 | 8192 | 16384 |
+|---|---|---|---|---|
+| `1_pass_2_pass_3_fail_A` (wrench never enters frame) | 3/3 | 3/3 | 3/3 | 3/3 |
+| `1_fail_2_pass_3_pass_A` (O-ring never fitted, rings visible) | 2/3 | 2/3 | 2/3 | 2/3 |
+| `1_pass_2_pass_3_pass_A` (control, all steps performed) | 3/3 | 3/3 | 3/3 | 3/3 |
+
+**Nothing about the budget mattered.** Every cell returned three well-formed verdicts:
+no `results: []`, no WARN, no truncation, across an 8× range. Each clip scored
+identically at every budget, and per clip the verdicts and reason text were the same
+word for word — only the md5 varied. Reproduce any cell with
+`--max-new-tokens <n>`; all three clips and the SOP ship in `references/sample_data/`.
+
+What decided correctness was **what is absent from the frame**, not the budget:
+
+- An absent **object** — the wrench, never on screen — is caught: `MISSING`, at every budget.
+- An absent **action on a visible object** — the O-ring, sitting on the mat the whole
+  time — is not: falsely `PASSED`, at every budget, with the same invented reason each
+  time. **Raising or lowering `max_new_tokens` does not turn a wrong verdict into a
+  right one**, which is worth knowing because the budget dial is the first thing you
+  will reach for. See §1.
+
+So for a short SOP, send whatever keeps your runs comparable and spend your attention on
+reviewing `PASSED` verdicts instead.
+
+<details>
+<summary><b>Earlier measurement (2026-08-11/12) — dated, and did not reproduce</b></summary>
+
+On a clip with two skipped steps against a **21-step** SOP, this skill previously
+measured a hard ceiling and prescribed 5760:
 
 | `max_new_tokens` | result |
 |---|---|
@@ -130,30 +162,27 @@ non-empty before trusting any run.** That check is the durable part of this sect
 | 16384 | `results: []`, identical |
 
 `sample_data/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` is a captured
-artifact of the same failure at 2048.
+artifact of that failure at 2048 — kept because nothing else shows what it looks like,
+not because it reproduces.
 
-> **⚠️ These thresholds did not reproduce on 2026-08-20, and neither did the sibling
-> skill's.** A 12-cell sweep on the current Prod blueprint — the three shipped clips
-> against the shipped 3-step SOP at 2048 / 5760 / 8192 / 16384 — returned **three
-> well-formed verdicts in every cell**, including at the exact clip and budget the
-> EMPTY fixture was captured at. Correctness was identical at every budget; only the
-> md5 varied. The `atai-manual-generation-agent` sibling documents the *opposite* rule
-> — that 16384 is a floor and 2048/4096 return an empty manual — and that did not
-> reproduce either: both returned the full 18-step manual, instruction-for-instruction
-> and timestamp-for-timestamp identical to the 16384 run.
->
-> Two blueprints, opposite documented prescriptions, neither observable now. The shared
-> factor is the reasoning behaviour itself, so treat both tables as dated observations
-> under their own conditions rather than as current constants.
->
-> **Non-reproduction is not retirement.** The failure mode is real, was observed, and
-> the platform emits the WARN below for exactly this case. What is no longer reliable is
-> the numbers. In particular, **do not assume a budget is safe because it worked on a
-> short SOP** — reasoning cost scales with the number of steps to adjudicate, and the
-> 21-step case above is not reproducible from this repo.
+None of it held on 2026-08-20, including at the exact clip and budget of that fixture.
+The `atai-manual-generation-agent` sibling documents the **opposite** rule — 16384 as a
+floor, with 2048 and 4096 returning an empty manual — and that did not reproduce
+either: both returned the full 18-step manual, instruction-for-instruction and
+timestamp-for-timestamp identical to the 16384 run. Two blueprints, opposite
+prescriptions, neither observable now; the shared reasoning behaviour is the likely
+variable rather than anything specific to either blueprint.
 
-The diagnostic that tells you which failure you have, when it fires, is
-the `dropping N rehearsed row(s)` count in the WARN:
+**Non-reproduction is not retirement.** The failure was observed, and the platform still
+emits a WARN for exactly this case. Two things follow. First, keep the `/results` check
+above. Second, **do not infer a safe budget from a short SOP** — reasoning cost scales
+with the number of steps to adjudicate, and the 21-step case is not reproducible from
+this repo, so the grid above says nothing about a 20-step procedure.
+
+</details>
+
+When the WARN does fire, the `dropping N rehearsed row(s)` count tells you which failure
+you have:
 
 | N | what happened | what to do |
 |---|---|---|
@@ -163,11 +192,6 @@ the `dropping N rehearsed row(s)` count in the WARN:
 
 `N > 0` means the answer was formed and thrown away, so no extra budget was needed at
 all — which is worth saying out loud when you report the failure upstream.
-
-**Budget is not a lever on verdict quality.** In that same sweep the false PASS from
-section 1 reproduced at **every** budget from 2048 to 16384 — four runs, the invented
-reason word-for-word identical each time, differing only in md5. Raising or lowering
-`max_new_tokens` does not turn a wrong verdict into a right one.
 
 ### 3. Read the sink format from the blueprint document
 
