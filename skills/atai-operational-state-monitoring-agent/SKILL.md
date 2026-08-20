@@ -100,7 +100,15 @@ Two bundles are published:
 | `OSM Quick Start (Volve Six State)` | per-window state predictions |
 | `OSM Quick Start (Volve Six State, Embeddings)` | the above **plus** the **Newton Omega encoder embedding for each window** — one `embedding_{variate}` column per sensor channel, each a 768-d vector (the same embeddings `atai-newton-omega-model` gets from `/query`, here computed server-side as part of the run). **The output file gets dramatically larger**: 314 MB vs 221 KB on the sample slice, ~1,400× |
 
-**Select the EXACT name match, not the first result** — the base name is a substring of the embeddings name, so a `query=` for the base name returns *both*. Pick `b["name"] == "OSM Quick Start (Volve Six State)"` and take its `id`.
+**Select the EXACT name match, not the first result.** `query=` is a substring match and results come back newest-first, so a *prefix* returns both variants with Embeddings first — verified on Prod:
+
+```
+query 'OSM Quick Start'                    -> 2   Embeddings first
+query 'OSM Quick Start (Volve Six State'   -> 2   Embeddings first
+query 'OSM Quick Start (Volve Six State)'  -> 1   the closing paren excludes the variant
+```
+
+Taking `data[0]` on either of the first two silently runs the Embeddings bundle — a 314 MB output where you expected 221 KB. Pick `b["name"] == "OSM Quick Start (Volve Six State)"` and take its `id`, and prefer `is_canonical` if two bundles share a name.
 
 The bundle already pins the classifier and its windowing (`window_size=16, step_size=1`, plus the Volve-sized validation tolerances), so there is **nothing to create and no classifier URI to supply**. (For reference, these currently resolve to `bnd_02yp01y1er80vv1s5egaeb7p74` and `bnd_1hd3aymx308tct952dn5nwram9` in production; the ids are deployment-specific, which is why you resolve by name — pin ids only as a last resort.)
 
@@ -137,7 +145,7 @@ GET $ATAI_API_ENDPOINT/v0.5/files/download/{filename}
 
 Like the other list endpoints, `/results` **pages**: `data`, `has_more`, `next_cursor`, with `limit` (default 100, max 1000) and `after`/`before` cursors. **The cursor is opaque** — pass `next_cursor` back verbatim and never derive it from `data[last].id`; a fabricated value is rejected with `400 invalid cursor`. One run through a quick-start bundle emits one output, so the first page is the whole answer — a bundle with several sink ports is where paging starts to matter.
 
-[`references/run_osm_agent.py`](references/run_osm_agent.py) scripts the whole flow (upload → resolve bundle → run → poll → download, stdlib-only) and — if a `<input>_labels.csv` ground-truth sidecar sits next to the input — scores the run automatically: accuracy (all-windows and steady-state cuts), per-class precision/recall/F1, macro-F1.
+[`references/run_osm_agent.py`](references/run_osm_agent.py) scripts the whole flow (upload → resolve bundle → run → poll → download) on the official [`archetypeai` python client](https://github.com/archetypeai/python-client) and — if a `<input>_labels.csv` ground-truth sidecar sits next to the input — scores the run automatically: accuracy (all-windows and steady-state cuts), per-class precision/recall/F1, macro-F1.
 
 ## Output CSV — one row per window
 
@@ -164,7 +172,7 @@ Budget by the **audit events, not the clock** — you cannot see other tenants' 
 
 ## Common Pitfalls
 
-- **Resolve by name, not by id.** The pre-packaged bundle's id is deployment-specific; only the name is stable. And **match the name exactly** — the base name is a substring of the `…, Embeddings)` name, so a substring `query=` returns both.
+- **Resolve by name, not by id.** The pre-packaged bundle's id is deployment-specific; only the name is stable. And **match the name exactly** — a prefix of the base name also matches the `…, Embeddings)` variant, which sorts first, so `data[0]` runs the wrong bundle.
 - **The bundle API is plural everywhere** (as of 2026-08-11). `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch), `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). Every singular form (`/agents/bundle/…`) 404s.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agents API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
@@ -207,7 +215,8 @@ curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
 ## Local Setup
 
 ```bash
-# No third-party deps — references/run_osm_agent.py is stdlib-only.
+# Built on the official client.
+pip install -r skills/atai-operational-state-monitoring-agent/references/requirements.txt
 
 cd skills/atai-operational-state-monitoring-agent/references
 
@@ -218,6 +227,12 @@ cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
 EOF
+
+# Either endpoint form works: the runner normalises. The client itself wants the
+# /v0.5 suffix (it strips the version for the versionless /agents and keeps it for
+# /v0.5/files), so a bare root passed straight to it breaks uploads with an empty
+# `ApiError: {}` while bundle calls keep working. The model skills in this repo ship
+# ATAI_API_ENDPOINT with /v0.5; one .env now serves both families.
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
 python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per window
@@ -232,7 +247,8 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 skills/atai-operational-state-monitoring-agent/
 ├── SKILL.md                  ← this file
 ├── references/
-│   ├── run_osm_agent.py      ← the whole managed flow, stdlib-only (upload → resolve pre-packaged bundle → run → poll → download → score)
+│   ├── run_osm_agent.py      ← the whole managed flow on the official client (upload → resolve pre-packaged bundle → run → poll → download → score)
+│   ├── requirements.txt      ← archetypeai
 │   ├── .env.example          ← copy to .env and fill in
 │   └── sample_data/
 │       ├── volve_states_opt_slice_04.csv         ← 4,200-row six-state eval slice (prepared + z-scored)

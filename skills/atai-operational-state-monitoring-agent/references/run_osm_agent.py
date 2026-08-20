@@ -4,22 +4,20 @@ sensor CSV, resolve the maintained "OSM Quick Start" bundle, run it, poll until
 terminal, download the per-window predictions — and, if the input ships a
 `<input>_labels.csv` ground-truth sidecar, score the run.
 
-No bundle creation, no classifier URI: the platform ships canonical
-quick-start bundles (classifier + windowing already pinned). This script just
-finds one and runs it. It resolves the bundle **by name** so it is portable
-across deployments (the bundle *id* is deployment-specific; the name is not);
-pass `--bundle-id` to skip the lookup.
+Built on the official Archetype AI python client (`pip install archetypeai`),
+which owns auth, endpoint resolution, and the Agents API surface. The client
+mounts the versionless `/agents` and the versioned `/v0.5/files` itself, so a
+`/vX.Y` suffix on ATAI_API_ENDPOINT is handled for you.
 
-Stdlib-only. The bundle API is plural everywhere (as of 2026-08-11):
-`GET /agents/bundles[?query=…]`, `GET /agents/bundles/{id}`,
-`POST /agents/bundles`, `POST /agents/bundles/{id}/run` — the singular forms
-now return 404.
+No bundle creation, no classifier URI: the platform ships canonical quick-start
+bundles (classifier + windowing already pinned). This script just finds one and
+runs it. It resolves the bundle **by name** so it is portable across
+deployments (the bundle *id* is deployment-specific; the name is not); pass
+`--bundle-id` to skip the lookup.
 
 Auth / endpoint come from the environment (a local .env is loaded if present):
   ATAI_API_KEY        Bearer token (required).
-  ATAI_API_ENDPOINT   Deployment root (required). A trailing /vX.Y is
-                      tolerated and stripped: the agent API is versionless
-                      (mounted at /agents), the files API at /v0.5/files.
+  ATAI_API_ENDPOINT   Deployment root (required).
 
 Usage:
   python3 run_osm_agent.py                      # default sample slice
@@ -30,15 +28,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-import uuid
+
+from archetypeai import ArchetypeAI
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -46,135 +41,118 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "volve_states_opt_slice_04.csv")
 
 # Canonical pre-packaged quick-start bundles, resolved by name (portable across
-# environments). The base name is a substring of the embeddings name, so the
-# lookup selects the EXACT name match, not just the first hit.
+# deployments). Query is a substring match, so a PREFIX of these names matches
+# both variants — always select the exact name, never the first result.
 BUNDLE_NAME = "OSM Quick Start (Volve Six State)"
 BUNDLE_NAME_EMBEDDINGS = "OSM Quick Start (Volve Six State, Embeddings)"
 
 POLL_INTERVAL_S = 15
-TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; keep generous margin
+TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; generous margin
 
 
 def load_dotenv(path=".env"):
     if not os.path.exists(path):
         return
-    for line in open(path):
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
 
 
-def host_base():
-    """Deployment root with any /vX.Y suffix stripped."""
-    endpoint = os.environ.get("ATAI_API_ENDPOINT", "").rstrip("/")
-    if not endpoint:
-        sys.exit("ATAI_API_ENDPOINT is not set")
-    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+def versioned(endpoint):
+    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
 
+    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
+    strips the version itself for the versionless agents API. Passing a bare
+    root therefore breaks uploads while bundle calls keep working — an empty
+    `ApiError: {}` that looks like anything but a missing version path.
 
-def request(method, url, body=None, headers=None, retries=4):
-    """Call the API, retrying transient network failures.
-
-    Polls run for the better part of an hour, and a single DNS hiccup or
-    socket timeout would otherwise kill the client while the platform job
-    carries on unattended. Only *network* errors retry; an HTTP status is a
-    real answer from the server and still exits.
+    Accept either form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
     """
-    data = json.dumps(body).encode() if body is not None else None
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-        if body is not None:
-            req.add_header("Content-Type", "application/json")
-        for k, v in (headers or {}).items():
-            req.add_header(k, v)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return json.loads(resp.read() or b"null")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")
-            sys.exit(f"{method} {url} failed ({e.code}): {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            if attempt == retries:
-                sys.exit(f"{method} {url} failed after {retries + 1} attempts: {e}")
-            wait = 5 * (2 ** attempt)
-            print(f"  network error ({e}); retrying in {wait}s [{attempt + 1}/{retries}]")
-            time.sleep(wait)
+    endpoint = endpoint.rstrip("/")
+    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
 
 
-def upload_file(path):
-    """POST a file to /v0.5/files as multipart/form-data (stdlib only)."""
-    boundary = uuid.uuid4().hex
-    filename = os.path.basename(path)
-    with open(path, "rb") as f:
-        content = f.read()
-    body = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
-        b"Content-Type: text/csv\r\n\r\n",
-        content,
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    req = urllib.request.Request(f"{host_base()}/v0.5/files", data=body, method="POST")
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        sys.exit(f"file upload failed ({e.code}): {e.read().decode(errors='replace')}")
+def resolve_bundle(client, name):
+    """Find the pre-packaged bundle id for an EXACT name.
 
-
-def resolve_bundle(agents, name):
-    """Find the pre-packaged bundle id for an exact name, via the plural
-    read endpoint's case-insensitive substring search. Portable across
-    environments: the name is stable, the id is not."""
-    q = urllib.parse.urlencode({"query": name, "limit": 50})
-    res = request("GET", f"{agents}/bundles?{q}")
-    rows = res.get("data", []) if isinstance(res, dict) else (res or [])
+    `query` is a case-insensitive substring match over name and id, so a prefix
+    of a bundle name returns every variant — querying "OSM Quick Start" returns
+    the Embeddings bundle too, and it sorts newest-first. Taking the first row
+    would silently run the wrong bundle (314 MB of embeddings instead of a
+    221 KB prediction file), so match the name exactly and prefer the canonical
+    (platform-published) bundle over any same-named org bundle.
+    """
+    rows = client.agents.bundles.list(query=name, limit=50).get("data", [])
     exact = [b for b in rows if b.get("name") == name]
     if not exact:
         seen = [b.get("name") for b in rows]
         sys.exit(f"no bundle named {name!r} found (query returned {seen}). "
-                 f"Is it published in this environment? Pass --bundle-id to "
+                 f"Is it published in this deployment? Pass --bundle-id to "
                  f"pin one, or contact support@archetypeai.dev.")
-    # Prefer the canonical (platform-published) bundle over any same-named
-    # org bundle that would otherwise shadow it.
     for bundle in exact:
         if bundle.get("is_canonical"):
             return bundle["id"]
     return exact[0]["id"]
 
 
+def watch(client, agent_id):
+    """Poll until terminal, echoing new audit events as they arrive.
+
+    Deliberately NOT client.agents.instances.wait_until_done(): that returns as
+    soon as `status` is terminal, and `status` is not trustworthy here. A run
+    whose output exists can report `failed` (the job poller flakes), so the
+    caller must judge success from /results, not from this return value.
+    """
+    deadline = time.time() + TIMEOUT_S
+    seen = set()
+    status = "running"
+    while status == "running" and time.time() < deadline:
+        status = client.agents.instances.get(agent_id).get("status")
+        for event in client.agents.instances.get_events(agent_id).get("data", []):
+            marker = f"{event.get('created_at')}{event.get('message')}"
+            if marker not in seen:
+                seen.add(marker)
+                print(f"  [{event.get('level', 'info')}] {event.get('created_at', '')}  "
+                      f"{event.get('message', '')}")
+        if status == "running":
+            time.sleep(POLL_INTERVAL_S)
+    return status
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=DEFAULT_CSV, help="input CSV to run inference on")
     parser.add_argument("--embeddings", action="store_true",
-                        help="use the variant bundle that also emits the Newton "
-                             "Omega encoder embedding for each window — one "
-                             "embedding_{variate} column per sensor channel, "
-                             "each a 768-d vector. Expect a much larger output "
-                             "file: 314 MB vs 221 KB on the sample slice")
+                        help="run the Embeddings bundle: adds one 768-d "
+                             "embedding_{variate} column per channel (~1,400x "
+                             "the output size)")
     parser.add_argument("--bundle-id",
-                        help="run this bundle id directly, skipping the name lookup")
+                        help="skip name resolution and run this bundle id")
     parser.add_argument("--window-size", type=int, default=16,
-                        help="window the bundle's classifier was fit with; used "
-                             "only for the local steady-state scoring cut (16)")
+                        help="the bundle's window size, for scoring only")
     parser.add_argument("--output", default="osm-output.csv",
                         help="local path to save the classified-windows CSV")
     args = parser.parse_args()
 
     load_dotenv()
-    if not os.environ.get("ATAI_API_KEY"):
+    api_key = os.environ.get("ATAI_API_KEY")
+    endpoint = os.environ.get("ATAI_API_ENDPOINT")
+    if not api_key:
         sys.exit("ATAI_API_KEY is not set")
-    agents = f"{host_base()}/agents"
+    if not endpoint:
+        sys.exit("ATAI_API_ENDPOINT is not set")
+    client = ArchetypeAI(api_key, api_endpoint=versioned(endpoint))
 
-    # 1. Upload the input CSV. Source connectors use the returned file_id
-    #    (the filename), NOT the fil_ uid.
+    # 1. Upload the input CSV. Source connectors use the returned file_id (the
+    #    filename), NOT the fil_ uid — client.agents.bundles.run() builds the
+    #    data ref for us.
     print(f"uploading {args.csv} ...")
-    uploaded = upload_file(args.csv)
+    uploaded = client.files.local.upload(args.csv)
     file_id = uploaded["file_id"]
     print(f"  file_id={file_id}  file_uid={uploaded.get('file_uid')}")
 
@@ -185,61 +163,39 @@ def main():
         bundle_id = args.bundle_id
         print(f"using bundle {bundle_id}")
     else:
-        bundle_id = resolve_bundle(agents, name)
+        bundle_id = resolve_bundle(client, name)
         print(f"resolved {name!r} -> {bundle_id}")
 
-    # 3. Run the bundle. No sink is given, so the runner writes one output per
-    #    input, named after the input file.
+    # 3. Run the bundle. No sink, so the runner writes one output per input.
     print("starting agent run ...")
-    agent = request("POST", f"{agents}/bundles/{bundle_id}/run", body={
-        "connectors": {"source": [{"type": "file", "id": file_id}]},
-    })
+    agent = client.agents.bundles.run(bundle_id, source=[file_id])
     agent_id = agent["id"]
-    print(f"  agent_id={agent_id}  status={agent['status']}")
+    print(f"  agent_id={agent_id}  status={agent.get('status')}")
 
-    # 4. Poll until terminal, echoing new audit-log events as they arrive.
-    seen_events = 0
-    deadline = time.time() + TIMEOUT_S
-    while True:
-        agent = request("GET", f"{agents}/instances/{agent_id}")
-        events = request("GET", f"{agents}/instances/{agent_id}/events")["data"]
-        for event in events[seen_events:]:
-            print(f"  [{event['level']}] {event['created_at']}  {event['message']}")
-        seen_events = len(events)
-        if agent["status"] not in ("running", "paused"):
-            break
-        if time.time() > deadline:
-            sys.exit(f"timed out after {TIMEOUT_S}s; agent {agent_id} still {agent['status']}")
-        time.sleep(POLL_INTERVAL_S)
+    # 4. Poll until terminal, streaming audit events.
+    status = watch(client, agent_id)
 
-    print(f"agent finished: status={agent['status']}")
-
-    # 5. Fetch the run results and download the output CSV. Checked even on
+    # 5. Fetch results and download the output CSV. Checked even on
     #    status=failed: a flaky job poller can mark a successful run failed —
     #    if the output is there, the run succeeded.
-    results = request("GET", f"{agents}/instances/{agent_id}/results")
-    if not results["data"]:
-        sys.exit(f"run produced no output: status={agent['status']} "
-                 f"error={agent.get('error')}")
-    if agent["status"] != "completed":
-        print(f"  note: status={agent['status']} ({agent.get('error')}) "
-              f"but output exists — treating as succeeded")
-    # The results envelope is {data, has_more, next_cursor} — no `total` field
-    # (removed when the list envelopes were standardized).
-    print(f"results ({len(results['data'])}):")
-    for output in results["data"]:
-        print(f"  {output['data']['filename']}  ({output['data']['num_bytes']} bytes)")
+    results = client.agents.instances.get_results(agent_id)
+    outputs = results.get("data", [])
+    if not outputs:
+        sys.exit(f"run produced no output: status={status}")
+    if status != "completed":
+        print(f"  note: status={status} but output exists — treating as succeeded")
+    print(f"results ({len(outputs)}):")
+    for output in outputs:
+        inner = output["data"]
+        print(f"  {inner['filename']}  ({inner['num_bytes']} bytes)")
 
-    filename = results["data"][0]["data"]["filename"]
-    req = urllib.request.Request(f"{host_base()}/v0.5/files/download/{filename}")
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-    with urllib.request.urlopen(req) as resp, open(args.output, "wb") as f:
-        f.write(resp.read())
+    filename = outputs[0]["data"]["filename"]
+    client.files.local.download(filename, args.output)
     print(f"saved output to {args.output}")
 
     # 6. If the input ships a ground-truth sidecar (the sample slice does),
     #    score the predictions: each window is judged against the label of its
-    #    end row (the row its timestamp points at). Stdlib only.
+    #    end row (the row its timestamp points at).
     labels_csv = args.csv.replace(".csv", "_labels.csv")
     if os.path.exists(labels_csv):
         evaluate(args.output, labels_csv, args.window_size)
