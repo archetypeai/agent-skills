@@ -67,17 +67,17 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > `GET /agents/bundle/{id}`) now return **404** — earlier revisions of this
 > skill described a singular/plural split that predates this migration.
 
-> **⚠️ Availability — verified on Dev and Staging.** The pre-packaged
-> "OSM Quick Start" bundles are confirmed on **Dev**
-> (`https://api.dev.u1.archetypeai.app`) and **Staging**
-> (`https://api.stage.u1.archetypeai.app`) — the full run/score cycle was
-> verified on both, resolving different per-environment `bnd_…` ids by the
-> same names and producing **byte-identical outputs**. Prod rollout is
-> pending: if name resolution returns `no bundle named … found`, the bundle
-> isn't in that environment yet. Resolving by name is portable, so the skill
-> starts working there automatically once the bundles land; until then, point
-> at Dev or Staging (or pass a known `--bundle-id`). Please contact
-> support@archetypeai.dev.
+> **Availability — verified on Prod, Staging, and Dev.** The pre-packaged
+> "OSM Quick Start" bundles are confirmed on **Prod**
+> (`https://api.u1.archetypeai.app`), **Staging**
+> (`https://api.stage.u1.archetypeai.app`), and **Dev**
+> (`https://api.dev.u1.archetypeai.app`) — the full run/score cycle was
+> verified on all three, resolving a different per-environment `bnd_…` id by
+> the same name each time and producing **byte-identical outputs**. If name
+> resolution returns `no bundle named … found`, the bundle isn't in that
+> environment yet: resolving by name is portable, so the skill starts working
+> automatically once it lands; until then pass a known `--bundle-id`. Please
+> contact support@archetypeai.dev.
 
 ## Step 1 — Upload the input CSV
 
@@ -153,15 +153,15 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 - **`p_<state>` columns are emitted in alphabetical state order**, not library order.
 - **`predicted_state=INVALID_STATE`** marks windows straddling a timestamp seam (backward jump between concatenated segments) — the platform validates timestamp monotonicity strictly. Exclude these when scoring; count them.
 - The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels — verified: **314 MB vs the base bundle's 221 KB** on the 4,185-window sample slice, ~1,400×, with predictions identical); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
-- Runs are **deterministic across environments**: the same input through the same-named bundle produced **byte-identical outputs on Dev and Staging** (verified with `cmp` on both the 221 KB base output and the 314 MB embeddings output).
+- Runs are **deterministic across environments**: the same input through the same-named bundle produced a **byte-identical base output on Dev, Staging, and Prod** (`cmp` on the 221 KB file, three different `bnd_…` ids). The 314 MB embeddings output was `cmp`-verified byte-identical between Dev and Staging; on Prod its ten prediction columns are byte-identical to that environment's base output, so the embeddings are strictly additive columns.
 
 ## Runtime
 
-**Runtime is dominated by worker contention, not window count.** The same ~4,185-window sample slice, measured end-to-end (verified runs, 2026-08-13/14):
+**Runtime is dominated by worker contention, not window count.** The same ~4,185-window sample slice, measured end-to-end (verified runs, 2026-08-13/14 and 2026-08-20):
 
 | Queue state | End-to-end | Notes |
 |---|---:|---|
-| Empty (verified) | **~63–96 s** | Dev: 96 s (job time 41 s: ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s); Staging: 63 s base / 75 s embeddings — both incl. downloading the 314 MB embeddings output where applicable |
+| Empty (verified) | **~63–107 s** | Dev: 96 s (job time 41 s: ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s); Staging: 63 s base / 75 s embeddings; Prod: 107 s base / 70 s embeddings — the embeddings figures include downloading the 314 MB output |
 | Busy (verified) | 21m53s – 27m18s | same slice, same bundle — ~2.2 win/s effective, ~17× slower |
 
 Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); sequential remains the predictable default.
@@ -220,7 +220,7 @@ cd skills/atai-operational-state-monitoring-agent/references
 # note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://api.u1.archetypeai.app   # or api.stage.u1 / api.dev.u1.archetypeai.app
 EOF
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
