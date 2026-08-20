@@ -424,9 +424,9 @@ Two bugs this run caught, which no unit test would have:
 - The runner first reported every successful run as **failed**, because it
   treated any log message containing "terminated" as terminal failure — and the
   happy path logs `Agent execution terminated successfully`.
-- The `/results` reference is nested one level: `data[].data.filename`, not a
-  top-level `name`. Reading the top level yields an empty filename and a 404 on
-  a bare `/files/download/` URL.
+- The runner read the results ref from the wrong level of the envelope (see
+  step 5 for the shape), which yields an empty filename and a 404 on a bare
+  `/files/download/` URL.
 
 ## Local Setup
 
