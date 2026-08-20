@@ -3,20 +3,18 @@ name: atai-operational-state-monitoring-agent
 description: >
   Run Archetype AI's managed Operational State Monitoring (OSM) agent over
   the Agent API — upload a sensor CSV, resolve a maintained pre-packaged
-  "OSM Quick Start" bundle (classifier + windowing already pinned), run it
-  (one agent per input file), poll status + audit events, and download the
-  per-window state predictions. Use this skill when the user wants
-  fully-managed, server-side classification of operational states over a CSV
-  of sensor records — drilling states, machine modes, process phases —
-  without fitting or hosting a classifier themselves. Covers resolving the
-  pre-packaged bundle by name (portable across dev/staging/prod), the
-  run/poll/results lifecycle, the output CSV schema (`finish_timestamp,
-  predicted_state, invalid, p_<state>…`), and scoring against a ground-truth
-  sidecar. Do NOT use for client-side embedding + KNN over `/query` (that's
-  `atai-newton-omega-model`), for cleaning / windowing raw CSVs
-  (`atai-newton-omega-model-data-prep`), or for fitting a classifier
-  artifact yourself (contact support@archetypeai.dev for a classifier
-  tailored to your data).
+  "OSM Quick Start" bundle (classifier + windowing already pinned), run it,
+  poll status + audit events, download the per-window state predictions. Use
+  when the user wants fully-managed, server-side classification of
+  operational states over a CSV of sensor records — drilling states, machine
+  modes, process phases — without fitting or hosting a classifier
+  themselves. Covers resolving the bundle by name (portable across
+  deployments), the run/poll/results lifecycle, the output CSV schema
+  (`finish_timestamp, predicted_state, invalid, p_<state>…`), and scoring
+  against a ground-truth sidecar. Do NOT use for client-side embedding + KNN
+  over `/query` (that's `atai-newton-omega-model`), for cleaning / windowing
+  raw CSVs (`atai-newton-omega-model-data-prep`), or for fitting a
+  classifier artifact yourself (contact support@archetypeai.dev).
 ---
 
 # OSM Agent — Managed State Classification via the Agent API
@@ -67,17 +65,13 @@ The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. 
 > `GET /agents/bundle/{id}`) now return **404** — earlier revisions of this
 > skill described a singular/plural split that predates this migration.
 
-> **Availability — verified on Prod, Staging, and Dev.** The pre-packaged
-> "OSM Quick Start" bundles are confirmed on **Prod**
-> (`https://api.u1.archetypeai.app`), **Staging**
-> (`https://api.stage.u1.archetypeai.app`), and **Dev**
-> (`https://api.dev.u1.archetypeai.app`) — the full run/score cycle was
-> verified on all three, resolving a different per-environment `bnd_…` id by
-> the same name each time and producing **byte-identical outputs**. If name
-> resolution returns `no bundle named … found`, the bundle isn't in that
-> environment yet: resolving by name is portable, so the skill starts working
-> automatically once it lands; until then pass a known `--bundle-id`. Please
-> contact support@archetypeai.dev.
+> **Availability.** The pre-packaged "OSM Quick Start" bundles are published
+> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
+> documented here. If name resolution returns `no bundle named … found`, the
+> bundle isn't published in the deployment you're pointed at: resolving by
+> name is portable, so pass a known `--bundle-id` meanwhile, or contact
+> support@archetypeai.dev.
 
 ## Step 1 — Upload the input CSV
 
@@ -91,7 +85,7 @@ The response carries two identifiers — `file_id` (the filename) and `file_uid`
 
 ## Step 2 — Resolve the pre-packaged bundle by name
 
-The maintained bundles are canonical (org-wide) and identified by a **stable name**. Their **id changes per environment** (dev/staging/prod), so resolve by name for portability — the plural read endpoint does a case-insensitive substring search over name and id:
+The maintained bundles are canonical (org-wide) and identified by a **stable name**. Their **id is deployment-specific**, so resolve by name for portability — the plural read endpoint does a case-insensitive substring search over name and id:
 
 ```sh
 curl -G -H "Authorization: Bearer $ATAI_API_KEY" \
@@ -108,7 +102,7 @@ Two bundles are published:
 
 **Select the EXACT name match, not the first result** — the base name is a substring of the embeddings name, so a `query=` for the base name returns *both*. Pick `b["name"] == "OSM Quick Start (Volve Six State)"` and take its `id`.
 
-The bundle already pins the classifier and its windowing (`window_size=16, step_size=1`, plus the Volve-sized validation tolerances), so there is **nothing to create and no classifier URI to supply**. (For reference: on Dev these currently resolve to `bnd_7877k9t49g9sdbgy9q92dakv3e` and `bnd_7vs5a4v58c8s3v14qpatx1y1eh`, on Staging to `bnd_5xp4qw63x78mn9jxcqh8sgx3fv` and `bnd_0ay54a67x29s49ys99q97yyy69` — the per-environment drift is why you resolve by name; pin ids only as a last resort.)
+The bundle already pins the classifier and its windowing (`window_size=16, step_size=1`, plus the Volve-sized validation tolerances), so there is **nothing to create and no classifier URI to supply**. (For reference, these currently resolve to `bnd_02yp01y1er80vv1s5egaeb7p74` and `bnd_1hd3aymx308tct952dn5nwram9` in production; the ids are deployment-specific, which is why you resolve by name — pin ids only as a last resort.)
 
 ## Step 3 — Run the bundle
 
@@ -153,22 +147,22 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 - **`p_<state>` columns are emitted in alphabetical state order**, not library order.
 - **`predicted_state=INVALID_STATE`** marks windows straddling a timestamp seam (backward jump between concatenated segments) — the platform validates timestamp monotonicity strictly. Exclude these when scoring; count them.
 - The **Embeddings** bundle adds the **Newton Omega embedding for each window**: one `embedding_{variate}` column per sensor channel, each a 768-d vector (~76 KB/row extra with 9 channels — verified: **314 MB vs the base bundle's 221 KB** on the 4,185-window sample slice, ~1,400×, with predictions identical); the base bundle omits them. Use it when you want the vectors alongside the predictions — client-side similarity, drift monitoring, projections, or downstream ML per [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns — without paying one `/query` call per window.
-- Runs are **deterministic across environments**: the same input through the same-named bundle produced a **byte-identical base output on Dev, Staging, and Prod** (`cmp` on the 221 KB file, three different `bnd_…` ids). The 314 MB embeddings output was `cmp`-verified byte-identical between Dev and Staging; on Prod its ten prediction columns are byte-identical to that environment's base output, so the embeddings are strictly additive columns.
+- Runs are **reproducible**: the same input through the same-named bundle produces a **byte-identical output** run to run, `cmp`-verified on the 221 KB base file across repeat runs and across deployments (the model is not re-fit per run). The embeddings variant's ten prediction columns are byte-identical to the base output — the embedding columns are strictly additive, never a change in prediction.
 
 ## Runtime
 
-**Runtime is dominated by worker contention, not window count.** The same ~4,185-window sample slice, measured end-to-end (verified runs, 2026-08-13/14 and 2026-08-20):
+**Runtime is dominated by worker contention, not window count.** The same ~4,185-window sample slice, measured end-to-end across verified runs:
 
 | Queue state | End-to-end | Notes |
 |---|---:|---|
-| Empty (verified) | **~63–107 s** | Dev: 96 s (job time 41 s: ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s); Staging: 63 s base / 75 s embeddings; Prod: 107 s base / 70 s embeddings — the embeddings figures include downloading the 314 MB output |
+| Empty (verified) | **~1–2 min** | 63–107 s for the base bundle, 70–75 s for embeddings including the 314 MB download. One run's job breakdown: 41 s total — ~16 s queued, ~14 s model loading, **~26 s to encode+classify** ≈ 160 win/s |
 | Busy (verified) | 21m53s – 27m18s | same slice, same bundle — ~2.2 win/s effective, ~17× slower |
 
 Budget by the **audit events, not the clock** — you cannot see other tenants' jobs, so the queue state is only observable from your run's own event timing. Any past "runtime per window count" figure measured without knowing the queue state is a contention artifact, not an intrinsic rate. Concurrent runs of your own divide the same pool (N parallel ran ~N× slower each under load); sequential remains the predictable default.
 
 ## Common Pitfalls
 
-- **Resolve by name, not by id.** The pre-packaged bundle's id changes across dev/staging/prod; only the name is stable. And **match the name exactly** — the base name is a substring of the `…, Embeddings)` name, so a substring `query=` returns both.
+- **Resolve by name, not by id.** The pre-packaged bundle's id is deployment-specific; only the name is stable. And **match the name exactly** — the base name is a substring of the `…, Embeddings)` name, so a substring `query=` returns both.
 - **The bundle API is plural everywhere** (as of 2026-08-11). `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch), `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). Every singular form (`/agents/bundle/…`) 404s.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agent API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
@@ -220,7 +214,7 @@ cd skills/atai-operational-state-monitoring-agent/references
 # note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app   # or api.stage.u1 / api.dev.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
 EOF
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
@@ -228,7 +222,7 @@ python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per w
 python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
 ```
 
-Expect **~2 min** for the ~4,185 step-1 windows of the sample slice when the worker queue is clear (verified: 96 s end-to-end, Embeddings variant) — and **~22–27 min** when workers are contended (also verified, same slice). The queue state isn't visible to you; the run's own audit events are the signal. The script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
+Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the worker queue is clear (verified: 107 s base, 70 s Embeddings, end-to-end) — and **~22–27 min** when workers are contended (also verified, same slice). The queue state isn't visible to you; the run's own audit events are the signal. The script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
 
 ## File Layout
 

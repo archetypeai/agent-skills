@@ -7,8 +7,8 @@ terminal, download the per-window predictions — and, if the input ships a
 No bundle creation, no classifier URI: the platform ships canonical
 quick-start bundles (classifier + windowing already pinned). This script just
 finds one and runs it. It resolves the bundle **by name** so it is portable
-across dev/staging/prod (the bundle *id* changes per environment; the name
-does not); pass `--bundle-id` to skip the lookup.
+across deployments (the bundle *id* is deployment-specific; the name is not);
+pass `--bundle-id` to skip the lookup.
 
 Stdlib-only. The bundle API is plural everywhere (as of 2026-08-11):
 `GET /agents/bundles[?query=…]`, `GET /agents/bundles/{id}`,
