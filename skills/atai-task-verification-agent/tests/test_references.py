@@ -54,7 +54,7 @@ def load(path):
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """The Agent API is mounted without a version prefix; files live under /v0.5."""
+    """The Agents API is mounted without a version prefix; files live under /v0.5."""
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in

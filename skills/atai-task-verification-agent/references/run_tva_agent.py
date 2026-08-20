@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the managed Task Verification Agent (TVA) over the Agent API.
+"""Run the managed Task Verification Agent (TVA) over the Agents API.
 
 Stdlib only — no third-party imports, no GPU, no atai_core. Drop a .env next to
 where you run this:
@@ -118,7 +118,7 @@ def load_dotenv(path: str = ".env") -> None:
 def env() -> tuple[str, str]:
     """(key, endpoint). The endpoint is normalised to bare — no /v0.5 suffix.
 
-    The Agent API is mounted WITHOUT a version prefix while files live under
+    The Agents API is mounted WITHOUT a version prefix while files live under
     /v0.5, so this script mounts each itself. A user pasting the /query base URL
     would otherwise produce /v0.5/agents/... and 404 everywhere.
     """

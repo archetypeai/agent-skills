@@ -26,7 +26,7 @@ description: >
   (`atai-operational-state-monitoring-agent`).
 ---
 
-# TVA Agent — Managed Task Verification via the Agent API
+# TVA Agent — Managed Task Verification via the Agents API
 
 The TVA agent checks a recording against a procedure you supply. You hand the platform an `.mp4` **and** an SOP as a `.txt`; it samples frames, transcribes the audio, fuses both with your procedure in one pass, and returns one verdict per SOP step:
 
@@ -69,7 +69,7 @@ MGA takes its instruction from a bundle *value*, fixed for the life of a bundle.
 
 ## Endpoints
 
-The Agent API is mounted **without a version prefix**; the files API is under `/v0.5`.
+The Agents API is mounted **without a version prefix**; the files API is under `/v0.5`.
 
 ```
 POST   {endpoint}/v0.5/files                          upload the video, then the SOP
@@ -358,7 +358,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | Symptom | Cause |
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
-| `404` on every `/agents` path | Prod endpoint. The Agent API is on Dev and Staging only |
+| `404` on every `/agents` path | Prod endpoint. The Agents API is on Dev and Staging only |
 | `401` with a key that works elsewhere | API keys are **environment-scoped** — Dev, Staging and Prod each need their own (verified: a Dev key 401s on Staging) |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
