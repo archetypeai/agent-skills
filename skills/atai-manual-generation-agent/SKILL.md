@@ -193,7 +193,7 @@ reason nothing in the response reveals.
 POST {endpoint}/agents/bundles
 {
   "blueprint": "mga",
-  "name": "manual generation run",
+  "name": "mga tire_i2JWkDyg26A mnt16384",
   "values": {
     "max_frames": 64,
     "max_new_tokens": 16384,
@@ -202,6 +202,14 @@ POST {endpoint}/agents/bundles
 }
 → 201 {"id": "bnd_…", "status": "ready", "is_canonical": false}
 ```
+
+> **Name the bundle after its inputs.** A bundle's `name` is set at creation and
+> **cannot be changed** — `PATCH` and `PUT` on `/agents/bundles/{id}` both return
+> **405** — and it is the only thing distinguishing your runs from each other in
+> the console. Reuse one constant name across several runs and every row looks
+> identical, leaving you to recover which bundle was which from your own local
+> records. `run_mga_agent.py` defaults `--name` to `mga <video> mnt<budget>` for
+> this reason. Whatever convention you pick, encode the values you varied.
 
 | Value | Default | Notes |
 |---|---|---|

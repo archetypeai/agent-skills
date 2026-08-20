@@ -343,7 +343,11 @@ def main() -> None:
                          "Say what to COVER, never how to format — the "
                          "results parser owns the template and a format-overriding "
                          "prompt makes it return zero steps")
-    ap.add_argument("--name", default="manual generation run")
+    ap.add_argument("--name", default=None,
+                    help="bundle name. Defaults to 'mga <video> mnt<budget>', which "
+                         "is what distinguishes your runs from each other in the "
+                         "console — bundles CANNOT be renamed later (PATCH/PUT "
+                         "return 405).")
     ap.add_argument("--output", default="mga-output.json")
     ap.add_argument("--score", metavar="FILE", help="offline: score an output")
     ap.add_argument("--reference", metavar="CSV",
@@ -368,6 +372,14 @@ def main() -> None:
     values = {"max_frames": args.max_frames,
               "max_new_tokens": args.max_new_tokens,
               "prompt": args.prompt}
+
+    # A bundle's name is set at creation and cannot be changed afterwards, so it
+    # is the only handle that tells two runs apart in the console. Derive it from
+    # the inputs that actually differ between runs. Done before --dry-run prints
+    # the payload, so the dry run shows exactly what a real run would send.
+    if args.name is None:
+        stem = os.path.splitext(os.path.basename(args.video))[0]
+        args.name = f"mga {stem} mnt{args.max_new_tokens}"
 
     if args.dry_run:
         print(f"POST {endpoint}/agents/bundles")
