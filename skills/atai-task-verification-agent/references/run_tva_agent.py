@@ -521,7 +521,12 @@ def main() -> None:
                     help=f"output budget, SHARED with the model's <think> block "
                          f"(default {DEFAULT_MAX_NEW_TOKENS}). Too low returns an "
                          f"empty result on exactly the clips that contain a defect.")
-    ap.add_argument("--name", default="task verification run")
+    ap.add_argument("--name", default=None,
+                    help="bundle name. Defaults to 'tva <clip> mnt<budget>', which "
+                         "is what distinguishes your runs from each other in the "
+                         "console — every bundle carrying the same name is "
+                         "indistinguishable there, and bundles CANNOT be renamed "
+                         "later (PATCH/PUT return 405).")
     ap.add_argument("--output", default=None, help="where to save the result JSON")
     ap.add_argument("--score", metavar="FILE",
                     help="print and score an existing output, then stop — offline")
@@ -547,6 +552,11 @@ def main() -> None:
               "max_new_tokens": args.max_new_tokens}
     clip = os.path.splitext(os.path.basename(args.video))[0]
     out_path = args.output or f"tva-output-{clip}.json"
+    # A bundle's name is set at creation and cannot be changed afterwards, so it
+    # is the only handle that tells two runs apart in the console. Derive it from
+    # the inputs that actually differ between runs.
+    if args.name is None:
+        args.name = f"tva {clip} mnt{args.max_new_tokens}"
 
     if args.dry_run:
         _, endpoint = env()

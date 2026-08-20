@@ -222,10 +222,19 @@ Two consequences: unique ids mean the skip never fires on the default path, so e
 
 ```json
 POST {endpoint}/agents/bundles
-{"blueprint": "tva", "name": "task verification run",
+{"blueprint": "tva", "name": "tva 1_pass_2_pass_3_fail_A mnt5760",
  "values": {"max_frames": 64, "max_new_tokens": 5760}}
 → 201 {"id": "bnd_…", "status": "ready"}
 ```
+
+> **Name the bundle after its inputs.** A bundle's `name` is set at creation and
+> **cannot be changed** — `PATCH` and `PUT` on `/agents/bundles/{id}` both return
+> **405** — and it is the only thing distinguishing your runs from each other in
+> the console. Reuse one constant name across a batch and every row looks
+> identical; you then have to recover which bundle was which from your own local
+> records. `run_tva_agent.py` defaults `--name` to `tva <clip> mnt<budget>` for
+> this reason: the clip and the token budget are what actually differ between
+> runs. Whatever convention you pick, encode the values you varied.
 
 | Value | Default | Notes |
 |---|---|---|
