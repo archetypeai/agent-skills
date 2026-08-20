@@ -1,19 +1,19 @@
 ---
 name: atai-manual-generation-agent
 description: >
-  Run Archetype AI's managed Manual Generation (MGA) agent over the Agent
+  Run Archetype AI's managed Manual Generation (MGA) agent over the Agents
   API — upload a procedure video, create a bundle from the canonical `mga`
-  blueprint, run it, poll, download an ordered, timestamped manual. Use when the user has a recording of a procedure (a
-  repair, an assembly, a workflow) and wants the platform to turn it into
-  step-by-step instructions traceable back to the video. Covers video
-  suitability (the ~5-minute ceiling, the audio-track requirement), the
-  bundle request shape (`max_frames`, `max_new_tokens`, and the `prompt` the
-  active blueprint does NOT expose), the run/poll/results lifecycle, the
-  output JSON schema (`step, instruction, frame_start/end,
-  timestamp_start/end`), and scoring against reference annotations. Do NOT
-  use for verifying a task was performed correctly (the `tva` blueprint),
-  for one-shot multimodal questions over a clip
-  (`atai-newton-fusion-model`), or for time-series state classification
+  blueprint, run it, poll, download an ordered, timestamped manual. Use when
+  the user has a recording of a procedure (a repair, an assembly, a workflow)
+  and wants the platform to turn it into step-by-step instructions traceable
+  back to the video. Covers video suitability (the ~5-minute ceiling, the
+  audio-track requirement), the bundle request shape (`max_frames`,
+  `max_new_tokens`, and a `prompt` that must say what to cover and never how
+  to format), the run/poll/results lifecycle, the output JSON schema (`step,
+  instruction, frame_start/end, timestamp_start/end`), and scoring against
+  reference annotations. Do NOT use for verifying a task was performed
+  correctly (the `tva` blueprint), for one-shot multimodal questions over a
+  clip (`atai-newton-fusion-model`), or for time-series state classification
   (`atai-operational-state-monitoring-agent`).
 ---
 
