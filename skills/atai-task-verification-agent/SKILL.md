@@ -351,7 +351,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 
 **Cold start is ~7 min on every run and is never cached** — two back-to-back runs on the same GPU each downloaded newton-fusion from scratch. So the marginal cost of one more clip is much lower than the first: batch them.
 
-**Dev serializes these jobs.** One pod started **3 seconds** after the previous finished, having waited 7 minutes. Submitting concurrently buys queue position, not parallelism.
+**Do not count on these jobs being serialized.** Whether concurrent submissions queue depends on what else is running on the deployment at that moment: they queue when other workloads hold the workers, and come up as concurrent jobs when they don't. Queuing has been observed here — one pod waited 7 minutes and started **3 seconds** after the previous finished — but other tenants' workloads aren't visible to you, so that is an observation, not a guarantee. Submit one at a time.
 
 ## Common Pitfalls
 
@@ -377,7 +377,8 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 
 ## Cleanup
 
-Dev has **one GPU** and serializes jobs, so an abandoned run blocks everyone:
+A deployment with a single GPU serializes these jobs, so an abandoned run can
+block everyone else's:
 
 ```python
 POST {endpoint}/agents/instances/{agent_id}/cancel
