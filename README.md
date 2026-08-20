@@ -8,19 +8,37 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 ## Skills
 
+Three groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/query` and leave the orchestration to you, and **Design** covers the demo front-end.
+
+### Agents
+
+Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or canonical blueprint, poll, download the output. Nothing to fit, no model to host. The three sensor agents differ by **what you already have labelled**: every regime (OSM), a handful of examples of one named fault (RED), or nothing but normal operation (AD).
+
 | Skill | Description |
 |-------|-------------|
-| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
-| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
-| [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
+| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agents API — resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions |
 | [atai-rare-event-detection-agent](skills/atai-rare-event-detection-agent/) | Run the managed RED agent over the Agents API — resolve the pre-packaged "RED Quick Start" bundle by name (nearest-prototype classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window rare-event predictions |
 | [atai-anomaly-discovery-agent](skills/atai-anomaly-discovery-agent/) | Run the managed Anomaly Discovery agent over the Agents API — resolve the pre-packaged "AD Quick Start" bundle by name (fitted LOF detector + threshold already pinned), run one agent per input CSV, poll, and download a per-window anomaly score. For assets with **no fault history**: fitted on normal-only data, so everything it flags is something it was never shown |
 | [atai-manual-generation-agent](skills/atai-manual-generation-agent/) | Run the managed Manual Generation (MGA) agent over the Agents API — upload a procedure video, run the canonical `mga` blueprint, and get back an ordered, timestamped manual with each step traceable to a time range in the source |
-| [atai-design-system](skills/atai-design-system/) | Build a Newton demo front-end with the Archetype AI Design System — scaffold via the `ds` CLI (`@archetypeai/ds-cli`) and compose the published Svelte 5 primitives + OKLCH tokens (`@archetypeai/ds-{lib-tokens,ui-svelte-console,ui-svelte-labs}`) instead of hand-rolling UI |
-| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agents API — resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions |
 | [atai-task-verification-agent](skills/atai-task-verification-agent/) | Run the managed Task Verification (TVA) agent over the Agents API — upload a recording **and** a reference procedure (an SOP), and get back a per-step PASSED / FAILED / MISSING verdict with a timestamp and a reason for each step. The SOP is a runtime input, so one bundle serves every procedure |
 
-More skills are in review and will be added to this table as they land.
+### Models
+
+Direct Query API — one stateless `POST /query` per request, for when you want control over the pipeline or the raw vectors to build on.
+
+| Skill | Description |
+|-------|-------------|
+| [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
+| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
+| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
+
+### Design
+
+| Skill | Description |
+|-------|-------------|
+| [atai-design-system](skills/atai-design-system/) | Build a Newton demo front-end with the Archetype AI Design System — scaffold via the `ds` CLI (`@archetypeai/ds-cli`) and compose the published Svelte 5 primitives + OKLCH tokens (`@archetypeai/ds-{lib-tokens,ui-svelte-console,ui-svelte-labs}`) instead of hand-rolling UI |
+
+More skills are in review and will be added as they land.
 
 ## Building with the Design System
 
@@ -70,13 +88,20 @@ cp -r skills/* your-project/.claude/skills/
 ### Invoke a Skill
 
 ```
-/atai-newton-fusion-model          # Multimodal (text/image/video) queries on the C 2.6 fusion model
-/atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
+# Agents — managed pipelines over the Agents API
+/atai-operational-state-monitoring-agent # Every operating regime, from a full labelled library
+/atai-rare-event-detection-agent   # One named fault, from a handful of labelled examples
+/atai-anomaly-discovery-agent      # Normal-only fit; per-window anomaly score, no fault history needed
+/atai-manual-generation-agent      # Procedure video -> ordered, timestamped manual
+/atai-task-verification-agent      # Recording + SOP -> per-step PASSED / FAILED / MISSING
+
+# Models — Direct Query API
 /atai-newton-omega-model-data-prep # Clean / split / featurize time-series before the Omega model
-/atai-anomaly-discovery-agent      # Managed AD agent: normal-only fit, per-window anomaly score
-/atai-design-system                # Scaffold + build a Newton demo front-end with the Archetype AI Design System
-/atai-operational-state-monitoring-agent # Managed OSM agent: pre-packaged bundle, per-window state predictions
-/atai-rare-event-detection-agent   # Managed RED agent: pre-packaged bundle, per-window rare-event predictions
+/atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
+/atai-newton-fusion-model          # Multimodal (text/image/video) queries on the C 2.6 fusion model
+
+# Design
+/atai-design-system                # Scaffold + build a Newton demo front-end with the Design System
 ```
 
 ## Architecture
