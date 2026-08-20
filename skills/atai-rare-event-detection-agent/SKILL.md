@@ -1,7 +1,7 @@
 ---
 name: atai-rare-event-detection-agent
 description: >
-  Run Archetype AI's managed Rare Event Detection (RED) agent over the Agent
+  Run Archetype AI's managed Rare Event Detection (RED) agent over the Agents
   API — upload a sensor CSV, resolve the pre-packaged "RED Quick Start"
   bundle by name (its nearest-prototype classifier and windowing are already
   pinned), run it, poll status + audit events, download per-window event
@@ -17,7 +17,7 @@ description: >
   CSVs (`atai-newton-omega-model-data-prep`).
 ---
 
-# RED Agent — Managed Rare Event Detection via the Agent API
+# RED Agent — Managed Rare Event Detection via the Agents API
 
 The RED agent detects **named, rare events** from a handful of labelled
 examples. It is the few-shot middle path between two siblings: OSM needs a full
@@ -86,11 +86,11 @@ classifier" below.)
 ```
 Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
             GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
-Agent API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Agents API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agent API is **versionless** — `/agents`, not `/v0.5/agents`. If
+The Agents API is **versionless** — `/agents`, not `/v0.5/agents`. If
 `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending
 `/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
 default endpoint.

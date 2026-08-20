@@ -41,7 +41,7 @@ runner = _load_runner()
 # --------------------------------------------------------------------------
 
 def test_agents_base_is_versionless(monkeypatch):
-    """The Agent API is /agents, never /vX.Y/agents — strip the suffix."""
+    """The Agents API is /agents, never /vX.Y/agents — strip the suffix."""
     for endpoint in ("https://x.test", "https://x.test/v0.5", "https://x.test/v0.5/"):
         monkeypatch.setenv("ATAI_API_ENDPOINT", endpoint)
         assert runner.agents_base() == "https://x.test/agents", endpoint

@@ -79,7 +79,7 @@ def api_base() -> str:
 
 
 def agents_base() -> str:
-    # The Agent API is versionless: /agents, never /vX.Y/agents.
+    # The Agents API is versionless: /agents, never /vX.Y/agents.
     base = api_base()
     for suffix in ("/v0.5", "/v0.4", "/v1"):
         if base.endswith(suffix):
