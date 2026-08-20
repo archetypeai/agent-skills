@@ -1,7 +1,7 @@
 ---
 name: atai-task-verification-agent
 description: >
-  Run Archetype AI's managed Task Verification (TVA) agent over the Agent
+  Run Archetype AI's managed Task Verification (TVA) agent over the Agents
   API — upload a recording AND a reference procedure (an SOP), create a
   bundle from the `tva` blueprint, run it, poll the audit log, and download
   a per-step PASSED / FAILED / MISSING verdict with timestamps and a reason
