@@ -381,6 +381,12 @@ Verified 2026-08-11 → 2026-08-20.
   when scheduling was contended. Other tenants' jobs aren't visible to you, so
   the run's own audit events are the only queue-state signal. Do not read a
   fast run as a broken one — see the `/results` check above.
+- **Prefer sequential runs.** Whether concurrent runs queue depends on what
+  else is running on the deployment at that moment: they queue when other
+  workloads hold the workers, and run as concurrent jobs when they don't.
+  Other tenants' workloads aren't visible to you, so there is no
+  serialization to rely on and no parallelism to count on — submit one at a
+  time unless you are deliberately testing this.
 - **Re-running the same input is not bit-identical — within a deployment or
   across them.** Two runs of the same 840-window slice with the same detector:
   max absolute score difference **4.2×10⁻⁵**, median relative **0.0002%**,

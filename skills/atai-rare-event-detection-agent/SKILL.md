@@ -329,9 +329,13 @@ Two structural facts follow from majority labelling:
   537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
   those historical per-window-count timings are contention artifacts, not
   intrinsic rates. Treat the **audit events, not the clock**, as the signal.
-- **Prefer sequential runs.** Workers are shared: under load, five
-  concurrent runs ran ~5× slower each; with a clear queue, concurrent runs
-  completed at full speed. Sequential stays the predictable default.
+- **Prefer sequential runs.** Whether concurrent runs queue depends on what
+  else is running on the deployment at that moment: they queue when other
+  workloads hold the workers, and run as concurrent jobs when they don't.
+  Under load, five concurrent runs ran ~5× slower each; with a clear queue,
+  concurrent runs completed at full speed. Other tenants' workloads aren't
+  visible to you, so there is no serialization to rely on and no parallelism
+  to count on — sequential stays the predictable default.
 - **Cancel with `POST /agents/instances/{id}/cancel`.** Killing a local client
   does not stop the job — `DELETE` returns 409 while running.
 
