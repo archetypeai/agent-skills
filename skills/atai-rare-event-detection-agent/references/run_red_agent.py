@@ -18,7 +18,7 @@ Auth comes from the environment (a local .env is loaded if present):
 Usage:
   python3 run_red_agent.py                 # quick-start bundle, sample data
   python3 run_red_agent.py --embeddings    # + embedding_{variate} columns
-  python3 run_red_agent.py --bundle-id bnd_...   # pin one environment's id
+  python3 run_red_agent.py --bundle-id bnd_...   # pin one deployment's id
 """
 from __future__ import annotations
 
@@ -33,16 +33,19 @@ import urllib.parse
 import urllib.request
 import uuid
 
+sys.stdout.reconfigure(line_buffering=True)
+
 
 def load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
-    for line in open(path):
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+    with open(path) as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
 
 
 def api_base() -> str:
@@ -53,7 +56,6 @@ def api_base() -> str:
 
 
 def require_key() -> str:
-    load_dotenv()
     key = os.environ.get("ATAI_API_KEY")
     if not key:
         sys.exit("ATAI_API_KEY is not set (put it in .env)")
@@ -121,12 +123,12 @@ def upload_file(path: str, rename: str | None = None) -> dict:
 def resolve_bundle(agents: str, name: str) -> dict:
     """Resolve a bundle by its stable name, preferring canonical bundles.
 
-    Bundle ids are environment-scoped — the same pre-packaged bundle carries a
-    different bnd_… id in dev, staging and prod — so the NAME is the stable
-    handle. `GET /agents/bundles?query=` does a case-insensitive substring
-    search over name and id (`?name=`/`?search=` are silently ignored), so
-    match the name exactly client-side; canonical (platform) bundles win over
-    same-named org bundles.
+    Bundle ids are deployment-scoped — the same pre-packaged bundle carries a
+    different bnd_… id in each deployment — so the NAME is the stable handle.
+    `GET /agents/bundles?query=` does a case-insensitive substring search over
+    name and id (`?name=`/`?search=` are silently ignored), so match the name
+    exactly client-side; canonical (platform) bundles win over same-named org
+    bundles.
     """
     page = request("GET", f"{agents}/bundles?query={urllib.parse.quote(name)}&limit=100")
     exact = [bundle for bundle in page.get("data", []) if bundle.get("name") == name]
@@ -135,10 +137,10 @@ def resolve_bundle(agents: str, name: str) -> dict:
             return bundle
     if exact:
         return exact[0]
-    sys.exit(f"no bundle named '{name}' found in this environment — the "
-             f"pre-packaged bundles may not be published here yet (verified on "
-             f"Dev and Staging; Prod rollout pending). Pass --bundle-id for this "
-             f"environment as a fallback, or contact support@archetypeai.dev.")
+    sys.exit(f"no bundle named '{name}' found — the pre-packaged bundles may "
+             f"not be published in the deployment you're pointed at. Pass "
+             f"--bundle-id for it as a fallback, or contact "
+             f"support@archetypeai.dev.")
 
 
 def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
@@ -194,8 +196,11 @@ def download_results(agent_id: str, out_path: str) -> str | None:
     return out_path
 
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "pump_eval_inc04.csv")
+
 # Pre-packaged canonical bundles (classifier + windowing already pinned).
-# Names are the stable, cross-environment handles; ids differ per environment.
+# Names are the stable handles across deployments; ids are deployment-specific.
 QUICK_START_BUNDLE = "RED Quick Start (Pump Breakdown)"
 QUICK_START_BUNDLE_EMBEDDINGS = "RED Quick Start (Pump Breakdown, Embeddings)"
 # Class names are NOT hardcoded: `normal` is the conventional baseline label and
@@ -351,9 +356,11 @@ def score(output_path: str, labels_path: str, window_size: int,
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--csv", default="sample_data/pump_eval_inc04.csv",
-                    help="prepared input CSV. A ground-truth sidecar named "
-                         "<stem>_labels.csv next to it enables scoring.")
+    ap.add_argument("--csv", default=DEFAULT_CSV,
+                    help="prepared input CSV (defaults to the bundled sample "
+                         "slice, resolved next to this script). A ground-truth "
+                         "sidecar named <stem>_labels.csv next to it enables "
+                         "scoring.")
     ap.add_argument("--embeddings", action="store_true",
                     help=f"run '{QUICK_START_BUNDLE_EMBEDDINGS}' instead — each "
                          "prediction row also carries the Newton Omega encoder "
@@ -398,6 +405,7 @@ def main() -> None:
         sys.exit("--embeddings picks a specific pre-packaged bundle; don't "
                  "combine it with --bundle-id/--bundle-name")
 
+    load_dotenv()
     require_key()
     agents = agents_base()
 

@@ -3,24 +3,18 @@ name: atai-rare-event-detection-agent
 description: >
   Run Archetype AI's managed Rare Event Detection (RED) agent over the Agent
   API — upload a sensor CSV, resolve the pre-packaged "RED Quick Start"
-  bundle by name (portable across dev/staging/prod; a fitted
-  nearest-prototype classifier and its windowing are already pinned), run it
-  (one agent per input file), poll status + audit events, and download
-  per-window event predictions. Use this skill when the user wants
-  fully-managed server-side detection of a *named* rare fault recurring —
-  equipment breakdowns, process excursions — from a
-  handful of labelled examples. Covers bundle resolution by name (?query=),
-  the run/poll/results lifecycle, the output CSV schema
-  (`finish_timestamp, start_timestamp, predicted_state, invalid,
-  p_<class>…`), the Embeddings bundle variant (per-row Omega embeddings,
-  ~2,000× larger output), bring-your-own-classifier via the canonical `red`
-  blueprint, and why incident-level detection must be scored
-  separately from window-level accuracy. Do NOT use for classifying every
-  operating regime from a full labelled library
-  (`atai-operational-state-monitoring-agent`), for unnamed anomalies against
-  normal-only data, for client-side embedding + KNN over `/query`
-  (`atai-newton-omega-model`), or for cleaning and windowing raw CSVs
-  (`atai-newton-omega-model-data-prep`).
+  bundle by name (its nearest-prototype classifier and windowing are already
+  pinned), run it, poll status + audit events, download per-window event
+  predictions. Use when the user wants fully-managed, server-side detection
+  of a *named* rare fault recurring — equipment breakdowns, process
+  excursions — from a handful of labelled examples. Covers name-based bundle
+  resolution, the run/poll/results lifecycle, the output schema, the
+  Embeddings variant, bring-your-own-classifier via the `red` blueprint, and
+  incident-level vs window-level scoring. Do NOT use for classifying every
+  operating regime (`atai-operational-state-monitoring-agent`), for unnamed
+  anomalies with no labelled examples, for client-side embedding + KNN over
+  `/query` (`atai-newton-omega-model`), or for cleaning and windowing raw
+  CSVs (`atai-newton-omega-model-data-prep`).
 ---
 
 # RED Agent — Managed Rare Event Detection via the Agent API
@@ -108,16 +102,13 @@ default endpoint.
 > `GET /agents/bundle/{id}`) now return **404** — earlier docs (and the OSM
 > sibling skill) describing a singular/plural split predate this migration.
 
-> **⚠️ Availability — verified on Dev and Staging.** Everything here is
-> verified against the **Dev** deployment
-> (`https://api.dev.u1.archetypeai.app`), and the full run/score cycle is
-> also verified on **Staging** (`https://api.stage.u1.archetypeai.app`) —
-> the same names resolved to different per-environment `bnd_…` ids and both
-> bundles produced **byte-identical outputs** to the Dev runs'. Prod rollout
-> is pending: if name resolution reports `no bundle named … found`, the
-> pre-packaged bundle isn't published in that environment yet — point at Dev
-> or Staging, or pass a known `--bundle-id` for that environment. Please
-> contact support@archetypeai.dev.
+> **Availability.** The pre-packaged "RED Quick Start" bundles are published
+> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
+> documented here. If name resolution reports `no bundle named … found`, the
+> bundle isn't published in the deployment you're pointed at: resolving by
+> name is portable, so pass a known `--bundle-id` meanwhile, or contact
+> support@archetypeai.dev.
 
 ## The five-step lifecycle
 
@@ -140,8 +131,8 @@ z-normalized values per variate. Irregular timestamps come back as
 ### 2. Resolve the pre-packaged bundle by name
 
 The Quick Start bundles are canonical (platform-published) and identified by a
-**stable name**; their `bnd_…` **id differs per environment** (dev/staging/
-prod), so resolve by name for portability:
+**stable name**; their `bnd_…` **id is deployment-specific**, so resolve by
+name for portability:
 
 ```sh
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
@@ -159,11 +150,10 @@ client-side and prefer `is_canonical: true`. Two bundles are published:
 
 Both pin the classifier artifact (`red-classifier` slot) and its windowing
 (`window_size=64, step_size=1`), so there is **nothing to create and no
-classifier URI to supply**. (For reference: on Dev these currently resolve to
-`bnd_47c7pesmwx8yct495bwtm9f05z` and `bnd_01cr02sex781592xa2xhcvby8z`, on
-Staging to `bnd_5bxwyza05e9bj983qtdkbrtadn` and
-`bnd_33ew7j2ehk9mxrfh9g4jf2qydx` — the per-environment drift is why you
-resolve by name; pin ids only as a last resort.)
+classifier URI to supply**. (For reference, these currently resolve to
+`bnd_0ykawrhhd795kv20cvr18ak618` and `bnd_7xye786cph98xb8ch2yn2q56ey` in
+production; the ids are deployment-specific, which is why you resolve by
+name — pin ids only as a last resort.)
 
 ### 3. Run the bundle — one agent per input file
 
@@ -316,17 +306,17 @@ Two structural facts follow from majority labelling:
   outages.
 - **Output timestamps are floats.** The platform emits `1530962520.0` where the
   input carried integer seconds — join on the numeric value, not the string.
-- **Runs are deterministic across environments.** The same input through the
-  same-named bundle produced **byte-identical outputs on Dev and Staging**
-  (verified with `cmp` on both the 381 KB base output and the 740 MB
-  embeddings output).
+- **Runs are reproducible.** The same input through the same-named bundle
+  produces a **byte-identical output** run to run and across deployments
+  (`cmp`-verified on both the 381 KB base output and the 740 MB embeddings
+  output). The model is not re-fit per run.
 - **A `failed` status can hide a successful run.** We have seen
   `repeated failures polling JOS job` on a job that completed. Always check
   `/results` before re-running.
 - **Runtime is dominated by worker contention, not window count.** With a
   clear queue, the full 8,735-window sample slice completes end-to-end in
-  **84–109 s** (~100 win/s; both bundle variants verified on both Dev and
-  Staging, the Embeddings runs including their 740 MB downloads). Under load, the same platform has run
+  **84–109 s** (~100 win/s; both bundle variants verified, the Embeddings
+  runs including their 740 MB downloads). Under load, the same platform has run
   at ~2.2 win/s — a 12,059-window run once took ~90 min, and two contended
   537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
   those historical per-window-count timings are contention artifacts, not
