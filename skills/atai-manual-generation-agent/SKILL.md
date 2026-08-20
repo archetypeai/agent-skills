@@ -3,20 +3,18 @@ name: atai-manual-generation-agent
 description: >
   Run Archetype AI's managed Manual Generation (MGA) agent over the Agent
   API — upload a procedure video, create a bundle from the canonical `mga`
-  blueprint, run it (one agent per video), poll status + audit logs, and
-  download an ordered, timestamped manual. Use this skill when the user
-  has a recording of a procedure (a repair, an assembly, a workflow) and
-  wants the platform to turn it into step-by-step instructions traceable
-  back to the video. Covers video suitability (the ~5-minute ceiling, the
-  audio-track requirement), the bundle request shape (`max_frames`,
-  `max_new_tokens`, and the `prompt` the active blueprint does NOT
-  expose), the run/poll/results lifecycle, the output JSON schema
-  (`step, instruction, frame_start/end, timestamp_start/end`), and scoring
-  against reference step annotations. Do NOT use for verifying that a task
-  was performed correctly against a reference procedure (that is the `tva`
-  blueprint), for one-shot multimodal questions over a clip (that is
-  `atai-newton-fusion-model` via `/query`), or for time-series state
-  classification (`atai-operational-state-monitoring-agent`).
+  blueprint, run it, poll, download an ordered, timestamped manual. Use when the user has a recording of a procedure (a
+  repair, an assembly, a workflow) and wants the platform to turn it into
+  step-by-step instructions traceable back to the video. Covers video
+  suitability (the ~5-minute ceiling, the audio-track requirement), the
+  bundle request shape (`max_frames`, `max_new_tokens`, and the `prompt` the
+  active blueprint does NOT expose), the run/poll/results lifecycle, the
+  output JSON schema (`step, instruction, frame_start/end,
+  timestamp_start/end`), and scoring against reference annotations. Do NOT
+  use for verifying a task was performed correctly (the `tva` blueprint),
+  for one-shot multimodal questions over a clip
+  (`atai-newton-fusion-model`), or for time-series state classification
+  (`atai-operational-state-monitoring-agent`).
 ---
 
 # MGA Agent — Managed Manual Generation via the Agent API
@@ -31,15 +29,14 @@ video ─► sample frames ─┐
 
 MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit and no `artifacts` map to pass**. A run is upload → bundle → run → download.
 
-> **Availability — verified on Dev and Staging.** The canonical `mga`
-> blueprint resolves by key on both **Dev** (`https://api.dev.u1.archetypeai.app`)
-> and **Staging** (`https://api.stage.u1.archetypeai.app`), and the full
-> upload → bundle → run → score cycle is verified on both: the same 173 s
-> video produced an **identical manual** (18/18 instruction texts and
-> timestamps) on each, with the same ~15 min runtime (Staging job time
-> 902 s: whisper 42 s, newton-fusion download+load ~6.8 min, processing
-> ~2.6× realtime). If the blueprint key doesn't resolve in an environment,
-> contact support@archetypeai.dev.
+> **Availability.** The canonical `mga` blueprint resolves by key on the
+> production deployment (`https://api.u1.archetypeai.app`) — set
+> `ATAI_API_ENDPOINT` to it and the full upload → bundle → run → score cycle
+> works as documented here. The same 173 s video reproduces an **identical
+> manual** (18/18 instruction texts and timestamps) run to run, at the same
+> ~15 min runtime (job time ~900 s: whisper 42 s, newton-fusion download and
+> load ~6.8 min, processing ~2.6× realtime). If the blueprint key doesn't
+> resolve, contact support@archetypeai.dev.
 
 ## When to Apply
 
@@ -233,7 +230,7 @@ The `id` is whatever `file_id` the upload returned — suffix it, see below.
 
 **202, not 201.** A client that treats only 201 as success reports a failure while the agent runs unattended on the GPU with nothing collecting its output.
 
-One agent per video. **Do not assume dev serializes these jobs.** Four concurrent submissions once produced 799–817 s queue waits, which looked like serialization; three concurrent runs on 2026-08-13 instead came up as three concurrent pods and one was SIGKILLed mid-load (`pod.terminated  Error (exit=137)`). Run them one at a time unless you are deliberately testing this.
+One agent per video, and **run them one at a time.** Whether concurrent submissions queue depends on what else is running on the deployment at that moment — they queue when other workloads hold the workers, and come up as concurrent pods when they don't. Both have been observed: four at once produced 799–817 s waits (which looked like serialization), while three at once came up as three concurrent pods and one was SIGKILLed mid-load (`pod.terminated  Error (exit=137)`). Other tenants' workloads aren't visible to you, so neither outcome is predictable from your side and neither is safe to design around. Submit sequentially unless you are deliberately testing this.
 
 ## Step 5 — Poll until terminal
 
@@ -351,7 +348,8 @@ working.
 
 ## Cleanup
 
-Dev has **one GPU** and serializes jobs, so an abandoned run blocks everyone:
+A deployment with a single GPU serializes these jobs, so an abandoned run can
+block everyone else's:
 
 ```python
 POST {endpoint}/agents/instances/{agent_id}/cancel
@@ -367,8 +365,8 @@ default endpoint, and the endpoint takes **no `/v0.5` suffix** (the script mount
 `/agents` and `/v0.5/files` itself):
 
 ```
-ATAI_API_KEY=<your API key for that environment>
-ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
+ATAI_API_KEY=<your API key>
+ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
 ```
 
 ```sh
