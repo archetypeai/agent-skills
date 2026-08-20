@@ -196,6 +196,16 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" \
   "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
 ```
 
+`/results` pages like the listing endpoints — `data`, `has_more`,
+`next_cursor`, with `limit` (default 100, max 1000) and `after`/`before`, and
+the **same opaque-cursor rule**: pass `next_cursor` back verbatim, never
+derive it from `data[last].id`. One run through a quick-start bundle produces
+one output, so the first page is the whole answer; a bundle with several sink
+ports is where paging starts to matter.
+
+Each entry nests its fields under an inner `data` object — `filename`,
+`num_bytes`, `ref` — not at the top level.
+
 One row per window:
 
 ```
@@ -215,8 +225,9 @@ finish_timestamp,start_timestamp,predicted_label,invalid,anomaly_score
   one per branch of the `tee`. Filter by name and check the length; matching
   any key beginning `embedding` will hand you the short feature vector as if it
   were an embedding. Verified on the bundled slice: **2.0 MB vs the base
-  bundle's 10 KB** (~200× with one channel), scores within the platform's
-  noise floor of the base bundle's and **240/240 label agreement**.
+  bundle's 10 KB** (~200× with one channel), **240/240 label agreement** with
+  the base bundle and a max score difference of **4.0×10⁻⁵** — at the
+  platform's noise floor, i.e. the two bundles score the same detector.
 
 **Verify the run before trusting it:** `/results` must be non-empty, and
 `invalid` must not be `"true"` on every row. Both failure modes report
@@ -400,18 +411,13 @@ end-to-end** with a clear queue (job time 18 s: ~10 s queued, Omega download
 The base run of the identical input minutes earlier took ~9 min wall-clock
 under contention — the runtime bullet above, demonstrated back-to-back.
 
-The same cycle passes on other deployments with zero code changes: both
-bundles resolve by name to that deployment's ids, base in **49 s** and
-Embeddings in **33 s** end-to-end, with identical scoring (240/240 labels,
-scores within the noise floor).
-
-**Cross-checked against an independent path.** The same bearing scored as a full
-984-snapshot lifetime through an independent offline scorer (Archetype
-AI-internal) detects at snapshot **650** with a **55.5 h** lead. This slice starts at snapshot 600, so
-snapshot 47 here is snapshot 647 there — three snapshots and half an hour apart,
-from a different runner, a different input length and a different scorer. That
-agreement is the check worth having; a single number reproduced by the code that
-produced it is not.
+**Cross-checked against an independent path.** The same bearing scored as a
+full 984-snapshot lifetime through an independent offline scorer (Archetype
+AI-internal) detects at snapshot **650** with a **55.5 h** lead. This slice
+starts at snapshot 600, so snapshot 47 here is snapshot 647 there — three
+snapshots and half an hour apart, from a different runner, a different input
+length and a different scorer. That agreement is the check worth having; a
+single number reproduced by the code that produced it is not.
 
 Two bugs this run caught, which no unit test would have:
 
@@ -421,6 +427,35 @@ Two bugs this run caught, which no unit test would have:
 - The `/results` reference is nested one level: `data[].data.filename`, not a
   top-level `name`. Reading the top level yields an empty filename and a 404 on
   a bare `/files/download/` URL.
+
+## Local Setup
+
+```bash
+# No third-party deps — references/run_ad_agent.py is stdlib-only.
+
+cd skills/atai-anomaly-discovery-agent/references
+
+# Create the .env IN THIS DIRECTORY — the runner reads ./.env from where it
+# runs (the file is gitignored). BOTH variables required, no default endpoint;
+# note: NO /v0.5 suffix — the runner mounts /agents and /v0.5/files itself:
+cat > .env <<EOF
+ATAI_API_KEY=sk_...
+ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+EOF
+
+python3 run_ad_agent.py                          # bundled sample slice, base bundle
+python3 run_ad_agent.py --embeddings             # + Omega embedding per window
+python3 run_ad_agent.py --csv my_slice.csv       # your own prepared CSV
+python3 run_ad_agent.py --detector s3://...      # your own fitted detector
+python3 run_ad_agent.py --score-only out.csv     # re-score a downloaded output
+```
+
+The `--csv` default resolves next to the script, so the runner works from any
+directory as long as `.env` is in the one you run from. Expect **~30–50 s**
+end-to-end for the bundled 240-window slice with a clear queue, and minutes
+when workers are contended — the run's own log events are the only queue-state
+signal. The runner resolves the bundle by name, streams `/logs` while it polls,
+and self-scores against the `_labels.csv` sidecar at the end.
 
 ## References
 
