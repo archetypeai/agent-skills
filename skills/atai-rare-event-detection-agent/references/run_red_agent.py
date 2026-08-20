@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""End-to-end RED agent run over the Agents API — stdlib only.
+"""End-to-end RED agent run over the Agents API.
+
+Built on the official archetypeai python client (`pip install archetypeai`).
 
 upload CSV -> resolve the pre-packaged "RED Quick Start" bundle by name ->
 run -> poll -> download per-window predictions -> score against a
@@ -26,14 +28,50 @@ import argparse
 import csv
 import json
 import os
+import re
+import shutil
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
-import uuid
+
+try:
+    from archetypeai import ArchetypeAI
+except ModuleNotFoundError:  # the only third-party dependency
+    sys.exit("This runner needs the official Archetype AI client:\n"
+             "    pip install -r requirements.txt   (from this directory)\n"
+             "    pip install archetypeai           (or just the package)")
 
 sys.stdout.reconfigure(line_buffering=True)
+
+_CLIENT = None
+
+
+def client() -> ArchetypeAI:
+    """The official client, built once from the environment.
+
+    Owns auth, retries and endpoint mounting. See versioned() for why the
+    endpoint is normalised before it is handed over.
+    """
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = ArchetypeAI(require_key(), api_endpoint=versioned(api_base()))
+    return _CLIENT
+
+
+def versioned(endpoint: str) -> str:
+    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+
+    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
+    strips the version itself for the versionless agents API. Passing a bare
+    root therefore breaks uploads while bundle calls keep working — an empty
+    `ApiError: {}` that looks like anything but a missing version path.
+
+    Accept either form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    """
+    endpoint = endpoint.rstrip("/")
+    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -62,65 +100,18 @@ def require_key() -> str:
     return key
 
 
-def agents_base() -> str:
-    return f"{api_base()}/agents"
-
-
-def request(method: str, url: str, body=None, headers=None, raw: bool = False,
-            retries: int = 4):
-    """Call the API, retrying transient network failures.
-
-    Polls run for hours, and a single DNS hiccup or socket timeout used to kill
-    the whole client while the platform job carried on running unattended — the
-    job then finished with nobody to download its output. Only *network* errors
-    retry; an HTTP status is a real answer from the server and still exits.
-    """
-    data = json.dumps(body).encode() if body is not None else None
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-        if body is not None:
-            req.add_header("Content-Type", "application/json")
-        for k, v in (headers or {}).items():
-            req.add_header(k, v)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = resp.read()
-                return payload if raw else json.loads(payload or b"null")
-        except urllib.error.HTTPError as e:
-            sys.exit(f"{method} {url} failed ({e.code}): {e.read().decode(errors='replace')}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            if attempt == retries:
-                sys.exit(f"{method} {url} failed after {retries + 1} attempts: {e}")
-            wait = 5 * (2 ** attempt)
-            print(f"  network error ({e}); retrying in {wait}s "
-                  f"[{attempt + 1}/{retries}]")
-            time.sleep(wait)
-
-
 def upload_file(path: str, rename: str | None = None) -> dict:
-    """POST a file to /v0.5/files as multipart/form-data."""
-    boundary = uuid.uuid4().hex
-    filename = rename or os.path.basename(path)
-    content = open(path, "rb").read()
-    body = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(),
-        b"Content-Type: text/csv\r\n\r\n",
-        content,
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    req = urllib.request.Request(f"{api_base()}/v0.5/files", data=body, method="POST")
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        sys.exit(f"upload of {path} failed ({e.code}): {e.read().decode(errors='replace')}")
+    """Upload via the client. Source connectors take the returned file_id."""
+    if rename:
+        # The client uploads under the file's basename, so a rename means
+        # staging a copy under the wanted name first.
+        staged = os.path.join(tempfile.mkdtemp(), rename)
+        shutil.copyfile(path, staged)
+        path = staged
+    return client().files.local.upload(path)
 
 
-def resolve_bundle(agents: str, name: str) -> dict:
+def resolve_bundle(name: str) -> dict:
     """Resolve a bundle by its stable name, preferring canonical bundles.
 
     Bundle ids are deployment-scoped — the same pre-packaged bundle carries a
@@ -130,7 +121,7 @@ def resolve_bundle(agents: str, name: str) -> dict:
     exactly client-side; canonical (platform) bundles win over same-named org
     bundles.
     """
-    page = request("GET", f"{agents}/bundles?query={urllib.parse.quote(name)}&limit=100")
+    page = client().agents.bundles.list(query=name, limit=100)
     exact = [bundle for bundle in page.get("data", []) if bundle.get("name") == name]
     for bundle in exact:
         if bundle.get("is_canonical"):
@@ -144,15 +135,19 @@ def resolve_bundle(agents: str, name: str) -> dict:
 
 
 def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
-    """Poll until terminal, streaming new audit events as they appear."""
-    agents = agents_base()
+    """Poll until terminal, streaming new audit events as they appear.
+
+    Deliberately NOT client.agents.instances.wait_until_done(): that returns as
+    soon as `status` is terminal, and a run whose output exists can report
+    `failed` when the job poller flakes. Success is judged from /results.
+    """
     deadline = time.time() + timeout_s
     seen: set[str] = set()
     status = "running"
     while status == "running" and time.time() < deadline:
         time.sleep(interval_s)
-        status = request("GET", f"{agents}/instances/{agent_id}").get("status")
-        for ev in request("GET", f"{agents}/instances/{agent_id}/events").get("data", []):
+        status = client().agents.instances.get(agent_id).get("status")
+        for ev in client().agents.instances.get_events(agent_id).get("data", []):
             marker = f"{ev.get('created_at')}{ev.get('message')}"
             if marker not in seen:
                 seen.add(marker)
@@ -165,7 +160,7 @@ def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
 
 def download_results(agent_id: str, out_path: str) -> str | None:
     """Fetch /results and save the first output to out_path."""
-    results = request("GET", f"{agents_base()}/instances/{agent_id}/results")
+    results = client().agents.instances.get_results(agent_id)
     items = results.get("data", results if isinstance(results, list) else [])
     if not items:
         print("  no results returned")
@@ -179,19 +174,18 @@ def download_results(agent_id: str, out_path: str) -> str | None:
               f"({inner.get('num_bytes', '?')} bytes)")
     inner = items[0].get("data") or {}
     ref = inner.get("ref") or item.get("ref") or item.get("url")
-    if not ref:
+    filename = inner.get("filename")
+    # A fitted-artifact ref is an absolute presigned S3 URL that expires (~20
+    # min), so fetch it directly. A run output is a platform file — let the
+    # client download it by name.
+    if ref and ref.startswith("http"):
+        with urllib.request.urlopen(ref) as resp:
+            open(out_path, "wb").write(resp.read())
+    elif filename:
+        client().files.local.download(filename, out_path)
+    else:
         print("  results carried no download ref")
         return None
-    # A fitted-artifact ref is an absolute presigned S3 URL; a run-output ref is
-    # a relative platform path that needs the API base and the bearer token.
-    if ref.startswith("http"):
-        with urllib.request.urlopen(ref) as resp:
-            payload = resp.read()
-    else:
-        # Relative refs are rooted at the versioned files API: the ref reads
-        # "/files/download/<name>", which resolves under /v0.5.
-        payload = request("GET", f"{api_base()}/v0.5{ref}", raw=True)
-    open(out_path, "wb").write(payload)
     print(f"saved output to {out_path}")
     return out_path
 
@@ -407,7 +401,6 @@ def main() -> None:
 
     load_dotenv()
     require_key()
-    agents = agents_base()
 
     print(f"uploading {args.csv} ...")
     uploaded = upload_file(args.csv)
@@ -419,18 +412,17 @@ def main() -> None:
     # bundle from the `red` blueprint instead: SKILL.md, "Bring your own
     # classifier".)
     if args.bundle_id:
-        bundle = request("GET", f"{agents}/bundles/{args.bundle_id}")
+        bundle = client().agents.bundles.get(args.bundle_id)
         print(f"using bundle {bundle['id']}  name='{bundle.get('name')}'")
     else:
         name = args.bundle_name or (
             QUICK_START_BUNDLE_EMBEDDINGS if args.embeddings else QUICK_START_BUNDLE)
-        bundle = resolve_bundle(agents, name)
+        bundle = resolve_bundle(name)
         print(f"resolved bundle '{name}' -> {bundle['id']}"
               f"{'  (canonical)' if bundle.get('is_canonical') else ''}")
 
-    agent = request("POST", f"{agents}/bundles/{bundle['id']}/run", body={
-        "connectors": {"source": [{"type": "file", "id": file_id, "format": "csv"}]},
-    })
+    agent = client().agents.bundles.run(
+        bundle["id"], source=[{"type": "file", "id": file_id, "format": "csv"}])
     agent_id = agent["id"]
     print(f"starting agent run ...\n  agent_id={agent_id}  status={agent.get('status')}")
 
@@ -440,8 +432,8 @@ def main() -> None:
     # always check for results before concluding the run died.
     saved = download_results(agent_id, args.output)
     if status != "completed" and not saved:
-        sys.exit(f"run ended '{status}' with no results — inspect "
-                 f"{agents}/instances/{agent_id}/events")
+        sys.exit(f"run ended '{status}' with no results — inspect the events "
+                 f"for {agent_id}")
 
     if saved and os.path.exists(labels_path):
         score(saved, labels_path, args.window_size or 1024,

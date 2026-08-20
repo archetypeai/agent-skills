@@ -49,16 +49,49 @@ import argparse
 import hashlib
 import datetime
 import json
-import mimetypes
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
-import urllib.error
 import urllib.request
 import uuid
 
+try:
+    from archetypeai import ArchetypeAI
+except ModuleNotFoundError:  # the only third-party dependency
+    sys.exit("This runner needs the official Archetype AI client:\n"
+             "    pip install -r requirements.txt   (from this directory)\n"
+             "    pip install archetypeai           (or just the package)")
+
 sys.stdout.reconfigure(line_buffering=True)
+
+_CLIENT = None
+
+
+def client() -> "ArchetypeAI":
+    """The official client, built once from the environment."""
+    global _CLIENT
+    if _CLIENT is None:
+        key, endpoint = env()
+        _CLIENT = ArchetypeAI(key, api_endpoint=versioned(endpoint))
+    return _CLIENT
+
+
+def versioned(endpoint: str) -> str:
+    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+
+    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
+    strips the version itself for the versionless agents API. Passing a bare
+    root therefore breaks uploads while bundle calls keep working — an empty
+    `ApiError: {}` that points at nothing.
+
+    Accept either form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    """
+    endpoint = endpoint.rstrip("/")
+    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
 
 # Log event types that end a run. The instance `status` field is NOT usable for
 # this — it has read `running` 20+ minutes after a pod died with exit=1.
@@ -136,49 +169,14 @@ def env() -> tuple[str, str]:
     return key, endpoint
 
 
-def api(method: str, url: str, body=None, raw: bool = False, retries: int = 4,
-        allow_status: bool = False):
-    """Call the API, retrying only NETWORK errors. An HTTP status is an answer.
-
-    Runs are polled for up to an hour, and a DNS hiccup should not kill the
-    client while the job carries on burning GPU unattended.
-    """
-    key, _ = env()
-    data = json.dumps(body).encode() if body is not None else None
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {key}")
-        if data is not None:
-            req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                payload = resp.read()
-                # 202 is success when starting a run — see start_run().
-                if not allow_status and resp.status not in (200, 201, 202):
-                    sys.exit(f"{method} {url} unexpected status {resp.status}")
-                out = payload if raw else json.loads(payload or b"null")
-                return (resp.status, out) if allow_status else out
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")
-            if allow_status:
-                return e.code, detail
-            sys.exit(f"{method} {url} failed ({e.code}): {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            if attempt == retries:
-                if allow_status:
-                    return 0, str(e)
-                sys.exit(f"{method} {url} failed after {retries + 1} attempts: {e}")
-            wait = 5 * (2 ** attempt)
-            print(f"  network error ({e}); retrying in {wait}s [{attempt + 1}/{retries}]")
-            time.sleep(wait)
-
-
 def remote_bytes(file_id: str) -> bytes | None:
     """The object currently stored under `file_id`, or None if absent."""
-    _, endpoint = env()
-    status, payload = api("GET", f"{endpoint}/v0.5/files/download/{file_id}",
-                          raw=True, allow_status=True)
-    return payload if status == 200 and isinstance(payload, bytes) else None
+    out = os.path.join(tempfile.mkdtemp(), "remote.bin")
+    try:
+        client().files.local.download(file_id, out)
+    except Exception:      # absent, or not readable — treat as "not there"
+        return None
+    return open(out, "rb").read() if os.path.exists(out) else None
 
 
 def run_suffix() -> str:
@@ -237,59 +235,20 @@ def upload(path: str, rename: str | None = None) -> str:
     name in that window kills whatever is already queued — it fails minutes later,
     inside the run, as `S3 object not found` with `job.completed` on the job.
     """
-    _, endpoint = env()
     if not os.path.exists(path):
         sys.exit(f"no such file: {path}")
-    ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
-    boundary = uuid.uuid4().hex
     name = rename or os.path.basename(path)
     local = open(path, "rb").read()
     if remote_bytes(name) == local:
         print(f"  {name}: identical object already on the platform — skipping upload")
         return name
-    preamble = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'.encode(),
-        f"Content-Type: {ctype}\r\n\r\n".encode(),
-    ])
-    epilogue = f"\r\n--{boundary}--\r\n".encode()
-    with open(path, "rb") as fh:
-        body = _ChainedReader([preamble, fh, epilogue])
-        req = urllib.request.Request(f"{endpoint}/v0.5/files", data=body,
-                                     method="POST")
-        req.add_header("Authorization", f"Bearer {env()[0]}")
-        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        req.add_header("Content-Length",
-                       str(len(preamble) + os.path.getsize(path) + len(epilogue)))
-        try:
-            with urllib.request.urlopen(req, timeout=900) as resp:
-                return json.loads(resp.read())["file_id"]
-        except urllib.error.HTTPError as e:
-            sys.exit(f"upload of {path} failed ({e.code}): "
-                     f"{e.read().decode(errors='replace')}")
-
-
-class _ChainedReader:
-    """A read()-able concatenating bytes chunks and file objects, so a large
-    video is streamed rather than held in memory twice."""
-
-    def __init__(self, parts):
-        self._parts = list(parts)
-
-    def read(self, amt: int = -1) -> bytes:
-        out = b""
-        while self._parts and (amt < 0 or len(out) < amt):
-            want = -1 if amt < 0 else amt - len(out)
-            head = self._parts[0]
-            chunk = head[:want] if isinstance(head, (bytes, bytearray)) else head.read(want)
-            if isinstance(head, (bytes, bytearray)):
-                self._parts[0] = head[len(chunk):]
-                if not self._parts[0]:
-                    self._parts.pop(0)
-            elif not chunk:
-                self._parts.pop(0)
-            out += chunk
-        return out
+    # The client uploads under the file's own basename, so an explicit name
+    # means staging a copy under that name first.
+    if name != os.path.basename(path):
+        staged = os.path.join(tempfile.mkdtemp(), name)
+        shutil.copyfile(path, staged)
+        path = staged
+    return client().files.local.upload(path)["file_id"]
 
 
 def load_sop(path: str) -> list[str]:
@@ -354,11 +313,10 @@ def start_run(bundle_id: str, video_id: str, sop_id: str) -> str:
     Returns 202, not 201.
     """
     _, endpoint = env()
-    agent = api("POST", f"{endpoint}/agents/bundles/{bundle_id}/run",
-                body={"connectors": {"source": [
-                    {"type": "file", "id": video_id, "format": "mp4"},
-                    {"type": "file", "id": sop_id, "format": "txt"},
-                ]}})
+    agent = client().agents.bundles.run(bundle_id, source=[
+        {"type": "file", "id": video_id, "format": "mp4"},
+        {"type": "file", "id": sop_id, "format": "txt"},
+    ])
     return agent["id"]
 
 
@@ -374,7 +332,7 @@ def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 20) -> str:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         rows = sorted(
-            api("GET", f"{endpoint}/agents/instances/{agent_id}/logs?limit=500")
+            client().agents.instances.get_logs(agent_id, limit=500)
             .get("data", []), key=lambda r: str(r.get("created_at")))
         for r in rows:
             marker = f"{r.get('created_at')}|{r.get('event_type')}|{r.get('message')}"
@@ -404,7 +362,7 @@ def fetch_results(agent_id: str, out_path: str) -> bytes | None:
     needs the bearer token; an absolute ref is presigned and must not get it.
     Run outputs do not expire, so this is re-fetchable later."""
     _, endpoint = env()
-    results = api("GET", f"{endpoint}/agents/instances/{agent_id}/results")
+    results = client().agents.instances.get_results(agent_id)
     items = results.get("data") or []
     if not items:
         print("  no results (a failed run leaves none)")
@@ -414,14 +372,17 @@ def fetch_results(agent_id: str, out_path: str) -> bytes | None:
     if not ref:
         print("  results carried no download ref")
         return None
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     if ref.startswith("http"):
+        # A presigned S3 ref expires (~20 min), so fetch it directly.
         with urllib.request.urlopen(ref, timeout=300) as resp:
             payload = resp.read()
+        with open(out_path, "wb") as fh:
+            fh.write(payload)
     else:
-        payload = api("GET", f"{endpoint}/v0.5{ref}", raw=True)
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "wb") as fh:
-        fh.write(payload)
+        name = (inner.get("filename") or ref.rsplit("/", 1)[-1])
+        client().files.local.download(name, out_path)
+        payload = open(out_path, "rb").read()
     return payload
 
 
@@ -585,7 +546,10 @@ def main() -> None:
 
     # Preflight BEFORE uploading. Both checks are free and each one catches a
     # failure that otherwise costs the full ~7-minute cold start.
-    bp = api("GET", f"{endpoint}/agents/blueprints/{args.blueprint}")
+    bp = client().agents.blueprints.get(args.blueprint)
+    # NOT include_yaml=True: the published client accepts the kwarg and the
+    # call then fails with an empty `ApiError: {}`. `document` is returned
+    # regardless, which is all the preflight below needs.
     doc = bp["document"]
     print(f"blueprint {bp['id']} (key={bp.get('blueprint_key')}, "
           f"active={bp.get('is_active')})")
@@ -618,9 +582,8 @@ def main() -> None:
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and
     # whisper:large-v3 itself. Note the PLURAL /bundles — the singular 404s.
-    bundle = api("POST", f"{endpoint}/agents/bundles",
-                 body={"blueprint": args.blueprint, "name": args.name,
-                       "values": values})
+    bundle = client().agents.bundles.create(
+        blueprint=args.blueprint, name=args.name, values=values)
     print(f"bundle {bundle['id']} status={bundle.get('status')}")
 
     agent_id = start_run(bundle["id"], video_id, sop_id)

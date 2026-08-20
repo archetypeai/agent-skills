@@ -479,7 +479,8 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 ## Local Setup
 
 ```sh
-# No third-party deps — references/run_tva_agent.py is stdlib-only.
+# One dependency: the official Archetype AI client. Note the -r.
+pip install -r requirements.txt
 # Drop a .env next to where you run it (BOTH required, NO /v0.5 suffix:
 # the script mounts /agents and /v0.5/files itself):
 #   ATAI_API_KEY=<your API key for that environment>
@@ -508,7 +509,7 @@ skills/atai-task-verification-agent/
 ├── SKILL.md
 ├── references/
 │   ├── .env.example
-│   ├── run_tva_agent.py          stdlib-only: upload video+SOP → bundle → run → logs → results → score
+│   ├── run_tva_agent.py          client-based: upload video+SOP → bundle → run → logs → results → score
 │   └── sample_data/
 │       ├── README.md                          what these are, and how to read them together
 │       ├── 1_pass_2_pass_3_pass_A.mp4         all three steps performed

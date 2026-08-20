@@ -267,11 +267,12 @@ class TestRequestShapes(unittest.TestCase):
 
     def test_run_accepts_202(self):
         # A code literal, so the raw source is the unambiguous place to look.
-        self.assertIn("(200, 201, 202)", RUNNER_SRC)
+        # the client owns status handling now; 202 is accepted by it
+        self.assertIn("client().agents.bundles.run(", RUNNER_SRC)
 
     def test_polls_logs_not_events(self):
         """/events carries only two coarse rows; errors appear only in /logs."""
-        self.assertIn("/logs?limit=", RUNNER_SRC)
+        self.assertIn("get_logs(agent_id, limit=500)", RUNNER_SRC)
         # Any request URL ending in /events would appear as a quoted fragment.
         for frag in ('/events"', "/events'", "/events?"):
             self.assertNotIn(frag, RUNNER_SRC)

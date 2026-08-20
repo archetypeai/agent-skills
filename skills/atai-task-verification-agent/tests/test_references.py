@@ -324,7 +324,11 @@ class TestRequestShapes(unittest.TestCase):
         self.assertIn("/agents/bundles", RUNNER_CODE)
 
     def test_run_accepts_202(self):
-        self.assertIn("202", RUNNER_CODE)
+        # the client owns HTTP status handling, including 202 on /run.
+        # RUNNER_CODE has strings stripped and spacing normalised, so
+        # assert against the raw source.
+        raw = open(os.path.join(REFS, "run_tva_agent.py")).read()
+        self.assertIn("client().agents.bundles.run(", raw)
 
     def test_polls_logs_not_events(self):
         self.assertIn("/logs", RUNNER_CODE)

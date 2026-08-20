@@ -215,14 +215,13 @@ curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
 ## Local Setup
 
 ```bash
-# Built on the official client.
-pip install -r skills/atai-operational-state-monitoring-agent/references/requirements.txt
-
 cd skills/atai-operational-state-monitoring-agent/references
 
+# One dependency: the official Archetype AI client. Note the -r.
+pip install -r requirements.txt
+
 # Create the .env IN THIS DIRECTORY — the script reads ./.env from where it
-# runs (the file is gitignored). BOTH variables required, no default endpoint;
-# note: NO /v0.5 suffix — the script mounts /agents and /v0.5/files itself:
+# runs (the file is gitignored). BOTH variables required, no default endpoint:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.u1.archetypeai.app

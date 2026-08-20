@@ -427,7 +427,7 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 
 ## Local Setup
 
-`references/run_mga_agent.py` is **stdlib-only** — no pip install, no virtualenv.
+`references/run_mga_agent.py` runs on the official [`archetypeai` client](https://github.com/archetypeai/python-client) — one dependency, declared in `references/requirements.txt`.
 It needs an `.env` beside wherever you run it, with **both** variables; there is no
 default endpoint, and the endpoint takes **no `/v0.5` suffix** (the script mounts
 `/agents` and `/v0.5/files` itself):
@@ -462,7 +462,7 @@ skills/atai-manual-generation-agent/
 ├── SKILL.md
 ├── references/
 │   ├── .env.example
-│   ├── run_mga_agent.py          stdlib-only runner: upload → bundle → run → logs → results → score
+│   ├── run_mga_agent.py          client-based runner: upload → bundle → run → logs → results → score
 │   └── sample_data/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv

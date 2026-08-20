@@ -36,26 +36,94 @@ def _load_runner():
 runner = _load_runner()
 
 
+
+class FakeClient:
+    """Stands in for ArchetypeAI, recording calls and returning canned payloads.
+
+    Mocks the client object rather than HTTP, so the tests assert the lifecycle
+    the runner drives and stay network-free.
+    """
+
+    def __init__(self, calls=None, **payloads):
+        self.calls = calls if calls is not None else {}
+        p = payloads
+        outer = self
+
+        class _Local:
+            def upload(self, path):
+                outer.calls["upload"] = os.path.basename(path)
+                return p.get("upload", {"file_id": os.path.basename(path)})
+
+            def download(self, name, out_path):
+                outer.calls["download"] = name
+                with open(out_path, "w") as f:
+                    f.write(p.get("download", "x"))
+                return True
+
+        class _Files:
+            local = _Local()
+
+        class _Bundles:
+            def list(self, query=None, limit=None):
+                outer.calls["list"] = query
+                return p.get("list", {"data": []})
+
+            def create(self, blueprint=None, name=None, values=None, artifacts=None,
+                       description="", model=None):
+                outer.calls["create"] = {"blueprint": blueprint, "name": name,
+                                         "values": values, "artifacts": artifacts}
+                return p.get("create", {"id": "bnd_test"})
+
+            def run(self, bundle_id, source=None, sink=None):
+                outer.calls["run"] = {"bundle_id": bundle_id, "source": source}
+                return p.get("run", {"id": "agt_1"})
+
+        class _Instances:
+            def get(self, agent_id):
+                return p.get("get", {"status": "completed"})
+
+            def get_logs(self, agent_id, **kw):
+                return p.get("logs", {"data": []})
+
+            def get_results(self, agent_id, **kw):
+                return p.get("results", {"data": []})
+
+        class _Agents:
+            bundles = _Bundles()
+            instances = _Instances()
+
+        self.files = _Files()
+        self.agents = _Agents()
+
+
 # --------------------------------------------------------------------------
 # endpoints
 # --------------------------------------------------------------------------
 
-def test_agents_base_is_versionless(monkeypatch):
-    """The Agents API is /agents, never /vX.Y/agents — strip the suffix."""
-    for endpoint in ("https://x.test", "https://x.test/v0.5", "https://x.test/v0.5/"):
-        monkeypatch.setenv("ATAI_API_ENDPOINT", endpoint)
-        assert runner.agents_base() == "https://x.test/agents", endpoint
+def test_endpoint_is_normalised_for_the_client():
+    """The client wants the /vX.Y suffix: verbatim for files, stripped for agents.
+
+    A bare root breaks uploads with an empty ApiError while bundle calls keep
+    working, so both .env conventions in this repo normalise to one string.
+    """
+    for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
+                     "https://x.test/v0.5/"):
+        assert runner.versioned(endpoint) == "https://x.test/v0.5", endpoint
 
 
-def test_endpoints_are_plural():
-    """The singular forms return 404 as of 2026-08-11."""
+def test_agent_paths_come_from_the_client():
+    """The client owns the paths, so this runner cannot drift from them again.
+
+    The API moved from singular /agents/bundle to plural /agents/bundles on
+    2026-08-11 and the singular forms now 404.
+    """
     src = (REFS / "run_ad_agent.py").read_text()
-    assert "/bundles" in src, "must use the plural collection"
-    assert "/bundles/{bundle_id}/run" in src, "run path must be plural"
-    # No singular /bundle path anywhere. Strip the plural occurrences first so
-    # the substring check cannot match inside them.
-    assert "/bundle/" not in src.replace("/bundles/", "/PLURAL/")
-    assert '/bundle"' not in src.replace('/bundles"', '/PLURAL"')
+    assert "urllib.request.Request(" not in src
+    for call in ("client().agents.bundles.list(",
+                 "client().agents.bundles.create(",
+                 "client().agents.bundles.run(",
+                 "client().agents.instances.get_results("):
+        assert call in src, call
 
 
 def test_no_runs_endpoint_is_used():
@@ -74,18 +142,10 @@ def test_bundle_body_disables_monotonic_validation(monkeypatch):
     1 kHz and the run still reports completed."""
     captured = {}
 
-    def fake_request(method, url, body=None, raw=False, retries=3):
-        captured["method"], captured["url"], captured["body"] = method, url, body
-        return {"id": "bnd_test"}
-
-    monkeypatch.setattr(runner, "request", fake_request)
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
     runner.create_bundle("n", "s3://bucket/d.safetensors", 1.762, False)
 
-    assert captured["method"] == "POST"
-    assert captured["url"].endswith("/agents/bundles")     # plural
-    values = captured["body"]["values"]
+    values = captured["create"]["values"]
     assert values["validate_monotonic_timestamps"] is False
     assert values["sample_rate_interval_tolerance"] is None
     assert values["output_score"] is True
@@ -95,13 +155,10 @@ def test_bundle_uses_the_ad_detector_artifact_key(monkeypatch):
     """A wrong key is accepted at creation and fails ~30 s into the run. The
     key is `ad-detector`; a second blueprint `ada` uses `ada-detector`."""
     captured = {}
-    monkeypatch.setattr(runner, "request",
-                        lambda m, u, body=None, raw=False, retries=3: captured.update(body=body) or {"id": "b"})
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
     runner.create_bundle("n", "s3://bucket/d.safetensors", 1.762, False)
-    assert list(captured["body"]["artifacts"]) == ["ad-detector"]
-    assert captured["body"]["blueprint"] == "ad"
+    assert list(captured["create"]["artifacts"]) == ["ad-detector"]
+    assert captured["create"]["blueprint"] == "ad"
 
 
 def test_quick_start_bundle_names_are_the_stable_handles():
@@ -117,32 +174,26 @@ def test_quick_start_bundle_names_are_the_stable_handles():
 
 
 def test_resolution_selects_the_exact_canonical_match(monkeypatch):
-    """?query= is a substring search and the base name is a substring of the
-    Embeddings name, so a base-name query returns BOTH — the exact match with
-    is_canonical preference is what selects."""
-    def fake_request(method, url, body=None, raw=False, retries=3):
-        assert "/bundles?query=" in url                       # plural + query
-        return {"data": [
-            {"id": "bnd_emb", "name": "AD Quick Start (Bearing Breakdown, Embeddings)",
-             "is_canonical": True},
-            {"id": "bnd_copy", "name": "AD Quick Start (Bearing Breakdown)",
-             "is_canonical": False},
-            {"id": "bnd_base", "name": "AD Quick Start (Bearing Breakdown)",
-             "is_canonical": True},
-        ]}
-
-    monkeypatch.setattr(runner, "request", fake_request)
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    """?query= is a substring search returning newest-first, so a PREFIX of the
+    base name also matches the Embeddings variant. Exact-name matching with an
+    is_canonical preference is what selects. (The full base name including its
+    closing paren matches only itself — verified on Prod — but a prefix does
+    not, which is why data[0] is never safe.)"""
+    listing = {"data": [
+        {"id": "bnd_emb", "name": "AD Quick Start (Bearing Breakdown, Embeddings)",
+         "is_canonical": True},
+        {"id": "bnd_copy", "name": "AD Quick Start (Bearing Breakdown)",
+         "is_canonical": False},
+        {"id": "bnd_base", "name": "AD Quick Start (Bearing Breakdown)",
+         "is_canonical": True},
+    ]}
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(list=listing))
     assert runner.find_bundle("AD Quick Start (Bearing Breakdown)") == "bnd_base"
 
 
 def test_unresolved_bundle_points_at_support(monkeypatch):
     """The name-not-found path must give the user a way forward."""
-    monkeypatch.setattr(runner, "request",
-                        lambda m, u, body=None, raw=False, retries=3: {"data": []})
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(list={"data": []}))
     with pytest.raises(SystemExit) as excinfo:
         runner.resolve_quick_start("AD Quick Start (Bearing Breakdown)")
     message = str(excinfo.value)
@@ -152,14 +203,11 @@ def test_unresolved_bundle_points_at_support(monkeypatch):
 
 def test_run_request_shape(monkeypatch):
     captured = {}
-    monkeypatch.setattr(runner, "request",
-                        lambda m, u, body=None, raw=False, retries=3:
-                        captured.update(url=u, body=body) or {"id": "agt_1"})
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
     assert runner.run_bundle("bnd_1", "f.csv") == "agt_1"
-    assert captured["url"] == "https://x.test/agents/bundles/bnd_1/run"
-    assert captured["body"]["connectors"]["source"][0] == {"type": "file", "id": "f.csv"}
+    assert captured["run"]["bundle_id"] == "bnd_1"
+    # the client builds the data ref; the source is the file_id, not the fil_ uid
+    assert captured["run"]["source"] == ["f.csv"]
 
 
 # --------------------------------------------------------------------------
@@ -169,24 +217,17 @@ def test_run_request_shape(monkeypatch):
 def test_poll_treats_an_error_log_as_terminal(monkeypatch):
     """Pods have terminated with Error (exit=1) while status read `running`
     for hours. A client polling on status alone spins to its timeout."""
-    def fake_request(method, url, body=None, raw=False, retries=3):
-        if url.endswith("/logs"):
-            return {"data": [{"id": "1", "level": "error", "message": "worker 0 exploded"}]}
-        return {"status": "running"}          # never terminal
-
-    monkeypatch.setattr(runner, "request", fake_request)
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    fake = FakeClient(
+        get={"status": "running"},            # never terminal
+        logs={"data": [{"id": "1", "level": "error", "message": "worker 0 exploded"}]})
+    monkeypatch.setattr(runner, "client", lambda: fake)
     assert runner.poll("agt_1", timeout_s=5, interval_s=0) == "failed"
 
 
 def test_download_reports_empty_results(monkeypatch, capsys):
     """An all-invalid run reports `completed` with NO results. That emptiness
     is the tell, not the runtime."""
-    monkeypatch.setattr(runner, "request",
-                        lambda m, u, body=None, raw=False, retries=3: {"data": []})
-    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
-    monkeypatch.setenv("ATAI_API_KEY", "k")
+    monkeypatch.setattr(runner, "client", lambda: FakeClient(results={"data": []}))
     assert runner.download_results("agt_1", "/tmp/unused.csv") is None
     assert "EMPTY" in capsys.readouterr().out
 
