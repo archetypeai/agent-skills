@@ -1,6 +1,6 @@
 # Sample data
 
-Real artifacts from real runs against `tva` on dev, 2026-08-11 to 2026-08-12. Three
+Real artifacts from real runs against the `tva` blueprint, 2026-08-11 to 2026-08-12. Three
 clips ship, so the skill can be exercised **live** as well as offline.
 
 Offline — no API key, no network, no GPU:

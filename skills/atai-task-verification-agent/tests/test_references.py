@@ -89,25 +89,20 @@ class TestEndpointResolution(unittest.TestCase):
         with self.assertRaises(SystemExit):
             tva.env()
 
-    def test_prod_endpoint_warns_and_staging_does_not(self):
-        # The /agents API is on Dev and Staging (both verified); Prod 404s on
-        # every agent path, which reads like a missing blueprint rather than
-        # the wrong host. The note prints ONCE per endpoint — env() runs on
-        # every api() call, and a per-call note buried the poll output.
-        tva._ENDPOINT_NOTED.clear()
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.u1.archetypeai.app"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            tva.env()
-            tva.env()
-        self.assertEqual(buf.getvalue().count("NOTE:"), 1)
-        self.assertIn("Prod returns 404", buf.getvalue())
-
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.stage.u1.archetypeai.app"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            tva.env()
-        self.assertEqual(buf.getvalue(), "")
+    def test_env_does_not_editorialise_about_the_endpoint(self):
+        # This used to print "Prod returns 404 for every /agents path" for any
+        # endpoint that was not Dev or Staging. That is false — the production
+        # deployment serves /agents/blueprints, /agents/bundles and
+        # /agents/instances, and the `tva` blueprint is active there. env()
+        # resolves the endpoint and says nothing about which one it is.
+        for endpoint in ("https://api.u1.archetypeai.app",
+                         "https://api.u1.archetypeai.app/v0.5"):
+            os.environ["ATAI_API_ENDPOINT"] = endpoint
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                key, resolved = tva.env()
+            self.assertEqual(buf.getvalue(), "")
+            self.assertEqual(resolved, "https://api.u1.archetypeai.app")
 
 
 class TestSinkPreflight(unittest.TestCase):

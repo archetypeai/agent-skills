@@ -3,26 +3,18 @@ name: atai-task-verification-agent
 description: >
   Run Archetype AI's managed Task Verification (TVA) agent over the Agents
   API — upload a recording AND a reference procedure (an SOP), create a
-  bundle from the `tva` blueprint, run it, poll the audit log, and download
-  a per-step PASSED / FAILED / MISSING verdict with timestamps and a reason
-  for each step. Use this skill when the user has a recording of work that
-  was supposed to follow a known procedure and wants to know whether each
-  step was actually performed — assembly QA, maintenance sign-off, training
-  assessment, SOP compliance. Covers the runtime SOP input (`source.text ->
-  PrepareSOPNode`, so one bundle serves every SOP), SOP authoring as the
-  only tuning lever (there is no `prompt` value), and the output schema
-  (`step, status, timestamp_start/end, reason`). Also covers what a
-  12-clip measurement established about reliability, which a caller needs
-  before trusting a verdict: TVA detects a missing TOOL or PART reliably
-  but assumes the action whenever the object is on screen, so a skipped
-  step on a laid-out workstation comes back PASSED with an invented
-  reason — no SOP wording fixes it. Plus the failure that reports success
-  (`results: []` with `job.completed` when the output budget is consumed
-  by the model's `<think>` block, where a BIGGER budget makes it worse),
-  and scoring against labelled clips. Do NOT use for generating a procedure from a video where
-  none exists (that is `atai-manual-generation-agent`), for one-shot
-  multimodal questions over a clip (`atai-newton-fusion-model` via
-  `/query`), or for time-series state classification
+  bundle from the `tva` blueprint, run it, poll, download a per-step
+  PASSED / FAILED / MISSING verdict per step. Use when
+  the user has a recording of work that should have followed a known
+  procedure and wants to know whether each step was performed — assembly
+  QA, maintenance sign-off, training assessment, SOP compliance. Covers the
+  runtime SOP input (one bundle serves every SOP), SOP authoring as the only
+  tuning lever, the output schema, the measured reliability limit — a
+  skipped step whose tool or part is visible comes back PASSED with an
+  invented reason — and the empty-`results` failure that still reports
+  success. Do NOT use for generating a procedure where none exists
+  (`atai-manual-generation-agent`), for one-shot questions over a clip
+  (`atai-newton-fusion-model`), or for time-series state classification
   (`atai-operational-state-monitoring-agent`).
 ---
 
@@ -80,7 +72,7 @@ GET    {endpoint}/agents/instances/{agent_id}/results output refs
 POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 ```
 
-`POST /agents/bundle` (singular) returns **404**. The `/agents` API is live on **Dev and Staging** (this skill is verified end-to-end on both) — a Prod endpoint 404s on every `/agents` path, which reads like an unregistered blueprint rather than the wrong host.
+`POST /agents/bundle` (singular) returns **404** — the plural `/agents/bundles` is the endpoint. The Agents API is live on the production deployment (`https://api.u1.archetypeai.app`), where this skill is verified end-to-end.
 
 ## ⚠️ Read before spending a run
 
@@ -218,7 +210,7 @@ So for a 1:1 run — what this script does — naming cannot break pairing. It s
 
 The last two parts are not decoration. **An org shares ONE flat file namespace**, so without them two people verifying the same clip write to the same object:
 
-**`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and dev can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job.
+**`file_id` IS the basename, so re-uploading REPLACES the object a queued run is going to read.** A run pins its inputs at *input-resolution* time and a run can queue for an hour, so uploading the same name in that window kills whatever is already waiting — it surfaces minutes later, inside the run, as `S3 object not found` with `job.completed` on the job.
 
 A unique suffix makes that **impossible by construction** rather than something to defend against. `upload()` also still compares local bytes against `GET /v0.5/files/download/{file_id}` and skips when they match, which matters if you pass explicit names.
 
@@ -358,8 +350,8 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | Symptom | Cause |
 |---|---|
 | `404` on bundle creation | `/agents/bundle` is singular; use `/agents/bundles` |
-| `404` on every `/agents` path | Prod endpoint. The Agents API is on Dev and Staging only |
-| `401` with a key that works elsewhere | API keys are **environment-scoped** — Dev, Staging and Prod each need their own (verified: a Dev key 401s on Staging) |
+| `404` on every `/agents` path | A `/vX.Y` prefix on the endpoint. The Agents API is versionless — `/agents`, never `/v0.5/agents` |
+| `401` with a key that works elsewhere | API keys are **deployment-scoped** — each deployment needs its own (verified: a key issued for one 401s on another) |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
 | `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
@@ -393,7 +385,7 @@ POST {endpoint}/agents/instances/{agent_id}/cancel
 # Drop a .env next to where you run it (BOTH required, NO /v0.5 suffix:
 # the script mounts /agents and /v0.5/files itself):
 #   ATAI_API_KEY=<your API key for that environment>
-#   ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app   # or api.stage.u1.archetypeai.app
+#   ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
 
 python3 references/run_tva_agent.py \
     --video references/sample_data/1_pass_2_pass_3_pass_A.mp4 \

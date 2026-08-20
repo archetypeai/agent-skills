@@ -4,8 +4,8 @@
 Stdlib only — no third-party imports, no GPU, no atai_core. Drop a .env next to
 where you run this:
 
-    ATAI_API_KEY=<dev API key>
-    ATAI_API_ENDPOINT=https://api.dev.u1.archetypeai.app
+    ATAI_API_KEY=<your API key>
+    ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
 
     # verify a recording against a procedure
     python3 run_tva_agent.py --video assembly.mp4 --sop sop.txt
@@ -26,7 +26,7 @@ and ONE BUNDLE SERVES EVERY SOP.
 
 MultiModalSource routes the two inputs by their `format` field, not by position.
 
-THE TWO FAILURES THAT COST THE MOST, both verified on dev 2026-08-11:
+THE TWO FAILURES THAT COST THE MOST, both verified end to end:
 
   1. A blueprint whose SINK cannot be instantiated. The canonical `tva` was
      republished with `format: json/per-request`, for which no connector is
@@ -56,6 +56,8 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+sys.stdout.reconfigure(line_buffering=True)
 
 # Log event types that end a run. The instance `status` field is NOT usable for
 # this — it has read `running` 20+ minutes after a pod died with exit=1.
@@ -87,7 +89,6 @@ DEFAULT_MAX_NEW_TOKENS = 5760
 # is absent — a fresh skill checkout — fall back to the SOP shipped in sample_data,
 # and say which one is in force rather than guessing silently.
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
-_ENDPOINT_NOTED: set[str] = set()   # env() runs per API call; warn once
 BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "sample_data", "oring-numbered.txt")
 
@@ -122,7 +123,6 @@ def env() -> tuple[str, str]:
     /v0.5, so this script mounts each itself. A user pasting the /query base URL
     would otherwise produce /v0.5/agents/... and 404 everywhere.
     """
-    load_dotenv()
     key = os.environ.get("ATAI_API_KEY")
     endpoint = (os.environ.get("ATAI_API_ENDPOINT") or "").rstrip("/")
     if not key:
@@ -130,12 +130,6 @@ def env() -> tuple[str, str]:
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (put it in .env)")
     endpoint = re.sub(r"/v\d+(\.\d+)?$", "", endpoint).rstrip("/")
-    if ("api.dev" not in endpoint and "api.stage" not in endpoint
-            and endpoint not in _ENDPOINT_NOTED):
-        _ENDPOINT_NOTED.add(endpoint)
-        print(f"  NOTE: {endpoint} is not the Dev or Staging endpoint. The "
-              f"/agents API is verified on those two; Prod returns 404 for "
-              f"every /agents path.")
     return key, endpoint
 
 
@@ -189,7 +183,7 @@ def run_suffix() -> str:
 
     An org shares ONE FLAT file namespace and `file_id` IS the basename, so two people
     running the same clip write to the same object. A run pins its inputs at
-    input-resolution time and dev can queue for an hour, so the second upload destroys
+    input-resolution time and a run can queue for an hour, so the second upload destroys
     the first's queued run — surfacing minutes later, inside a run that already started,
     as `S3 object not found` with `job.completed` on the job.
 
@@ -236,7 +230,7 @@ def upload(path: str, rename: str | None = None) -> str:
 
     IDEMPOTENT: if an object of the same name already holds the same bytes, this
     SKIPS the upload. That is not an optimisation. A run pins its inputs at
-    input-resolution time and dev can queue for an hour, so re-uploading the same
+    input-resolution time and a run can queue for an hour, so re-uploading the same
     name in that window kills whatever is already queued — it fails minutes later,
     inside the run, as `S3 object not found` with `job.completed` on the job.
     """
@@ -336,7 +330,7 @@ def check_sink(doc: dict) -> str | None:
     """
     fmt = ((doc.get("connectors") or {}).get("sink") or {}).get("config", {}).get("format")
     if fmt in KNOWN_BROKEN_SINK_FORMATS:
-        return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR on dev. This run "
+        return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR here. This run "
                 f"would load both models (~7 min) and then die at graph "
                 f"instantiation with no results. Target a blueprint whose sink is "
                 f"one of {sorted(KNOWN_GOOD_SINK_FORMATS)}.")
@@ -538,6 +532,8 @@ def main() -> None:
     ap.add_argument("--force", action="store_true",
                     help="run even if the sink cannot be instantiated")
     args = ap.parse_args()
+
+    load_dotenv()
 
     if args.score:
         show(args.score, args.labels)
