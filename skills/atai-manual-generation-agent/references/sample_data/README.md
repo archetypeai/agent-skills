@@ -10,7 +10,7 @@ one point of comparison — not as configurations to reproduce.
 | File | What it is |
 |---|---|
 | `mga-output-current-16384.json` | **What the skill's defaults produce today** — canonical blueprint, `max_new_tokens: 16384`, coverage prompt. 18 steps, 11–139 s, 11/11 reference steps covered and **7/11 at IoU ≥ 0.5**, the best of the five. Reproduced byte-for-byte on two machines. |
-| `mga-output-current-4096-EMPTY.json` | Same blueprint, same prompt, `max_new_tokens: 4096`. **38 bytes, zero steps** — `job.completed`, no ERROR row, 11.3 minutes of generation spent inside the model's reasoning block. Keep this one: it is what a run below the floor looks like, and it looks like success everywhere except the step count. |
+| `mga-output-current-4096-EMPTY.json` | Same blueprint, same prompt, `max_new_tokens: 4096`, captured 2026-08-13. **38 bytes, zero steps** — `job.completed`, no ERROR row, 11.3 minutes of generation spent inside the model's reasoning block. Keep this one: it is what an empty manual looks like, and it looks like success everywhere except the step count. **It no longer reproduces** — the same video at 4096 returned the full 18-step manual on 2026-08-20, as did 2048 through 65536. See SKILL.md, "`max_new_tokens` and the reasoning block". |
 | `mga-output-truncated-active-blueprint.json` | Older: a 256-token output cap. 6 steps, 16–85 s, last step cut mid-clause — what truncation looks like. |
 | `mga-output-max_new_tokens2048.json` | Older: budget raised, no caller prompt. 10 steps, 16–120 s, clean. |
 | `mga-output-max_new_tokens2048-coverage-prompt.json` | Older: budget plus a coverage prompt. 19 steps, 11–139 s — the same shape the current defaults produce. |

@@ -73,7 +73,7 @@ Both are settable today. Both fail silently when they are wrong.
 
 | Send | Why |
 |---|---|
-| `max_new_tokens: 16384` (the blueprint default) | It is a **floor**. Below it you get an empty manual, reported as success. |
+| `max_new_tokens: 16384` (the blueprint default) | Shared with the model's reasoning block. Run out inside it and you get an empty manual, reported as success — check the manual is non-empty. No budget in 2048–65536 changed the output on 2026-08-20, so send the default unless you have a reason not to. |
 | a `prompt` saying what to **cover** | Omit it and the blueprint's own instruction applies, halving the manual. Never specify an output *format* — the parser owns the template and returns zero steps. |
 
 And **check that they are honoured**, rather than assuming. A value is real only if
@@ -102,19 +102,46 @@ these two stops being honoured, the run still succeeds and the manual quietly ge
 worse, so the preflight is the only thing standing between you and a plausible bad
 result.
 
-### `max_new_tokens` is a FLOOR, not a ceiling
+### `max_new_tokens` and the reasoning block
 
-The model **reasons before it answers**, and pays for the reasoning out of this same budget. Set it too low and generation ends inside the reasoning block having never emitted an answer. Every signal says success: `job.completed`, no ERROR row, every HTTP call 2xx, and a 38-byte output containing `{"id": "…", "results": []}`.
+The model **reasons before it answers**, and pays for the reasoning out of this same
+budget. If generation ends inside the reasoning block it never emits an answer, and every
+signal says success: `job.completed`, no ERROR row, every HTTP call 2xx, and a 38-byte
+output containing `{"id": "…", "results": []}`. **Check that the manual is non-empty
+before trusting a run** — that check is the one thing here that never goes stale.
 
-Measured on one 173 s video, one variable, 2026-08-13:
+**What the budget actually changed, measured 2026-08-20 on Prod.** One 173 s video
+(`tire_i2JWkDyg26A`, the source of the reference outputs in `sample_data/`), five
+budgets, everything else held constant:
 
-| `max_new_tokens` | 2048 | 4096 | **16384** | 32768 | 65536 |
+| `max_new_tokens` | 2048 | 4096 | 16384 | 32768 | 65536 |
 |---|---|---|---|---|---|
-| steps | 0 | 0 | **18** | 18 | 18 |
+| steps | **18** | **18** | **18** | **18** | **18** |
 
-The last three are **byte-identical** — generation is deterministic at temperature 0 — so the threshold is between 4k and 16k and nothing above 16384 changes the answer. **Lowering this does not give you a shorter manual, it gives you no manual.** Send the blueprint's default and leave it alone.
+**Nothing about the budget mattered.** Every run produced the same 18-step manual —
+**18/18 instructions and 18/18 timestamps identical** to the 16384 run at every budget,
+across a 32× range. No empty manual, no reasoning-block WARN. Reproduce any cell with
+`--max-new-tokens <n>`.
 
-The platform logs a warning for this case, and it is the only thing that makes it diagnosable:
+Two caveats on that row. The five outputs are the same length (3214 bytes) but have
+**five different md5s**, so generation is deterministic in *content*, not in bytes —
+don't diff by hash. And a 173 s video with an 18-step manual is one point in a space:
+reasoning cost scales with how much there is to describe, so a longer or busier video may
+behave differently. Send the blueprint default unless you have a reason not to; the
+evidence for preferring any particular value is gone.
+
+#### `results: []` — plan for it, do not predict it
+
+It is a real outcome and you should handle it, but **there is no threshold to memorise.**
+Whether a run lands in it depends on how much reasoning the model does before answering —
+an interaction of the video, the prompt, and the budget, not the budget alone. It was
+observed at 2048 and 4096 in Aug 2026 on this very video; on 2026-08-20 the same two
+budgets produced full manuals. Assume it can happen on any combination you have not
+tried, including one that worked before.
+
+Detect it explicitly: the output must contain steps, and `/logs` is where the cause
+appears. The platform logs a WARN for exactly this case, and it is the only thing that
+makes it diagnosable:
 
 ```
 WARN parser.running  ManualGenerationResultsParserNode: generation ended inside the
@@ -122,8 +149,35 @@ WARN parser.running  ManualGenerationResultsParserNode: generation ended inside 
   row(s). Raise `max_new_tokens` if the reasoning was truncated.
 ```
 
-`sample_data/mga-output-current-4096-EMPTY.json` is what this produces, kept as a
-fixture because nothing else distinguishes it from a good run.
+`dropping N` is the useful number: `N > 0` means an answer was formed and discarded, so
+more budget was not the missing ingredient. Note the WARN's own advice — raise the
+budget — is the platform's generic suggestion and is not always right; the
+`atai-task-verification-agent` sibling has observed the opposite direction, where a
+larger budget produced the empty output and a smaller one worked.
+
+<details>
+<summary><b>Earlier measurement (2026-08-13) — dated, and did not reproduce</b></summary>
+
+This skill previously measured a hard floor on the same 173 s video and prescribed the
+blueprint default:
+
+| `max_new_tokens` | 2048 | 4096 | **16384** | 32768 | 65536 |
+|---|---|---|---|---|---|
+| steps | 0 | 0 | **18** | 18 | 18 |
+
+`sample_data/mga-output-current-4096-EMPTY.json` is a captured artifact of that failure
+at 4096 — kept because nothing else shows what an empty manual looks like, not because
+it reproduces. At 4096 today, the same video returned the full 18-step manual.
+
+The `atai-task-verification-agent` sibling documents the **opposite** rule — that 5760
+works and 8192/16384 return nothing — and that did not reproduce either. Two blueprints,
+opposite prescriptions, neither observable now; the shared reasoning behaviour is the
+likely variable rather than anything specific to either blueprint.
+
+**Non-reproduction is not retirement.** The failure was observed, and the platform still
+emits the WARN above for exactly this case. Only the numbers are unreliable.
+
+</details>
 
 ### What a caller-supplied `prompt` is worth
 
@@ -216,7 +270,7 @@ POST {endpoint}/agents/bundles
 | `max_frames` | 16 | Frames uniformly sampled across the whole video. 64 is the reader/preprocessor batch size. **No validation at all** — 16, 512, 1024 and `-1` are all accepted as `ready`. The arithmetic ceiling from `preprocessor_max_pixels` (24 Mi at `size: 224`) is 501 frames. |
 | `size` | 224 | Each frame resized to a square. |
 | `parser_compute_stats` | false | Attaches template-conformance stats — useful for diagnosing a parser mismatch. |
-| `max_new_tokens` | 16384 | Exposed and honoured. A **floor**, not a ceiling — 2048 and 4096 both returned an EMPTY manual on a 173 s video. Send the default; above it nothing changes. |
+| `max_new_tokens` | 16384 | Exposed and honoured, and shared with the reasoning block. 2048 and 4096 returned an EMPTY manual in Aug 2026 but the full manual on 2026-08-20; nothing in 2048–65536 changed the output that day. Send the default — see "`max_new_tokens` and the reasoning block". |
 | `prompt` | (blueprint's own) | **Send one.** Omitting it halves the manual. Preflight it — it has been unwired before. See below. |
 
 ### On `prompt`
@@ -413,7 +467,7 @@ skills/atai-manual-generation-agent/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
 │       ├── mga-output-current-16384.json                   what the defaults produce today
-│       ├── mga-output-current-4096-EMPTY.json               below the reasoning floor: 0 steps
+│       ├── mga-output-current-4096-EMPTY.json               captured empty manual (Aug 2026); does not reproduce
 │       └── three older outputs, kept as scoring fixtures
 └── tests/
     └── test_references.py        network-free
