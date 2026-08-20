@@ -114,24 +114,45 @@ prompt that reportedly scored 98% on the same clips via a direct query — and e
 returned the identical wrong verdict or no verdict at all. Budget for human review of
 `PASSED` verdicts; do not budget for prompt engineering.
 
-### 2. The output budget is shared with the reasoning block, and bigger is worse
+### 2. The output budget is shared with the reasoning block
 
 f1-0 emits `<think>…</think>` before its answer and that reasoning spends
 `max_new_tokens`. Run out inside it and the parser has nothing to parse — the job still
-reports `job.completed` with no ERROR row and `results: []`.
+reports `job.completed` with no ERROR row and `results: []`. **Check `/results` is
+non-empty before trusting any run.** That check is the durable part of this section.
 
-The instinct, and the platform's own WARN, is to raise the budget. **That is wrong
-here.** The window is not the constraint — the served `max_seq_len` is at least 18,754
-and the blueprint defaults to 16,384 — and the model expands its reasoning to fill
-whatever room it is given. On a clip with two skipped steps:
+**Measured 2026-08-11/12**, on a clip with two skipped steps against a 21-step SOP:
 
 | `max_new_tokens` | result |
 |---|---|
-| **5760** | **21 rows, all verdicts correct** |
+| **5760** | 21 rows, all verdicts correct |
 | 8192 | `results: []` |
 | 16384 | `results: []`, identical |
 
-Send **5760**, not the ceiling. The diagnostic that tells you which failure you have is
+`sample_data/tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` is a captured
+artifact of the same failure at 2048.
+
+> **⚠️ These thresholds did not reproduce on 2026-08-20, and neither did the sibling
+> skill's.** A 12-cell sweep on the current Prod blueprint — the three shipped clips
+> against the shipped 3-step SOP at 2048 / 5760 / 8192 / 16384 — returned **three
+> well-formed verdicts in every cell**, including at the exact clip and budget the
+> EMPTY fixture was captured at. Correctness was identical at every budget; only the
+> md5 varied. The `atai-manual-generation-agent` sibling documents the *opposite* rule
+> — that 16384 is a floor and 2048/4096 return an empty manual — and that did not
+> reproduce either: both returned the full 18-step manual, instruction-for-instruction
+> and timestamp-for-timestamp identical to the 16384 run.
+>
+> Two blueprints, opposite documented prescriptions, neither observable now. The shared
+> factor is the reasoning behaviour itself, so treat both tables as dated observations
+> under their own conditions rather than as current constants.
+>
+> **Non-reproduction is not retirement.** The failure mode is real, was observed, and
+> the platform emits the WARN below for exactly this case. What is no longer reliable is
+> the numbers. In particular, **do not assume a budget is safe because it worked on a
+> short SOP** — reasoning cost scales with the number of steps to adjudicate, and the
+> 21-step case above is not reproducible from this repo.
+
+The diagnostic that tells you which failure you have, when it fires, is
 the `dropping N rehearsed row(s)` count in the WARN:
 
 | N | what happened | what to do |
@@ -142,6 +163,11 @@ the `dropping N rehearsed row(s)` count in the WARN:
 
 `N > 0` means the answer was formed and thrown away, so no extra budget was needed at
 all — which is worth saying out loud when you report the failure upstream.
+
+**Budget is not a lever on verdict quality.** In that same sweep the false PASS from
+section 1 reproduced at **every** budget from 2048 to 16384 — four runs, the invented
+reason word-for-word identical each time, differing only in md5. Raising or lowering
+`max_new_tokens` does not turn a wrong verdict into a right one.
 
 ### 3. Read the sink format from the blueprint document
 
@@ -238,7 +264,7 @@ POST {endpoint}/agents/bundles
 
 | Value | Default | Notes |
 |---|---|---|
-| `max_new_tokens` | **5760** | **Shared with the `<think>` block, and bigger is worse.** The blueprint default has moved 2048 → 8192 → 16384; set it explicitly, and set it BELOW the ceiling — 8192 and 16384 both returned nothing on a clip where 5760 returned correct verdicts. |
+| `max_new_tokens` | **5760** | Shared with the `<think>` block. The blueprint default has moved 2048 → 8192 → 16384, so set it explicitly to keep runs comparable. 5760 is what this runner sends; on a 21-step SOP in Aug 2026 it was the only budget that returned rows, though that no longer reproduces — see "The output budget is shared with the reasoning block". |
 | `max_frames` | 16 | Uniform across the whole video. On a 30 s clip, 16 is one frame every 1.9 s. 64 is the reader/preprocessor batch size. |
 | `size` | 224 | Each frame resized to a square, so 1080p is no better than 480p — only slower to upload. |
 | `parser_compute_stats` | false | Attaches template-conformance stats; useful when the parser returns nothing. |
@@ -363,7 +389,7 @@ And **an all-pass clip cannot validate a detector.** Three `PASSED` verdicts on 
 | `401` with a key that works elsewhere | API keys are **deployment-scoped** — each deployment needs its own (verified: a key issued for one 401s on another) |
 | Client reports failure, run proceeds | `/run` returns **202**, not 201 |
 | `pod.terminated exit=1`, `instantiating graph: no connector registered` | The blueprint's sink format. Read the document first |
-| `job.completed` but **`results: []`** | Reasoning filled the budget. Read `dropping N` in the WARN — then **lower** `max_new_tokens` toward 5760, do not raise it |
+| `job.completed` but **`results: []`** | Generation ended inside the reasoning block. Read `dropping N` in the WARN: large N means the answer was formed and dropped, so **lower** the budget; small or `0` means the budget is not the lever |
 | **A step that was skipped came back `PASSED`** | **Expected, and not fixable from the SOP.** The part was on screen, so the action was assumed — see §1. Human-review every `PASSED` |
 | `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue — often a colleague on the same org. Give every upload a `<UTC>-<hex>` tail |
 | Verdicts for some steps only | The SOP had a wrapped line, or the budget truncated mid-answer |
