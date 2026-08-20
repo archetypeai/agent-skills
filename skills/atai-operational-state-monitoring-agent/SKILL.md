@@ -133,7 +133,9 @@ GET $ATAI_API_ENDPOINT/agents/instances/{agent_id}/results
 GET $ATAI_API_ENDPOINT/v0.5/files/download/{filename}
 ```
 
-`/results` lists output refs (`data.filename`, `data.num_bytes`); download each via the files API. Run outputs are owned by the user who launched the run and do not expire.
+`/results` lists output refs, each nesting its fields under an inner `data` object (`data[].data.filename`, `data[].data.num_bytes`, `data[].data.ref`) — not at the top level. Download each via the files API. Run outputs are owned by the user who launched the run and do not expire.
+
+Like the other list endpoints, `/results` **pages**: `data`, `has_more`, `next_cursor`, with `limit` (default 100, max 1000) and `after`/`before` cursors. **The cursor is opaque** — pass `next_cursor` back verbatim and never derive it from `data[last].id`; a fabricated value is rejected with `400 invalid cursor`. One run through a quick-start bundle emits one output, so the first page is the whole answer — a bundle with several sink ports is where paging starts to matter.
 
 [`references/run_osm_agent.py`](references/run_osm_agent.py) scripts the whole flow (upload → resolve bundle → run → poll → download, stdlib-only) and — if a `<input>_labels.csv` ground-truth sidecar sits next to the input — scores the run automatically: accuracy (all-windows and steady-state cuts), per-class precision/recall/F1, macro-F1.
 
