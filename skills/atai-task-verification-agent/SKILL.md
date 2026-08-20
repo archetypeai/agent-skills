@@ -149,6 +149,45 @@ What decided correctness was **what is absent from the frame**, not the budget:
 So for a short SOP, send whatever keeps your runs comparable and spend your attention on
 reviewing `PASSED` verdicts instead.
 
+#### `results: []` — plan for it, do not predict it
+
+It is a real outcome and you should handle it, but **there is no threshold to memorise.**
+Whether a run lands in it depends on how much reasoning the model does before answering,
+which is an interaction of the video, the SOP's step count, and the budget — not the
+budget alone. It has been observed at 2048 on a clip with a skipped step, and at 8192 and
+16384 on a 21-step SOP; on 2026-08-20 none of the twelve runs above hit it at any budget.
+Assume it can happen on any combination you have not tried, including one that worked
+yesterday.
+
+What it looks like — every signal says success:
+
+```
+HTTP           every call 2xx
+job status     job.completed, no ERROR row in /logs
+output         {"id": "…", "results": []}     ~40 bytes
+```
+
+So detect it explicitly, in this order:
+
+1. **`/results` must be non-empty.** This is the check; nothing else catches it.
+2. **`invalid` must not be `"true"` on every row** — a populated output can still be
+   entirely invalid windows.
+3. **Read `/logs` for the WARN**, which names the cause and the direction to move in
+   (table below). Absence of the WARN with an empty output means something other than
+   the reasoning block consumed the run.
+
+Then respond by what the WARN says rather than by instinct: `dropping N` large means the
+answer was produced and discarded, so **lower** the budget; small or `0` means the budget
+is not the lever and more of it will not help. If you change the budget, change one
+thing and re-run — generation is deterministic for a given budget, so a re-run at the
+same value returns the same outcome.
+
+Two things not to conclude. **Empty does not mean "too small"** — that is the instinct,
+and half the observed cases went the other way. And **a clean clip passing at some budget
+does not mean a defect clip will** — the runner's own note once hypothesised that clean
+clips fit where defect clips do not; the grid above did not bear that out, with both
+defect clips returning full verdicts at the lowest budget tried.
+
 <details>
 <summary><b>Earlier measurement (2026-08-11/12) — dated, and did not reproduce</b></summary>
 

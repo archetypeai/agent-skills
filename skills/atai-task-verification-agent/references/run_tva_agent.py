@@ -35,10 +35,11 @@ THE TWO FAILURES THAT COST THE MOST, both verified end to end:
      cause only in /logs. check_sink() below catches it in about a second.
 
   2. The token budget spent inside the model's <think> block. f1-0 reasons before
-     answering, and the reasoning shares `max_new_tokens`. At 2048 a clip with a
-     SKIPPED step produced `results: []` while reporting `job.completed` with no
-     ERROR row. Clean clips fit in 2048; the ones containing a defect do not — so
-     the failure correlates with the inputs you care about. Default here is 8192.
+     answering, and the reasoning shares `max_new_tokens`. Run out inside the block
+     and you get `results: []` while the job reports `job.completed` with no ERROR
+     row. Observed at 2048 on a clip with a skipped step (2026-08) and at 8192/16384
+     on a 21-step SOP; NOT reproduced at any budget on 2026-08-20. There is no
+     threshold to rely on — check /results is non-empty every time.
 
 Both are silent at the HTTP layer. Neither is visible in the `status` field.
 """
@@ -78,10 +79,12 @@ STATUSES = ("PASSED", "FAILED", "MISSING")
 KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request", "json/per-request"}
 KNOWN_BROKEN_SINK_FORMATS: set[str] = set()
 
-# Default output budget. Deliberately NOT the ceiling and NOT the blueprint default
-# (16384): the failure mode is repetition, so a bigger budget is more room to LOOP.
-# Measured on a clip with two skipped steps: 5760 returned correct verdicts, 8192
-# returned results:[], 16384 returned results:[] identically. See SKILL.md.
+# Default output budget. Not the blueprint default (16384), so runs through this
+# script stay comparable to the measurements in SKILL.md. It was chosen in 2026-08
+# when 5760 was the only budget returning rows on a 21-step SOP; a 12-cell sweep on
+# 2026-08-20 found no budget-dependent difference on the shipped 3-step SOP, so treat
+# this as a stable default rather than a safe one. See SKILL.md, "The output budget is
+# shared with the reasoning block".
 DEFAULT_MAX_NEW_TOKENS = 5760
 
 # Where a project is expected to keep its procedure. Matches the worked example's
