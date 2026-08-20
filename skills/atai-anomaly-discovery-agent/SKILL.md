@@ -96,11 +96,16 @@ default endpoint.
 > `GET /agents/bundles`, `GET /agents/bundles/{id}`, `POST /agents/bundles`,
 > `POST /agents/bundles/{id}/run`. The singular forms return **404**.
 
-> **⚠️ There is no `/agents/bundles/{id}/runs` endpoint.** To find a bundle's
-> runs, filter `GET /agents/instances` by `bundle_id` — and it paginates
-> (`data`, `has_more`, `next_cursor`), so a single-page fetch silently misses
-> older runs. On a busy deployment that means walking thousands of instances;
-> capture the `agt_…` id from the run response instead.
+> **Finding a bundle's runs.** There is no `/agents/bundles/{id}/runs` (it
+> 404s). Use the **List Agents** endpoint, `GET /agents/instances`, which
+> filters **server-side**: `bundle_id` and `blueprint_id` are exact-match,
+> `status` restricts to one lifecycle state, and `query` is a case-insensitive
+> substring search over agent name, agent id, bundle id, and blueprint key.
+> It pages with `limit` (default 100, max 1000) and `after`/`before` cursors,
+> returning `data`, `has_more`, `next_cursor`.
+> **The cursor is opaque** — pass `next_cursor` back verbatim; never derive it
+> from `data[last].id`. Capturing the `agt_…` id from the run response is
+> still the cheapest path when you control the run.
 
 > **Availability.** The pre-packaged "AD Quick Start" bundles are published
 > on the production deployment (`https://api.u1.archetypeai.app`) — set
@@ -165,9 +170,9 @@ curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
   }'
 ```
 
-Each run is a new agent (`agt_…`). **Capture that id** — see the pagination
-warning above. Reuse one bundle across every input of the same asset; the
-detector does not change between files.
+Each run is a new agent (`agt_…`). **Capture that id** — it saves a lookup
+later (see "Finding a bundle's runs" above). Reuse one bundle across every
+input of the same asset; the detector does not change between files.
 
 ### 4. Poll until terminal — and do not trust `status`
 
