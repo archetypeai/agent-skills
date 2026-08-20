@@ -1,7 +1,7 @@
 ---
 name: atai-anomaly-discovery-agent
 description: >
-  Run Archetype AI's managed Anomaly Discovery (AD) agent over the Agent API —
+  Run Archetype AI's managed Anomaly Discovery (AD) agent over the Agents API —
   upload a prepared sensor CSV, resolve the pre-packaged "AD Quick Start"
   bundle by name (a fitted LOF detector and its threshold are already pinned),
   run it, poll, download a per-window anomaly score. Use when the user wants
@@ -17,7 +17,7 @@ description: >
   (`atai-newton-omega-model-data-prep`).
 ---
 
-# AD Agent — Managed Anomaly Discovery via the Agent API
+# AD Agent — Managed Anomaly Discovery via the Agents API
 
 The AD agent answers one question: **does this window still look like normal
 operation?** It is fitted on normal data only — a reference period from a
@@ -83,11 +83,11 @@ inputs abort and why only one feature mode is reachable.
 ```
 Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
             GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
-Agent API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Agents API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agent API is **versionless** — `/agents`, not `/v0.5/agents`. If
+The Agents API is **versionless** — `/agents`, not `/v0.5/agents`. If
 `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending
 `/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
 default endpoint.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end RED agent run over the Agent API — stdlib only.
+"""End-to-end RED agent run over the Agents API — stdlib only.
 
 upload CSV -> resolve the pre-packaged "RED Quick Start" bundle by name ->
 run -> poll -> download per-window predictions -> score against a
