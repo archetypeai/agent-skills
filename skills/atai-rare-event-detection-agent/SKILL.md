@@ -190,6 +190,14 @@ token; `expires_at` is `null`, so run outputs do not expire. For a **fitted
 classifier artifact** the `ref` is an absolute presigned S3 URL that expires in
 ~20 minutes — derive a durable `s3://` path instead (see below).
 
+Like the other list endpoints, `/results` **pages**: `data`, `has_more`,
+`next_cursor`, with `limit` (default 100, max 1000) and `after`/`before`
+cursors. **The cursor is opaque** — pass `next_cursor` back verbatim and never
+derive it from `data[last].id`; a fabricated value is rejected with
+`400 invalid cursor`. One run through a quick-start bundle emits one output, so
+the first page is the whole answer — a bundle with several sink ports is where
+paging starts to matter.
+
 Output is one row per window. The row carries the window's **span** —
 `finish_timestamp` (the window end, the value to join ground truth on) and
 `start_timestamp`:
