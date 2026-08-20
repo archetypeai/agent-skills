@@ -2,7 +2,7 @@
 name: atai-operational-state-monitoring-agent
 description: >
   Run Archetype AI's managed Operational State Monitoring (OSM) agent over
-  the Agent API — upload a sensor CSV, resolve a maintained pre-packaged
+  the Agents API — upload a sensor CSV, resolve a maintained pre-packaged
   "OSM Quick Start" bundle (classifier + windowing already pinned), run it,
   poll status + audit events, download the per-window state predictions. Use
   when the user wants fully-managed, server-side classification of
@@ -17,7 +17,7 @@ description: >
   classifier artifact yourself (contact support@archetypeai.dev).
 ---
 
-# OSM Agent — Managed State Classification via the Agent API
+# OSM Agent — Managed State Classification via the Agents API
 
 The OSM agent is the **fully-managed counterpart** to the client-side embed-and-KNN pattern in [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md): instead of fanning out `/query` embedding calls and classifying locally, you hand the platform a CSV and the platform runs the whole graph server-side:
 
@@ -52,11 +52,11 @@ Two API surfaces are involved, mounted differently:
 ```
 Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
             GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
-Agent API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Agents API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agent API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. If your `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending `/agents`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint.
+The Agents API is **versionless** — it lives at `/agents`, not `/v0.5/agents`. If your `ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending `/agents`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint.
 
 > **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
 > `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch),
@@ -167,7 +167,7 @@ Budget by the **audit events, not the clock** — you cannot see other tenants' 
 - **Resolve by name, not by id.** The pre-packaged bundle's id is deployment-specific; only the name is stable. And **match the name exactly** — the base name is a substring of the `…, Embeddings)` name, so a substring `query=` returns both.
 - **The bundle API is plural everywhere** (as of 2026-08-11). `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch), `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). Every singular form (`/agents/bundle/…`) 404s.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
-- **The Agent API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
+- **The Agents API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
 - **`failed` ≠ failed until you check `/results`.** The job poller can flake after a successful job; output present ⇒ the run succeeded.
 - **Prefer sequential runs.** Whether concurrent runs queue depends on what else is running on the deployment at that moment: they queue when other workloads hold the workers, and run as concurrent jobs when they don't. Under load, N parallel runs ran ~N× slower each; with an empty queue, concurrent runs completed at full speed. There is no serialization to rely on and no parallelism to count on — sequential stays the predictable default.
 - **Sampling-rate warnings are expected on irregular data.** The bundle loosens the tolerance for Volve's irregular sampling (Δt 1–27 s); expect warnings, not failures.
