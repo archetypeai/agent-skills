@@ -1,7 +1,7 @@
 ---
 name: atai-rare-event-detection-agent
 description: >
-  Run Archetype AI's managed Rare Event Detection (RED) agent over the Agent
+  Run Archetype AI's managed Rare Event Detection (RED) agent over the Agents
   API — upload a sensor CSV, resolve the pre-packaged "RED Quick Start"
   bundle by name (its nearest-prototype classifier and windowing are already
   pinned), run it, poll status + audit events, download per-window event
