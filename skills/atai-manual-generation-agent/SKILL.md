@@ -34,9 +34,10 @@ MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion
 > `ATAI_API_ENDPOINT` to it and the full upload → bundle → run → score cycle
 > works as documented here. The same 173 s video reproduces an **identical
 > manual** (18/18 instruction texts and timestamps) run to run, at the same
-> ~15 min runtime (job time ~900 s: whisper 42 s, newton-fusion download and
-> load ~6.8 min, processing ~2.6× realtime). If the blueprint key doesn't
-> resolve, contact support@archetypeai.dev.
+> ~15 min runtime. A verified run: job time **879 s** — 13 s queued, whisper
+> 31.9 s download + 3.2 s load, newton-fusion **4min55s download + 1min39s
+> load**, then 444 s to process a 173 s video (~2.6× realtime). If the
+> blueprint key doesn't resolve, contact support@archetypeai.dev.
 
 ## When to Apply
 
@@ -138,7 +139,12 @@ Same clip, same `max_frames`, only the instruction differing — the blueprint's
 
 **Judge a manual by whether it can be followed**, and note that the last two rows disagree with that judgement. At the *loose* threshold the 10-step version scores **higher**, because MGA tiles the timeline contiguously so fewer steps means longer ones that overlap a reference interval more easily. Coarser segmentation flatters loose-threshold recall while being worse to work from: an operator cannot tick off "apply the parking brake" separately from "switch off the ignition", and each step carries one frame thumbnail however many actions it contains.
 
-Where the remaining error sits is worth checking per step rather than in aggregate. On the current run every score below 0.4 came from **two pairs of reference steps collapsing onto one prediction each** (remove-the-nuts with remove-the-wheel; tighten with put-things-back); every other step scored 0.5–0.69. That is prompt-shaped, not a model ceiling — an instruction asking for those as separate steps would likely split them. Untested.
+Where the remaining error sits is worth checking per step rather than in aggregate. On the current run the four scores below 0.4 have **two different causes, pulling in opposite directions**:
+
+- **Under-segmentation** — two reference steps collapsing onto one prediction: remove-the-nuts with remove-the-wheel (steps 5–6, IoU 0.27 and 0.26) and tighten with put-things-back (step 10, 0.34).
+- **Over-segmentation** — the opening reference step (14.8–28.9 s, "stop the car") spread across three predictions: stop / warning triangle / parking brake, so no single prediction covers more than a third of it (step 1, 0.35).
+
+Every other step scored 0.52–0.69. Both are prompt-shaped rather than a model ceiling, but they want **opposite** instructions — asking for the collapsed actions as separate steps risks splitting the opening further, and asking for coarser opening steps risks re-collapsing the middle. Untested, and worth testing as one change rather than two.
 
 ## Step 1 — Choose a video
 
