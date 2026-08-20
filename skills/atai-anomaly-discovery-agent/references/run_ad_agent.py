@@ -8,7 +8,7 @@
     python3 run_ad_agent.py --score-only ad-output.csv
 
 By default this resolves the pre-packaged "AD Quick Start" bundle by NAME —
-bundle ids are environment-scoped, the name is the stable handle. The bundle
+bundle ids are deployment-scoped, the name is the stable handle. The bundle
 pins a detector fitted on one bearing's healthy baseline, and the bundled
 sample slice is from that same bearing: a detector encodes ONE asset's notion
 of normal. To score a different asset, pass --detector with the s3:// URI of
@@ -36,7 +36,13 @@ import urllib.parse
 import urllib.request
 import uuid
 
-# The pre-packaged bundles. Resolve by NAME: ids are environment-scoped.
+sys.stdout.reconfigure(line_buffering=True)
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data",
+                           "bearing_eval_set2_brg1_transition.csv")
+
+# The pre-packaged bundles. Resolve by NAME: ids are deployment-scoped.
 # Both pin the same detector, fitted on set 2 bearing 1's healthy baseline —
 # the bundled sample slice is from that same bearing.
 QUICK_START_BUNDLE = "AD Quick Start (Bearing Breakdown)"
@@ -164,9 +170,9 @@ def resolve_quick_start(name: str) -> str:
     bundle_id = find_bundle(name)
     if not bundle_id:
         sys.exit(f"no bundle named {name!r} found — the pre-packaged bundle "
-                 "is not published in this environment yet (verified on "
-                 "Dev and Staging). Pass --bundle-id for this environment as a "
-                 "fallback, or contact support@archetypeai.dev.")
+                 "is not published in the deployment you're pointed at. Pass "
+                 "--bundle-id for it as a fallback, or contact "
+                 "support@archetypeai.dev.")
     return bundle_id
 
 
@@ -373,7 +379,9 @@ def report(res: dict, threshold: float) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--csv", default="sample_data/bearing_eval_set2_brg1_transition.csv")
+    ap.add_argument("--csv", default=DEFAULT_CSV,
+                    help="prepared input CSV (defaults to the bundled sample "
+                         "slice, resolved next to this script)")
     ap.add_argument("--labels", default=None,
                     help="ground-truth sidecar (default: <csv stem>_labels.csv)")
     ap.add_argument("--detector", default=None,

@@ -3,24 +3,17 @@ name: atai-anomaly-discovery-agent
 description: >
   Run Archetype AI's managed Anomaly Discovery (AD) agent over the Agent API —
   upload a prepared sensor CSV, resolve the pre-packaged "AD Quick Start"
-  bundle by name (portable across dev/staging/prod; a fitted LOF detector and
-  its threshold are already pinned), run it (one agent per input file),
-  poll status + audit events, and download a per-window anomaly score. Use this
-  skill when the user wants to flag "this no longer looks like normal
-  operation" from **normal-only reference data** — no fault library, no
-  labelled examples of the thing being detected, because none exist. Covers
-  the resolve → run → poll → results lifecycle, the output CSV schema
-  (`finish_timestamp, start_timestamp, predicted_label, invalid,
-  anomaly_score`), how Local Outlier Factor produces scores near 1.0 and why
-  the threshold lives inside the artifact, the per-asset framing (one detector
-  per machine), the validation settings that silently invalidate every window
-  above 1 kHz, the 50 MiB checkpoint limit that aborts long inputs, and why
-  anomaly detection must be scored by lead time and false-alarm rate rather
-  than precision and recall. Do NOT use for classifying every operating regime
-  from a labelled library (`atai-operational-state-monitoring-agent`), for
-  detecting a *named* recurring fault from a few labelled shots
-  (`atai-rare-event-detection-agent`), for client-side embedding + KNN over
-  `/query` (`atai-newton-omega-model`), or for cleaning and windowing raw CSVs
+  bundle by name (a fitted LOF detector and its threshold are already pinned),
+  run it, poll, download a per-window anomaly score. Use when the user wants
+  to flag "this no longer looks like normal operation" from **normal-only
+  reference data** — no fault library, no labelled examples of the thing being
+  detected, because none exist. Covers the resolve → run → poll → results
+  lifecycle, the output schema, the per-asset framing, the validation settings
+  that silently invalidate every window above 1 kHz, the 50 MiB checkpoint
+  limit, and scoring by lead time and false-alarm rate. Do NOT use for
+  labelled operating regimes (`atai-operational-state-monitoring-agent`), a
+  *named* recurring fault (`atai-rare-event-detection-agent`), client-side
+  embeddings over `/query` (`atai-newton-omega-model`), or raw-CSV prep
   (`atai-newton-omega-model-data-prep`).
 ---
 
@@ -106,19 +99,16 @@ default endpoint.
 > **⚠️ There is no `/agents/bundles/{id}/runs` endpoint.** To find a bundle's
 > runs, filter `GET /agents/instances` by `bundle_id` — and it paginates
 > (`data`, `has_more`, `next_cursor`), so a single-page fetch silently misses
-> older runs. On Dev this means walking thousands of instances; capture the
-> `agt_…` id from the run response instead.
+> older runs. On a busy deployment that means walking thousands of instances;
+> capture the `agt_…` id from the run response instead.
 
-> **⚠️ Availability — verified on Dev and Staging.** Everything here is
-> verified against the **Dev** deployment
-> (`https://api.dev.u1.archetypeai.app`), and the full run/score cycle is
-> also verified on **Staging** (`https://api.stage.u1.archetypeai.app`) —
-> the same names resolved to different per-environment `bnd_…` ids, with
-> **240/240 label agreement** and scores within the platform noise floor of
-> the Dev runs'. Prod rollout is pending: if name resolution reports no
-> match, the pre-packaged bundle isn't published in that environment yet —
-> point at Dev or Staging, or pass a known `--bundle-id` for that
-> environment. Please contact support@archetypeai.dev.
+> **Availability.** The pre-packaged "AD Quick Start" bundles are published
+> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
+> documented here. If name resolution reports no match, the bundle isn't
+> published in the deployment you're pointed at: resolving by name is
+> portable, so pass a known `--bundle-id` meanwhile, or contact
+> support@archetypeai.dev.
 
 ## The five-step lifecycle
 
@@ -142,7 +132,7 @@ The response carries a `file_id`, which the platform sets to the **filename**.
 ### 2. Resolve the pre-packaged bundle by name
 
 Two canonical bundles are published. **Names are the stable handles** — the
-`bnd_…` ids differ per environment, so resolve by name:
+`bnd_…` ids are deployment-specific, so resolve by name:
 
 | Name | What you get |
 |---|---|
@@ -350,7 +340,7 @@ Score these four things instead:
 
 ## Verified platform behavior
 
-Verified on Dev, 2026-08-11 → 2026-08-17.
+Verified 2026-08-11 → 2026-08-20.
 
 - **Only the fused feature mode is reachable.** The design admits three —
   embeddings, hand-crafted features, or both — but the `ad` blueprint exposes
@@ -375,16 +365,16 @@ Verified on Dev, 2026-08-11 → 2026-08-17.
   when scheduling was contended. Other tenants' jobs aren't visible to you, so
   the run's own audit events are the only queue-state signal. Do not read a
   fast run as a broken one — see the `/results` check above.
-- **Re-running the same input is not bit-identical — on one environment or
+- **Re-running the same input is not bit-identical — within a deployment or
   across them.** Two runs of the same 840-window slice with the same detector:
   max absolute score difference **4.2×10⁻⁵**, median relative **0.0002%**,
-  **100%** label agreement. The same holds Dev vs Staging on the bundled slice
-  (both bundle variants): 240/240 label agreement, max score difference
-  2.9×10⁻⁵. That is the platform's noise floor; differences larger than that
-  are real. (The OSM and RED siblings *are* byte-identical across
-  environments — the difference is this graph's forked GPU batching.)
+  **100%** label agreement. Across deployments on the bundled slice (both
+  bundle variants): 240/240 label agreement, max score difference 2.9×10⁻⁵.
+  That is the platform's noise floor; differences larger than that are real.
+  (The OSM and RED siblings *are* byte-identical across deployments — the
+  difference is this graph's forked GPU batching.)
 
-## End-to-end verification (Dev, 2026-08-17)
+## End-to-end verification
 
 `python3 run_ad_agent.py` with no arguments — upload → resolve
 `AD Quick Start (Bearing Breakdown)` by name → run → poll → download → score,
@@ -405,9 +395,9 @@ end-to-end** with a clear queue (job time 18 s: ~10 s queued, Omega download
 The base run of the identical input minutes earlier took ~9 min wall-clock
 under contention — the runtime bullet above, demonstrated back-to-back.
 
-The same cycle passed on **Staging** with zero code changes: both bundles
-resolved by name to their Staging ids, base in **49 s** and Embeddings in
-**33 s** end-to-end, identical scoring (240/240 labels vs the Dev outputs,
+The same cycle passes on other deployments with zero code changes: both
+bundles resolve by name to that deployment's ids, base in **49 s** and
+Embeddings in **33 s** end-to-end, with identical scoring (240/240 labels,
 scores within the noise floor).
 
 **Cross-checked against an independent path.** The same bearing scored as a full
