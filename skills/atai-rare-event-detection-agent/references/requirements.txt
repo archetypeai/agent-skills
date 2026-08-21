@@ -1,0 +1,3 @@
+# Runtime dependency for run_red_agent.py.
+#   pip install -r requirements.txt
+archetypeai

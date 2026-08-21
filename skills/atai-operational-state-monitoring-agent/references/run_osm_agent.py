@@ -33,7 +33,12 @@ import re
 import sys
 import time
 
-from archetypeai import ArchetypeAI
+try:
+    from archetypeai import ArchetypeAI
+except ModuleNotFoundError:  # the only third-party dependency
+    sys.exit("This runner needs the official Archetype AI client:\n"
+             "    pip install -r requirements.txt   (from this directory)\n"
+             "    pip install archetypeai           (or just the package)")
 
 sys.stdout.reconfigure(line_buffering=True)
 

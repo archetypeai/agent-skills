@@ -26,17 +26,47 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
+import re
+import shutil
 import statistics
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-import uuid
+
+try:
+    from archetypeai import ArchetypeAI
+except ModuleNotFoundError:  # the only third-party dependency
+    sys.exit("This runner needs the official Archetype AI client:\n"
+             "    pip install -r requirements.txt   (from this directory)\n"
+             "    pip install archetypeai           (or just the package)")
 
 sys.stdout.reconfigure(line_buffering=True)
+
+_CLIENT = None
+
+
+def client() -> "ArchetypeAI":
+    """The official client, built once from the environment."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = ArchetypeAI(require_key(), api_endpoint=versioned(api_base()))
+    return _CLIENT
+
+
+def versioned(endpoint: str) -> str:
+    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+
+    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
+    strips the version itself for the versionless agents API. Passing a bare
+    root therefore breaks uploads while bundle calls keep working — an empty
+    `ApiError: {}` that points at nothing.
+
+    Accept either form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    """
+    endpoint = endpoint.rstrip("/")
+    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data",
@@ -78,15 +108,6 @@ def api_base() -> str:
     return endpoint
 
 
-def agents_base() -> str:
-    # The Agents API is versionless: /agents, never /vX.Y/agents.
-    base = api_base()
-    for suffix in ("/v0.5", "/v0.4", "/v1"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-    return f"{base}/agents"
-
-
 def require_key() -> str:
     key = os.environ.get("ATAI_API_KEY", "")
     if not key:
@@ -94,74 +115,28 @@ def require_key() -> str:
     return key
 
 
-def request(method: str, url: str, body=None, raw: bool = False, retries: int = 3):
-    """One HTTP call, retrying transient network errors (not HTTP errors)."""
-    data = None
-    headers = {"Authorization": f"Bearer {require_key()}"}
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    last = None
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                payload = resp.read()
-                return payload if raw else (json.loads(payload) if payload else {})
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")[:400]
-            raise SystemExit(f"{method} {url} -> HTTP {exc.code}\n  {detail}") from None
-        except (urllib.error.URLError, TimeoutError) as exc:
-            last = exc
-            time.sleep(2 * (attempt + 1))
-    raise SystemExit(f"{method} {url} failed after {retries} attempts: {last}")
-
-
 def upload_file(path: str) -> str:
     """Upload and return the file id. Names are timestamped on purpose.
 
     File ids ARE filenames, so re-uploading a name replaces the record and
     orphans the object any in-flight run already resolved — that run then dies
-    naming a UUID and nothing else.
+    naming a UUID and nothing else. The client uploads under the file's own
+    basename, so the timestamped name is staged as a copy first.
     """
     stem = os.path.basename(path).rsplit(".", 1)[0]
     rename = f"{stem}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv"
-    boundary = uuid.uuid4().hex
-    with open(path, "rb") as fh:
-        content = fh.read()
-    body = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; filename="{rename}"\r\n'.encode(),
-        b"Content-Type: text/csv\r\n\r\n",
-        content,
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    req = urllib.request.Request(
-        f"{api_base()}/v0.5/files",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {require_key()}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=1800) as resp:
-        out = json.loads(resp.read())
-    return (out.get("data") or out).get("file_id", rename)
+    staged = os.path.join(tempfile.mkdtemp(), rename)
+    shutil.copyfile(path, staged)
+    return client().files.local.upload(staged)["file_id"]
 
-
-# --------------------------------------------------------------------------
-# bundle / run
-# --------------------------------------------------------------------------
 
 def find_bundle(name: str) -> str | None:
     """Exact-name lookup, preferring canonical bundles. NOTE the plural
     endpoint, and that ?query= is a substring search over name AND id — the
     base quick-start name is a substring of the Embeddings one, so the exact
     match below is what actually selects."""
-    res = request("GET", f"{agents_base()}/bundles?query={urllib.parse.quote(name)}&limit=100")
-    matches = [b for b in (res.get("data", res) if isinstance(res, dict) else res)
-               if (b.get("name") or "") == name]
+    res = client().agents.bundles.list(query=name, limit=100)
+    matches = [b for b in res.get("data", []) if (b.get("name") or "") == name]
     matches.sort(key=lambda b: not b.get("is_canonical", False))
     return matches[0].get("id") if matches else None
 
@@ -200,17 +175,15 @@ def create_bundle(name: str, detector: str, threshold: float, embeddings: bool) 
         # A wrong KEY is accepted here and fails ~30 s into the run.
         "artifacts": {"ad-detector": detector},
     }
-    res = request("POST", f"{agents_base()}/bundles", body=body)
+    res = client().agents.bundles.create(
+        blueprint=body["blueprint"], name=body["name"],
+        values=body["values"], artifacts=body["artifacts"])
     b = res.get("data", res)
     return b["id"]
 
 
 def run_bundle(bundle_id: str, file_id: str) -> str:
-    res = request(
-        "POST",
-        f"{agents_base()}/bundles/{bundle_id}/run",
-        body={"connectors": {"source": [{"type": "file", "id": file_id}]}},
-    )
+    res = client().agents.bundles.run(bundle_id, source=[file_id])
     r = res.get("data", res)
     return r.get("id") or r.get("agent_id")
 
@@ -226,10 +199,10 @@ def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 15) -> str:
     deadline = time.time() + timeout_s
     seen: set[str] = set()
     while time.time() < deadline:
-        info = request("GET", f"{agents_base()}/instances/{agent_id}")
+        info = client().agents.instances.get(agent_id)
         status = (info.get("data", info) or {}).get("status", "unknown")
 
-        logs = request("GET", f"{agents_base()}/instances/{agent_id}/logs").get("data", [])
+        logs = client().agents.instances.get_logs(agent_id).get("data", [])
         terminal = None
         for entry in reversed(logs):
             key = str(entry.get("id"))
@@ -264,7 +237,7 @@ def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 15) -> str:
 
 
 def download_results(agent_id: str, out_path: str) -> str | None:
-    res = request("GET", f"{agents_base()}/instances/{agent_id}/results")
+    res = client().agents.instances.get_results(agent_id)
     items = res.get("data", res) if isinstance(res, dict) else res
     if not items:
         # The single most important check in this script. A run whose windows
@@ -286,9 +259,7 @@ def download_results(agent_id: str, out_path: str) -> str | None:
         print(f"  results present but no filename in the reference: {items[0]!r}")
         return None
     print(f"  results ({len(items)}): {name}  ({inner.get('num_bytes', '?')} bytes)")
-    blob = request("GET", f"{api_base()}/v0.5/files/download/{urllib.parse.quote(name)}", raw=True)
-    with open(out_path, "wb") as fh:
-        fh.write(blob)
+    client().files.local.download(name, out_path)
     return out_path
 
 

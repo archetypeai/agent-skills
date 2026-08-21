@@ -158,7 +158,9 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" \
 (`?name=`/`?search=` are silently ignored), and the base name is a substring
 of the Embeddings name — so a query for the base name returns *both*.
 **Select the exact name match**, preferring `is_canonical: true`, and take its
-`id`.
+`id`. Measured on Prod: `query 'AD Quick Start'` returns **2** with Embeddings
+first (results are newest-first), while the full name including its closing
+paren returns **1**. Taking `data[0]` on a prefix runs the Embeddings bundle.
 
 ### 3. Run the bundle — one agent per input file
 
@@ -437,9 +439,10 @@ Two bugs this run caught, which no unit test would have:
 ## Local Setup
 
 ```bash
-# No third-party deps — references/run_ad_agent.py is stdlib-only.
-
 cd skills/atai-anomaly-discovery-agent/references
+
+# One dependency: the official Archetype AI client. Note the -r.
+pip install -r requirements.txt
 
 # Create the .env IN THIS DIRECTORY — the runner reads ./.env from where it
 # runs (the file is gitignored). BOTH variables required, no default endpoint;
@@ -465,8 +468,8 @@ and self-scores against the `_labels.csv` sidecar at the end.
 
 ## References
 
-- [`references/run_ad_agent.py`](references/run_ad_agent.py) — stdlib-only
-  runner: upload → resolve the Quick Start bundle by name → run → poll (status
+- [`references/run_ad_agent.py`](references/run_ad_agent.py) — runner on the
+  official [`archetypeai` client](https://github.com/archetypeai/python-client): upload → resolve the Quick Start bundle by name → run → poll (status
   **and** logs) → download → score against a ground-truth sidecar (lead time,
   crossing rate, sustained-crossing rule). Runs the bundled sample with no
   arguments; `--embeddings` switches to the Embeddings bundle;

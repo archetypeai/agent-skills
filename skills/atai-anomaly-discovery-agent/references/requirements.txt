@@ -1,0 +1,3 @@
+# Runtime dependency for run_ad_agent.py.
+#   pip install -r requirements.txt
+archetypeai

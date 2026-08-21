@@ -54,10 +54,17 @@ class EnvTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run_red_agent.require_key()
 
-    def test_agents_mount_is_versionless(self):
-        with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "https://x"}, clear=True):
-            self.assertEqual(run_red_agent.agents_base(), "https://x/agents")
-            self.assertNotIn("/v0.5/agents", run_red_agent.agents_base())
+    def test_endpoint_is_normalised_for_the_client(self):
+        """The client wants the /vX.Y suffix: verbatim for files, stripped for agents.
+
+        A bare root breaks uploads with an empty ApiError while bundle calls
+        keep working, so both .env conventions in this repo must normalise to
+        the same string.
+        """
+        self.assertEqual(run_red_agent.versioned("https://x"), "https://x/v0.5")
+        self.assertEqual(run_red_agent.versioned("https://x/"), "https://x/v0.5")
+        self.assertEqual(run_red_agent.versioned("https://x/v0.5"), "https://x/v0.5")
+        self.assertEqual(run_red_agent.versioned("https://x/v0.5/"), "https://x/v0.5")
 
 
 class ScoringTests(unittest.TestCase):
@@ -185,12 +192,21 @@ class BundleShapeTests(unittest.TestCase):
         self.assertIn('bundle.get("name") == name', src)
         self.assertIn('bundle.get("is_canonical")', src)
 
-    def test_bundle_endpoints_are_plural(self):
-        """The bundle API is plural everywhere as of 2026-08-11; the singular
-        paths (POST /agents/bundle, POST /agents/bundle/{id}/run) 404."""
+    def test_no_hand_built_agent_paths(self):
+        """Bundle/instance paths come from the client, not string concatenation.
+
+        The API moved from singular /agents/bundle to plural /agents/bundles on
+        2026-08-11 and the singular forms now 404. Letting the client own the
+        paths is what stops this runner from having to track that again.
+        """
         src = (REF / "run_red_agent.py").read_text()
-        self.assertIn('f"{agents}/bundles/{bundle[\'id\']}/run"', src)
-        self.assertNotIn("/bundle/", src.replace("/bundles/", ""))
+        # no hand-built request URLs (prose in docstrings is fine)
+        self.assertNotIn('f"{agents}', src)
+        self.assertNotIn("urllib.request.Request(", src)
+        for call in ("client().agents.bundles.list(",
+                     "client().agents.bundles.run(",
+                     "client().agents.instances.get_results("):
+            self.assertIn(call, src)
 
 
 if __name__ == "__main__":

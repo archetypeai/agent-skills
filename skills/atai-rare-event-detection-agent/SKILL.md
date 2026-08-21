@@ -140,8 +140,17 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" \
 ```
 
 `?query=` does a case-insensitive **substring** search over name and id
-(`?name=` and `?search=` are silently ignored). Match the name **exactly**
-client-side and prefer `is_canonical: true`. Two bundles are published:
+(`?name=` and `?search=` are silently ignored), and results come back
+newest-first. Match the name **exactly** client-side and prefer
+`is_canonical: true` — measured on Prod:
+
+```
+query 'RED Quick Start'                    -> 2   Embeddings first
+query 'RED Quick Start (Pump Breakdown)'   -> 1   the closing paren excludes it
+```
+
+Taking `data[0]` on a prefix runs the Embeddings bundle: 740 MB where you
+expected 381 KB. Two bundles are published:
 
 | Name | What you get |
 |------|--------------|
@@ -339,13 +348,41 @@ Two structural facts follow from majority labelling:
 - **Cancel with `POST /agents/instances/{id}/cancel`.** Killing a local client
   does not stop the job — `DELETE` returns 409 while running.
 
+## Local Setup
+
+```bash
+cd skills/atai-rare-event-detection-agent/references
+
+# One dependency: the official Archetype AI client. Note the -r.
+pip install -r requirements.txt
+
+# Create the .env IN THIS DIRECTORY — the runner reads ./.env from where it
+# runs (the file is gitignored). BOTH variables required, no default endpoint.
+cat > .env <<EOF
+ATAI_API_KEY=sk_...
+ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+EOF
+
+python3 run_red_agent.py                       # bundled sample slice
+python3 run_red_agent.py --embeddings          # + Omega embedding per window
+python3 run_red_agent.py --csv my_slice.csv    # your own prepared CSV
+python3 run_red_agent.py --score-only out.csv  # re-score a downloaded output
+```
+
+Either endpoint form works — the runner normalises. The client wants the `/v0.5`
+suffix (it keeps the version for `/v0.5/files` and strips it for the versionless
+`/agents`), so a bare root passed straight to the client breaks uploads with an
+empty `ApiError: {}` while bundle calls keep working. The model skills in this
+repo ship `ATAI_API_ENDPOINT` with `/v0.5`; one `.env` serves both families.
+
 ## References
 
-- `references/run_red_agent.py` — stdlib-only end-to-end runner: upload →
+- `references/run_red_agent.py` — end-to-end runner on the official [`archetypeai` client](https://github.com/archetypeai/python-client): upload →
   resolve the Quick Start bundle by name → run → poll → download → score, with
   the three scoring views above. `--embeddings` switches to the Embeddings
   bundle; `--bundle-name`/`--bundle-id` run any other bundle.
 - `references/.env.example` — the two required environment variables.
+- `references/requirements.txt` — the one dependency, the official `archetypeai` client.
 - `references/sample_data/` — a prepared, held-out pump slice with a
   ground-truth sidecar for running and scoring. See its README for full data
   attribution.

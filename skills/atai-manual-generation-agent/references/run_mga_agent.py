@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Run the managed Manual Generation agent end to end, and score its output.
 
-Stdlib only — no pip install, no virtualenv. Put a .env next to where you run:
+Built on the official archetypeai python client (`pip install -r
+requirements.txt`). Put a .env next to where you run:
 
     ATAI_API_KEY=<your API key>
-    ATAI_API_ENDPOINT=https://api.u1.archetypeai.app   # NO /v0.5 suffix
+    ATAI_API_ENDPOINT=https://api.u1.archetypeai.app   # /v0.5 suffix optional
 
     python3 run_mga_agent.py --video procedure.mp4
     python3 run_mga_agent.py --video procedure.mp4 --blueprint mga    # active blueprint
@@ -43,16 +44,17 @@ not either defect but that an unwired value is accepted with HTTP 201 and echoed
 straight back at you, so it costs a 15-minute run to notice. This script
 preflights every value and warns.
 
-max_new_tokens is a FLOOR, not a ceiling. The model REASONS BEFORE IT ANSWERS and
-pays for the reasoning out of this budget, so setting it too low does not give you
-a shorter manual — it gives you no manual, reported as success: job.completed, no
-ERROR row, `results: []`, 38 bytes. Measured on a 173 s video, 2026-08-13:
+max_new_tokens is SHARED WITH THE REASONING BLOCK. The model reasons before it
+answers, so if generation ends inside that block you get no manual, reported as
+success: job.completed, no ERROR row, `results: []`, 38 bytes. ALWAYS COUNT YOUR
+STEPS.
 
-    2048 ->  0 steps       4096 ->  0 steps
-   16384 -> 18 steps      32768 -> 18 steps      65536 -> 18 steps
-
-The last three are BYTE-IDENTICAL (temperature 0), so the threshold is between 4k
-and 16k and nothing above 16384 helps. Count your steps.
+There is no threshold to memorise. A 2026-08-13 measurement on a 173 s video read
+0 steps at 2048/4096 and 18 at 16384/32768/65536; the same video on 2026-08-20
+returned the full 18-step manual at EVERY budget from 2048 to 65536, all
+18/18 identical in content (five different md5s — deterministic in content, not
+in bytes). Treat the older numbers as dated, keep the empty-output check, and see
+SKILL.md, "`max_new_tokens` and the reasoning block".
 
 file_id IS THE FILENAME, and it is a mutable pointer in an ORG-WIDE namespace.
 Uploading the same name again repoints it and orphans the previous object. A run
@@ -68,13 +70,47 @@ import csv
 import datetime
 import json
 import os
+import re
+import shutil
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.request
 import uuid
 
+try:
+    from archetypeai import ArchetypeAI
+except ModuleNotFoundError:  # the only third-party dependency
+    sys.exit("This runner needs the official Archetype AI client:\n"
+             "    pip install -r requirements.txt   (from this directory)\n"
+             "    pip install archetypeai           (or just the package)")
+
 sys.stdout.reconfigure(line_buffering=True)
+
+_CLIENT = None
+
+
+def client() -> "ArchetypeAI":
+    """The official client, built once from the environment."""
+    global _CLIENT
+    if _CLIENT is None:
+        key, endpoint = env()
+        _CLIENT = ArchetypeAI(key, api_endpoint=versioned(endpoint))
+    return _CLIENT
+
+
+def versioned(endpoint: str) -> str:
+    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+
+    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
+    strips the version itself for the versionless agents API. Passing a bare
+    root therefore breaks uploads while bundle calls keep working — an empty
+    `ApiError: {}` that points at nothing.
+
+    Accept either form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    """
+    endpoint = endpoint.rstrip("/")
+    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
 
 # Target the blueprint KEY, never an id.
 #
@@ -122,29 +158,6 @@ def env() -> tuple[str, str]:
     return key, endpoint
 
 
-def api(method: str, url: str, body=None, raw: bool = False):
-    key, _ = env()
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {key}")
-    if data:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            payload = resp.read()
-            # 202 is success for /run — see gotcha 2.
-            if resp.status not in (200, 201, 202):
-                sys.exit(f"{method} {url} unexpected status {resp.status}")
-            return payload if raw else json.loads(payload or b"null")
-    except urllib.error.HTTPError as e:
-        sys.exit(f"{method} {url} failed ({e.code}): {e.read().decode(errors='replace')}")
-
-
-def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
-
-
 def upload_name(path: str) -> str:
     """A collision-proof name to upload under: <stem>-<UTC stamp>-<4 hex>.
 
@@ -159,31 +172,18 @@ def upload_name(path: str) -> str:
 
 
 def upload(path: str, name: str | None = None) -> str:
-    """POST the video as multipart/form-data.
+    """Upload the video and return its file_id.
 
-    The DECLARED Content-Type is checked against a MIME allowlist, not the bytes,
-    so an .mp4 announced as anything else is rejected. Reads the file into memory;
-    stream it in chunks if yours is very large.
+    The client uploads under the file's own basename, so an explicit name means
+    staging a copy first — which is how every run gets a unique, timestamped
+    name (file ids ARE filenames, so re-using one replaces the record and
+    orphans the object any in-flight run already resolved).
     """
-    key, endpoint = env()
-    boundary = uuid.uuid4().hex
-    name = name or os.path.basename(path)
-    body = b"".join([
-        f"--{boundary}\r\n".encode(),
-        f'Content-Disposition: form-data; name="file"; '
-        f'filename="{name}"\r\n'.encode(),
-        b"Content-Type: video/mp4\r\n\r\n",
-        _read_bytes(path),
-        f"\r\n--{boundary}--\r\n".encode(),
-    ])
-    req = urllib.request.Request(f"{endpoint}/v0.5/files", data=body, method="POST")
-    req.add_header("Authorization", f"Bearer {key}")
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    try:
-        with urllib.request.urlopen(req, timeout=900) as resp:
-            return json.loads(resp.read())["file_id"]
-    except urllib.error.HTTPError as e:
-        sys.exit(f"upload failed ({e.code}): {e.read().decode(errors='replace')}")
+    if name and name != os.path.basename(path):
+        staged = os.path.join(tempfile.mkdtemp(), name)
+        shutil.copyfile(path, staged)
+        path = staged
+    return client().files.local.upload(path)["file_id"]
 
 
 def inert_values(bp: dict, values: dict) -> list[str]:
@@ -208,8 +208,8 @@ def watch(agent_id: str, timeout_s: int = 3600) -> str:
     seen: set[str] = set()
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        rows = sorted(api("GET", f"{endpoint}/agents/instances/{agent_id}"
-                               f"/logs?limit=500").get("data", []),
+        rows = sorted(client().agents.instances.get_logs(agent_id, limit=500)
+                      .get("data", []),
                       key=lambda r: str(r.get("created_at")))
         for r in rows:
             marker = f"{r.get('created_at')}|{r.get('event_type')}|{r.get('message')}"
@@ -225,22 +225,18 @@ def watch(agent_id: str, timeout_s: int = 3600) -> str:
 
 
 def fetch_results(agent_id: str, out_path: str) -> str | None:
-    _, endpoint = env()
-    items = api("GET", f"{endpoint}/agents/instances/{agent_id}/results").get("data") or []
+    items = client().agents.instances.get_results(agent_id).get("data") or []
     if not items:
         print("  no results (a failed run leaves none)")
         return None
-    ref = (items[0].get("data") or {}).get("ref") or items[0].get("ref")
-    if not ref:
+    inner = items[0].get("data") or {}
+    name = inner.get("filename") or (inner.get("ref") or "").rsplit("/", 1)[-1]
+    if not name:
         print("  results carried no download ref")
         return None
-    # Run-output refs are RELATIVE platform paths that resolve under /v0.5 and need
-    # the bearer token. They do not expire.
-    payload = api("GET", f"{endpoint}/v0.5{ref}", raw=True)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "wb") as f:
-        f.write(payload)
-    print(f"  saved {out_path} ({len(payload)} bytes)")
+    client().files.local.download(name, out_path)
+    print(f"  saved {out_path} ({os.path.getsize(out_path)} bytes)")
     return out_path
 
 
@@ -396,7 +392,10 @@ def main() -> None:
 
     # Preflight BEFORE uploading: an ignored value should surface in seconds, not
     # after 15 minutes of GPU.
-    bp = api("GET", f"{endpoint}/agents/blueprints/{args.blueprint}")
+    bp = client().agents.blueprints.get(args.blueprint)
+    # NOT include_yaml=True: the published client accepts the kwarg and the
+    # call then fails with an empty `ApiError: {}`. `document` is returned
+    # regardless, which is all the preflight below needs.
     print(f"blueprint {bp['id']} (key={bp['blueprint_key']}, active={bp['is_active']})")
     if not bp["is_active"]:
         print("  WARNING: superseded blueprint. It will read back, bundle and start "
@@ -417,14 +416,12 @@ def main() -> None:
     print(f"  file_id={file_id}")
 
     # No `artifacts` map: the mga blueprint pins newton-fusion and whisper itself.
-    bundle = api("POST", f"{endpoint}/agents/bundles",
-                 body={"blueprint": args.blueprint, "name": args.name,
-                       "values": values})
+    bundle = client().agents.bundles.create(
+        blueprint=args.blueprint, name=args.name, values=values)
     print(f"  bundle_id={bundle['id']}  status={bundle.get('status')}")
 
-    agent = api("POST", f"{endpoint}/agents/bundles/{bundle['id']}/run",
-                body={"connectors": {"source": [
-                    {"type": "file", "id": file_id, "format": "mp4"}]}})
+    agent = client().agents.bundles.run(
+        bundle["id"], source=[{"type": "file", "id": file_id, "format": "mp4"}])
     print(f"started run\n  agent_id={agent['id']}\n"
           f"  watching /logs (~7.5 min of model loading first) ...")
 
