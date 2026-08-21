@@ -106,7 +106,9 @@ cp -r skills/* your-project/.claude/skills/
 
 ## Architecture
 
-The skills here target Newton's **Direct Query API** — one stateless POST to `/query` per request, no session lifecycle, no batch jobs, no SSE plumbing:
+Two API surfaces, one per skill family.
+
+**Models — the Direct Query API.** One stateless POST to `/query` per request: no session lifecycle, no batch jobs, no SSE plumbing.
 
 ```
 Text:          POST /query ──────────────────────────────────► response
@@ -115,13 +117,26 @@ Video (.mp4):  Upload file → POST /query + max_frames ────────
 Video frames:  POST /query (frames + query_metadata) ─────────► response
 ```
 
-The reference scripts are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`).
+**Agents — the Agents API.** You upload an input, run a pre-packaged bundle or a canonical blueprint, poll, and download the output; the model runs server-side.
+
+```
+Upload:   POST /v0.5/files ───────────────────────────────────► file_id
+Resolve:  GET  /agents/bundles?query=<name> ──────────────────► bnd_…
+          (or GET /agents/blueprints/<key> → POST /agents/bundles)
+Run:      POST /agents/bundles/<bnd_…>/run ───────────────────► agt_…
+Poll:     GET  /agents/instances/<agt_…>/logs | /events
+Collect:  GET  /agents/instances/<agt_…>/results ─────────────► output file
+```
+
+Every reference script is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`.
 
 ## API Base URL
 
 ```
-https://api.u1.archetypeai.app/v0.5
+https://api.u1.archetypeai.app
 ```
+
+**The two surfaces are mounted differently, and this is the most common way to lose a run:** the files API is versioned (`/v0.5/files`) while the Agents API is **versionless** (`/agents`, never `/v0.5/agents`). The client handles both from one value — pass the endpoint *with* the `/v0.5` suffix and it strips the version for `/agents` itself. Pass a bare root and uploads fail with an empty `ApiError: {}` while bundle calls keep working, which points at nothing. The agent runners normalise either form, so one `.env` serves every skill here.
 
 ## License
 
