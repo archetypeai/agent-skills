@@ -169,16 +169,6 @@ def env() -> tuple[str, str]:
     return key, endpoint
 
 
-def remote_bytes(file_id: str) -> bytes | None:
-    """The object currently stored under `file_id`, or None if absent."""
-    out = os.path.join(tempfile.mkdtemp(), "remote.bin")
-    try:
-        client().files.local.download(file_id, out)
-    except Exception:      # absent, or not readable — treat as "not there"
-        return None
-    return open(out, "rb").read() if os.path.exists(out) else None
-
-
 def run_suffix() -> str:
     """`<UTC timestamp>-<4 hex>`, generated ONCE per run and shared by its inputs.
 
@@ -237,11 +227,12 @@ def upload(path: str, rename: str | None = None) -> str:
     """
     if not os.path.exists(path):
         sys.exit(f"no such file: {path}")
+    # No "already uploaded?" probe. Every upload here is renamed with a
+    # per-run <UTC>-<hex> suffix, so the object can never already exist — the
+    # check could not fire, and probing for it means downloading the remote
+    # object in full just to compare bytes. (It was equally dead before this
+    # runner moved to the client; the client just logs the 404 loudly.)
     name = rename or os.path.basename(path)
-    local = open(path, "rb").read()
-    if remote_bytes(name) == local:
-        print(f"  {name}: identical object already on the platform — skipping upload")
-        return name
     # The client uploads under the file's own basename, so an explicit name
     # means staging a copy under that name first.
     if name != os.path.basename(path):
