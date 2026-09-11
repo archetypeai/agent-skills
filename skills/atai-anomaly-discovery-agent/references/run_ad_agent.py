@@ -348,6 +348,27 @@ def report(res: dict, threshold: float) -> None:
     print("  degradation is already underway when the detector fires.")
 
 
+
+def failure_detail(agent_id: str) -> str:
+    """The instance's own `error`, which is where a dispatch failure lands.
+
+    /logs is empty when a run dies before a pod starts — the platform never got
+    far enough to log anything — so "watch the logs" leads nowhere for exactly
+    the failures a user cannot diagnose on their own. One example seen in the
+    wild, on a region whose bundles were registered but whose GPU pipeline was
+    not deployed:
+
+        JOS job creation failed: JOS request failed: [404] NOT_FOUND:
+        Pipeline 'agent-runner-cuda' has no active versions
+
+    Nothing in the client output hinted at it before this.
+    """
+    try:
+        error = client().agents.instances.get(agent_id).get("error")
+    except Exception:                       # never let reporting mask the failure
+        return ""
+    return f"\n  error: {error}" if error else ""
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--csv", default=DEFAULT_CSV,
@@ -422,7 +443,7 @@ def main() -> None:
     status = poll(agent_id)
     print(f"  status={status}")
     if status not in ("completed", "succeeded"):
-        sys.exit(f"run did not complete: {status}")
+        sys.exit(f"run did not complete: {status}{failure_detail(agent_id)}")
 
     if not download_results(agent_id, args.output):
         sys.exit("no results to score")
