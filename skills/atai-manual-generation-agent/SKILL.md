@@ -27,7 +27,7 @@ video ─► sample frames ─┐
         whisper ASR ────┘
 ```
 
-MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit and no `artifacts` map to pass**. A run is upload → bundle → run → download.
+MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion:1.0` and `whisper:base`), so unlike `osm`/`red` there is **no classifier to fit and no `artifacts` map to pass**. A run is upload → bundle → run → download.
 
 > **Availability.** The canonical `mga` blueprint resolves by key on the
 > production deployment (`https://api.u1.archetypeai.app`) — set

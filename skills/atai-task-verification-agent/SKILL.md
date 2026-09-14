@@ -29,7 +29,7 @@ SOP (.txt) ──► PrepareSOPNode ──────────┤
          whisper ASR ───────────────────┘
 ```
 
-TVA V1 is **zero-shot**. The `tva` blueprint pins its own models (`newton-fusion:1.0` and `whisper:large-v3`), so like `mga` — and unlike `osm`/`red` — there is **no classifier to fit and no `artifacts` map to pass**.
+TVA V1 is **zero-shot**. The `tva` blueprint pins its own models (`newton-fusion:1.0` and `whisper:base`), so like `mga` — and unlike `osm`/`red` — there is **no classifier to fit and no `artifacts` map to pass**.
 
 ## When to Apply
 

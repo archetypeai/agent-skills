@@ -572,7 +572,7 @@ def main() -> None:
     print(f"  video={video_id}  sop={sop_id}")
 
     # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and
-    # whisper:large-v3 itself. Note the PLURAL /bundles — the singular 404s.
+    # whisper itself. Note the PLURAL /bundles — the singular 404s.
     bundle = client().agents.bundles.create(
         blueprint=args.blueprint, name=args.name, values=values)
     print(f"bundle {bundle['id']} status={bundle.get('status')}")
