@@ -151,6 +151,7 @@ X_train, X_test, y_train, y_test, meta_train, meta_test = splitter.split(X, y, m
 | Skill | Relationship |
 |-------|--------------|
 | [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) | **Sibling + downstream** — the Omega embedding step that sits between `DataPreprocessor.build()` and `FeaturePreparer.prepare()`, then consumes the resulting `(X, y, metadata)` for per-window KNN against the `/query` Omega embedding. This skill is its on-ramp (clean) and off-ramp (featurize). |
+| [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) | **Sibling for the managed OSM agent** — feeding the OSM agent instead of a local KNN? It turns labelled recordings into the role files the OSM platform accepts (exact grid, one training file per state, continuous scored files, a preflight of the platform's rules). Clean messy raw data here first if needed; `FeaturePreparer` has no role there (the platform embeds). |
 | [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) | **Upstream gate (external repo)** — read-only static checks. Run *before* this skill to decide whether the dataset is worth cleaning. |
 
 ## Common Pitfalls

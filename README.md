@@ -12,11 +12,12 @@ Three groups: **Agents** run a maintained pipeline server-side over the Agents A
 
 ### Agents
 
-Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or canonical blueprint, poll, download the output. Nothing to fit, no model to host. The three sensor agents differ by **what you already have labelled**: every regime (OSM), a handful of examples of one named fault (RED), or nothing but normal operation (AD).
+Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or canonical blueprint, poll, download the output. No model to host. The three sensor agents differ by **what you already have labelled**: every regime (OSM), a handful of examples of one named fault (RED), or nothing but normal operation (AD). OSM can also be **fitted to your own data** on the platform (Optimizations → promote → Evals → bundle), with its data-prep skill in front.
 
 | Skill | Description |
 |-------|-------------|
-| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the managed OSM agent over the Agents API — resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions |
+| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the OSM agent over the Agents API, two paths. **Path 1:** resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions. **Path 2 (dev-verified; production pending):** build an agent on your own labelled data — fit and score settings with the Optimizations API, promote the best trial to a blueprint, test it once with the Evals API, deliver it as a bundle, and score the delivery |
+| [atai-operational-state-monitoring-agent-data-prep](skills/atai-operational-state-monitoring-agent-data-prep/) | Turn labelled sensor recordings into the role files the OSM platform accepts — exact sample grid split at gaps, a check that the sensor can tell the states apart, a group-aware split, library-only z-score, one training file per state, continuous scored files, held-back delivery labels — and preflight every platform rule before upload. Local, no API key |
 | [atai-rare-event-detection-agent](skills/atai-rare-event-detection-agent/) | Run the managed RED agent over the Agents API — resolve the pre-packaged "RED Quick Start" bundle by name (nearest-prototype classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window rare-event predictions |
 | [atai-anomaly-discovery-agent](skills/atai-anomaly-discovery-agent/) | Run the managed Anomaly Discovery agent over the Agents API — resolve the pre-packaged "AD Quick Start" bundle by name (fitted LOF detector + threshold already pinned), run one agent per input CSV, poll, and download a per-window anomaly score. For assets with **no fault history**: fitted on normal-only data, so everything it flags is something it was never shown |
 | [atai-manual-generation-agent](skills/atai-manual-generation-agent/) | Run the managed Manual Generation (MGA) agent over the Agents API — upload a procedure video, run the canonical `mga` blueprint, and get back an ordered, timestamped manual with each step traceable to a time range in the source |
@@ -90,6 +91,7 @@ cp -r skills/* your-project/.claude/skills/
 ```
 # Agents — managed pipelines over the Agents API
 /atai-operational-state-monitoring-agent # Every operating regime, from a full labelled library
+/atai-operational-state-monitoring-agent-data-prep # Labelled recordings -> OSM role files, preflighted
 /atai-rare-event-detection-agent   # One named fault, from a handful of labelled examples
 /atai-anomaly-discovery-agent      # Normal-only fit; per-window anomaly score, no fault history needed
 /atai-manual-generation-agent      # Procedure video -> ordered, timestamped manual
@@ -128,7 +130,7 @@ Poll:     GET  /agents/instances/<agt_…>/logs | /events
 Collect:  GET  /agents/instances/<agt_…>/results ─────────────► output file
 ```
 
-Every reference script is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`.
+Every reference script is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
 
 ## API Base URL
 
