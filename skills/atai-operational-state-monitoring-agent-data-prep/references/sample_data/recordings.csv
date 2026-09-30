@@ -1,0 +1,6 @@
+recording,file,role,group
+becken_warm_15-min_40_2,becken_warm_15-min_40_2.parquet,library,becken_warm_15-min_40_2
+becken-flt_warm_fast-15_11,becken-flt_warm_fast-15_11.parquet,library,becken-flt_warm_fast-15_11
+becken_warm_15-min_40_0,becken_warm_15-min_40_0.parquet,validation,becken_warm_15-min_40_0
+becken-flt_warm_fast-15_2,becken-flt_warm_fast-15_2.parquet,test,becken-flt_warm_fast-15_2
+becken-flt_warm_fast-15_0,becken-flt_warm_fast-15_0.parquet,delivery,becken-flt_warm_fast-15_0
