@@ -50,6 +50,17 @@ def windows(df, channels, window):
     return np.array(F), np.array(y)
 
 
+def vote(neighbours):
+    """Majority label of the neighbours (nearest first); a tie goes to the nearest of the tied.
+
+    Deterministic: `max(set(...))` would break ties by set order, which changes with every
+    process (string hash randomisation), so the same data could score differently run to run.
+    """
+    labels, counts = np.unique(neighbours, return_counts=True)
+    tied = set(labels[counts == counts.max()])
+    return next(x for x in neighbours if x in tied)
+
+
 def knn(Xtr, ytr, Xte, k):
     mu, sd = Xtr.mean(0), Xtr.std(0)
     sd[sd < 1e-12] = 1
@@ -58,9 +69,8 @@ def knn(Xtr, ytr, Xte, k):
     block = max(1, int(2.5e8 / (8 * len(A) * A.shape[1])))      # keeps the distance work near 250 MB
     for i in range(0, len(B), block):
         d = np.abs(B[i:i + block, None, :] - A[None]).sum(2)
-        nn = np.argsort(d, axis=1)[:, :k]
-        vals = ytr[nn]
-        out += [max(set(r), key=list(r).count) for r in vals]
+        nn = np.argsort(d, axis=1, kind="stable")[:, :k]
+        out += [vote(r) for r in ytr[nn]]
     return np.array(out)
 
 

@@ -250,6 +250,13 @@ def test_config_size_estimate_fails_too_many_training_files():
 
 # --- check_states --------------------------------------------------------------------------
 
+def test_check_states_vote_is_deterministic():
+    # a 2-2 tie goes to the nearest of the tied, whatever the process's hash seed
+    assert check_states.vote(np.array(["wash", "spin", "spin", "wash"])) == "wash"
+    assert check_states.vote(np.array(["spin", "wash", "wash", "spin", "fill"])) == "spin"
+    assert check_states.vote(np.array(["fill", "wash", "wash"])) == "wash"
+
+
 def test_check_states_separates_distinct_states(workdir):
     run_prep(workdir)
     rep = check_states.check(osm_common.read_index(str(workdir / "recordings.csv")), str(workdir / "prepared"),

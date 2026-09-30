@@ -136,10 +136,10 @@ spectrum), training classes balanced. Per state: the recall on recordings it nev
 and where the misses go.
 
 ```
-  ok    drain            recall 0.70  (207 windows)  → mostly wash (20%)
-  ok    fill             recall 0.94  (356 windows)  → mostly wash (6%)
-  WARN  spin             recall 0.42  (167 windows)  → mostly wash (39%)
-  ok    wash             recall 0.84  (410 windows)  → mostly spin (10%)
+  ok    drain            recall 0.70  (207 windows)  → mostly wash (18%)
+  ok    fill             recall 0.95  (356 windows)  → mostly wash (4%)
+  WARN  spin             recall 0.41  (167 windows)  → mostly wash (39%)
+  ok    wash             recall 0.82  (410 windows)  → mostly spin (11%)
 ```
 
 **Read it before committing to a state list.** A state the sensor can't see caps every
