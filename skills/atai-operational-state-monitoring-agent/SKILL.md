@@ -1,51 +1,78 @@
 ---
 name: atai-operational-state-monitoring-agent
 description: >
-  Run Archetype AI's managed Operational State Monitoring (OSM) agent over
-  the Agents API — upload a sensor CSV, resolve a maintained pre-packaged
-  "OSM Quick Start" bundle (classifier + windowing already pinned), run it,
-  poll status + audit events, download the per-window state predictions. Use
-  when the user wants fully-managed, server-side classification of
-  operational states over a CSV of sensor records — drilling states, machine
-  modes, process phases — without fitting or hosting a classifier
-  themselves. Covers resolving the bundle by name (portable across
-  deployments), the run/poll/results lifecycle, the output CSV schema
-  (`finish_timestamp, predicted_state, invalid, p_<state>…`), and scoring
-  against a ground-truth sidecar. Do NOT use for client-side embedding + KNN
-  over `/query` (that's `atai-newton-omega-model`), for cleaning / windowing
-  raw CSVs (`atai-newton-omega-model-data-prep`), or for fitting a
-  classifier artifact yourself (contact support@archetypeai.dev).
+  Run Archetype AI's Operational State Monitoring (OSM) agent over the Agents API,
+  on two paths. Path 1 — run a maintained, pre-packaged "OSM Quick Start" bundle
+  (the Volve six-state classifier + windowing already pinned; plain or with per-window
+  Omega embeddings): upload a sensor CSV, resolve the bundle by exact name, run, poll,
+  download per-window state predictions, score against a ground-truth sidecar.
+  Path 2 — build an OSM agent on YOUR OWN labelled data: from role files
+  (library / validation / test / delivery) fit and score settings with the
+  Optimizations API, promote the best trial to a blueprint, test it once with the
+  Evals API, then deliver it as a bundle over new recordings and score the delivery.
+  Covers the search space, promote, Evals, batch runs, the output CSV schema
+  (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
+  and the platform's limits (1 MiB config, time jumps, absent states score 0).
+  Path 2 is verified on the dev deployment; production pending. Do NOT use for
+  client-side embedding + KNN over `/query` (that's `atai-newton-omega-model`), for
+  turning raw sensor recordings into role files (that's
+  `atai-operational-state-monitoring-agent-data-prep`), or for generic time-series
+  cleaning (`atai-newton-omega-model-data-prep`).
 ---
 
 # OSM Agent — Managed State Classification via the Agents API
 
-The OSM agent is the **fully-managed counterpart** to the client-side embed-and-KNN pattern in [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md): instead of fanning out `/query` embedding calls and classifying locally, you hand the platform a CSV and the platform runs the whole graph server-side:
+The OSM agent labels every window of a multichannel sensor recording with an **operational
+state** (drilling activities, machine modes, process phases) server-side. The platform runs the
+whole graph:
 
 ```
 source → interpolate → window → windowInterpolate → samplingRate → limitValues → encoder → classifier → sink
 ```
 
-You don't build or host anything: the platform ships **canonical "OSM Quick Start" bundles** with the six-state Volve classifier and its windowing already pinned. One run = one agent instance = one input file. You upload the CSV, **resolve the pre-packaged bundle by name**, run it, poll until terminal, and download one output CSV of per-window predictions.
+The encoder is Newton Omega; the classifier is a kNN over Omega embeddings. You never host
+either.
+
+## Choose a path
+
+| | **Path 1 — run a maintained bundle** | **Path 2 — build an agent on your data** |
+|---|---|---|
+| you have | a prepared CSV (the Volve sample, or data like it) | labelled recordings of **your** machine |
+| you get | per-window predictions from Archetype AI's six-state Volve classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
+| scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
+| time | ~1–2 min on a clear queue | ~15 min for a small dataset (the LARCO quickstart); hours for large ones |
+| status | verified on production | **verified on dev (2026-09-30); production pending** |
+
+Path 2's last step *is* Path 1, run on your own bundle instead of the maintained one, so the
+output schema, polling, pitfalls and cleanup below apply to both.
+
+**Tailored work** (a classifier Archetype AI fits and packages for your data, or help with a
+hard dataset): support@archetypeai.dev.
 
 ## When to Apply
 
-- Classify operational states over a full CSV of sensor records with **no client-side ML and no classifier of your own** — the maintained bundle embeds and classifies every window
+- Classify operational states over a CSV with **no client-side ML** — Path 1 for the
+  maintained Volve bundle, Path 2 for your own states
+- Build, test and deploy an OSM agent for **your** machine from labelled recordings — Path 2
 - Demo or evaluate the managed OSM path as a **deployed, repeatable batch job**
-- Score the managed predictions on held-out slices against a ground-truth sidecar
-
-> **Your own data?** As of today, this skill runs the **pre-packaged OSM
-> Quick Start bundles**, whose classifier is fit to the Volve six-state
-> drilling data. To classify your own data with states that match it, contact
-> **support@archetypeai.dev** — Archetype AI will work with you to create
-> agent bundles tailored to your data. (The "Bring your own classifier"
-> section below documents the underlying mechanics.)
+- Score managed predictions against held-out ground truth
 
 **Do not use this skill when:**
 - You want interactive, per-window embeddings to do ML client-side — use [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
-- The raw CSV still needs cleaning / gap-aware segmentation / normalization — see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md); the OSM agent assumes prepared, z-scored input
-- You want to run **your own** fitted classifier rather than the pre-packaged one — the supported path is a **tailored bundle created with Archetype AI** (contact support@archetypeai.dev); the underlying mechanics (blueprint `osm` + a `fit-classifier` S3 artifact) are in the "Bring your own classifier" note below
+- Your recordings still need resampling, labelling or splitting into role files — use [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) first; for generic cleaning of messy raw data, [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md)
 
-## Endpoints
+---
+
+# Path 1 — Run a maintained bundle
+
+The platform ships **canonical "OSM Quick Start" bundles** with the six-state Volve classifier and
+its windowing already pinned. One run = one agent instance = one input file. You upload the CSV,
+**resolve the pre-packaged bundle by name**, run it, poll until terminal, and download one output CSV
+of per-window predictions. The classifier is fit to Volve drilling data; for your own states, see
+Path 2.
+
+## Endpoints (both paths)
 
 Two API surfaces are involved, mounted differently:
 
@@ -181,38 +208,7 @@ Budget by the **audit events, not the clock** — you cannot see other tenants' 
 - **Sampling-rate warnings are expected on irregular data.** The bundle loosens the tolerance for Volve's irregular sampling (Δt 1–27 s); expect warnings, not failures.
 - **Score with end-row labeling on `finish_timestamp` and exclude `INVALID_STATE`.** Predictions are keyed to the window-end timestamp; seam windows are invalidated.
 
-## Bring your own classifier (advanced)
-
-The pre-packaged bundle runs Archetype AI's six-state Volve classifier. To run **your own** fitted classifier instead, create your own bundle from the `osm` blueprint and skip Step 2:
-
-```sh
-curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
-    "blueprint": "osm",
-    "name": "my OSM run",
-    "values": {"window_size": 16, "step_size": 1,
-               "sample_rate_interval_tolerance": 10.0},
-    "artifacts": {"fit-classifier": "s3://<bucket>/<prefix>/my-classifier.safetensors"}
-  }'
-```
-
-Then run the returned bundle id as in Step 3. Notes: the `fit-classifier` artifact **must be an `s3://` URI** (platform file ids and `https://` URLs fail with ENOENT; the files API's MIME allowlist rejects safetensors anyway); it must be in the **platform schema** (`ids`/`vectors`/`weights` tensors + `index`/`classifier` manifests), and `values.window_size` **must match the window the classifier was fitted with** (a mismatch silently degrades accuracy instead of erroring). Fitting the artifact is out of scope here — for a classifier fitted and packaged for your own data, contact support@archetypeai.dev.
-
-## Cleanup
-
-Each run leaves an agent instance behind; the pre-packaged bundle is canonical and shared — **do not delete it**. Delete your own agent instances (and any bundle you created yourself):
-
-```sh
-curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"       # your run's instance
-curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID"        # only a bundle YOU created
-```
-
-(`DELETE` on a running instance returns 409 — cancel first with
-`POST /agents/instances/{id}/cancel`.)
-
-## Local Setup
+## Local Setup (Path 1)
 
 ```bash
 cd skills/atai-operational-state-monitoring-agent/references
@@ -240,19 +236,203 @@ python3 run_osm_agent.py --csv my_slice.csv     # your own prepared CSV
 
 Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the worker queue is clear (verified: 107 s base, 70 s Embeddings, end-to-end) — and **~22–27 min** when workers are contended (also verified, same slice). The queue state isn't visible to you; the run's own audit events are the signal. The script resolves the bundle by name, streams audit events while it polls, and self-scores against the `_labels.csv` sidecar at the end.
 
+
+---
+
+# Path 2 — Build an OSM agent on your own data
+
+> **Status: verified end to end on the dev deployment (2026-09-30)**, twice, with identical
+> results, on the LARCO washing-machine data:
+> [osm-agent-example-larco-quickstart](https://github.com/archetypeai/osm-agent-example-larco-quickstart)
+> (19 short cycles, the whole lifecycle in ~15 min) and
+> [osm-agent-example-larco](https://github.com/archetypeai/osm-agent-example-larco) (199 cycles,
+> the full study). **Production availability of the Optimizations API, promote and the Evals API
+> is pending validation**; set `ATAI_API_ENDPOINT` to the deployment you've validated.
+> The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
+> because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
+> client when it does.
+
+```
+role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
+  (prep skill)   fit + score     best trial     one-shot, pooled          predictions per file       held-back labels
+                 on validation   → blueprint
+```
+
+Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
+
+## Step 0 — Role files
+
+Path 2 starts from **role files**, built and checked by
+[`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md)
+to its contract, [`role-files.md`](../atai-operational-state-monitoring-agent-data-prep/references/role-files.md):
+
+| role | what | used in |
+|---|---|---|
+| `library/<state>__library.csv` | **one file per state**, its windows as continuous pieces | training, every trial |
+| `validation/<recording>__seg<N>.csv` | whole recordings, with `label` | scoring each trial (the `search_validation` subset) |
+| `test/…` | whole recordings, with `label` | scored **once**, after promotion |
+| `delivery/…` + `delivery_labels/…` | whole recordings **without** `label`; labels held back row for row | the deployed run, scored afterwards |
+
+plus `manifest.json` (states, channels, every file and piece). The scripts read the states from
+the manifest; nothing is hard-coded to one dataset.
+
+Three contract rules decide whether a run works at all:
+- **One library file per state:** an optimization's config must fit in **1 MiB** (~1,500 training
+  files at most); over it the job stays `pending` forever with no error.
+- **No time jumps in scored files:** one scored window across a jump fails the whole trial or eval.
+- **Every state in every scored set:** an absent state scores F1 = 0.
+
+## Step 1 — Optimize: fit and score settings
+
+```sh
+cd references/osm_lifecycle
+pip install -r requirements.txt
+python optimize.py --roles /path/to/roles --dry-run            # the plan: no uploads, no jobs
+python optimize.py --roles /path/to/roles --out out --name larco --background
+```
+
+`POST /agents/optimizations` with the `osm` blueprint's id (resolved from its key), the library
+files as `training_examples` (ground truth `{"from": {"constant": "<state>"}}`, the state from the
+filename), the search-validation files as `validation_examples` (ground truth
+`{"from": {"column": "label"}, "downsampling": "last_record"}`: each window gets the label of its
+last row), `"objective": "macro_f1"`, a `budget.max_trials`, and a search space:
+
+```json
+{"parameters": {
+  "window_size": {"kind": "value",   "spec": {"type": "categorical", "values": [512]}},
+  "step_size":   {"kind": "value",   "spec": {"type": "categorical", "values": [512]}},
+  "k_neighbors": {"kind": "fitting", "spec": {"type": "categorical", "values": [5, 31]}},
+  "metric":      {"kind": "fitting", "spec": {"type": "categorical", "values": ["cosine"]}},
+  "weights":     {"kind": "fitting", "spec": {"type": "categorical", "values": ["uniform"]}}}}
+```
+
+- **`value`** parameters shape the data (windowing); **`fitting`** parameters shape the kNN.
+- **The space is the product** of the values. `max_trials` equal to its size runs every point
+  once (the script's default); below it, the platform **samples at random**, repeats possible.
+- **Step > window** skips records; the script refuses it unless `--allow-gaps`.
+- **Trials run one after another,** also across optimizations. Poll
+  `GET /agents/optimizations/{id}` (status + `progress`), then list
+  `GET /agents/optimizations/{id}/trials` (paged; pass `next_cursor` back verbatim).
+- **Each completed trial carries a `metrics_report`:** `primary.value` = macro-F1 (also
+  `objective_value`), and under `targets.state`: `class_names` (**alphabetical**),
+  `per_class.{f1, precision, recall, support}` in that order, and the `confusion_matrix`
+  (rows = true).
+
+Writes `out/optimize_<id>.json`. On the LARCO quickstart (2 trials, 4 min): k 5 scored
+0.8305, k 31 0.7980.
+
+## Step 2 — Promote, then test once
+
+```sh
+python promote_and_test.py --roles /path/to/roles --out out --name larco --background
+```
+
+1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
+   `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `blueprint_key`, `name` and
+   `description` returns a **blueprint with the setting and the fitted kNN attached**: a reusable
+   model with no S3 artifact to build. Keys must be **unique per trial**: the script uses
+   `<name>-w512-s512-cosine-k5-uniform-<last 6 of the trial id>`.
+2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
+   one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
+   `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file
+   breakdown).
+
+Every id is saved in `out/test_state.json`, so a rerun resumes instead of promoting or testing
+again. Once you've seen the test number, the setting is frozen: tuning after it makes the test
+optimistic. LARCO quickstart: test macro-F1 0.8617 on 3 cycles, 3 min.
+
+## Step 3 — Deliver: your bundle, run in batches
+
+```sh
+python deliver.py --roles /path/to/roles --out out --name larco --background
+```
+
+`POST /agents/bundles {"blueprint": "<your key>", "name": …}` creates the deployable agent; then
+`POST /agents/bundles/{id}/run` with the delivery files as source connectors (`file_id`, not the
+`fil_` uid), as in Path 1's Step 3. `--files-per-run N` splits the files into several runs (a
+failed run then loses less); the default is one run. The platform processes a run's files one at
+a time, and several runs one at a time too.
+
+**Outputs don't name their inputs:** the script matches every output row to its delivery file by
+`finish_timestamp` (recordings must not overlap in time) and writes `out/delivery/<file>.csv`.
+Run ids are saved to `out/delivery/runs.json` as each run starts; `--resume` collects them.
+
+## Step 4 — Score the delivery
+
+```sh
+python score.py --roles /path/to/roles --out out
+```
+
+Each prediction is paired with the held-back label at its window's last row (the
+`delivery_labels/` row whose timestamp equals `finish_timestamp`); `invalid` windows are left out
+and counted. Macro-F1 is platform-style: over every state in the manifest, an absent state
+counting 0. Reported pooled and per recording, next to the test number. LARCO quickstart:
+delivery 0.7707 on a second, faulty unit, against 0.8617 on test.
+
+## Path 2 pitfalls
+
+- **A stuck-`pending` optimization with no error** is almost always the 1 MiB config limit: too
+  many training files. Pack one file per state.
+- **A trial or eval that fails with `eval-mode test data must not contain windows a validation
+  node rejected`** means a scored file has a time jump inside it.
+- **Suspiciously low macro-F1 with one state at 0** usually means that state is missing from the
+  scored set, not that the model can't see it.
+- **Don't time trials by their `created_at`:** every trial gets the optimization's creation time.
+- **Keep upload concurrency low (~3):** parallel large uploads can saturate the uplink until DNS
+  lookups fail. The helper retries uploads and GETs; it never retries a POST that may have
+  reached the server.
+- **A state the sensor can't see caps every score.** Check separability in data prep before
+  fixing the state list (LARCO's `heating` had to be folded into `wash`).
+
+## Cleanup (both paths)
+
+Each run leaves an agent instance behind; the pre-packaged bundle is canonical and shared — **do not delete it**. Delete your own agent instances (and any bundle you created yourself, e.g. Path 2's delivery bundle):
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"       # your run's instance
+curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
+  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID"        # only a bundle YOU created
+```
+
+(`DELETE` on a running instance returns 409 — cancel first with
+`POST /agents/instances/{id}/cancel`.)
+
+
+## Bring your own classifier artifact (legacy route)
+
+Path 2's promote replaces this. For completeness: a bundle can also be created from the `osm`
+blueprint with an externally fitted classifier, `"artifacts": {"fit-classifier":
+"s3://<bucket>/<prefix>/my-classifier.safetensors"}` plus matching `values`
+(`window_size`, `step_size`, `sample_rate_interval_tolerance`). The artifact must be an `s3://`
+URI in the platform schema (`ids`/`vectors`/`weights` tensors + `index`/`classifier`
+manifests), and `values.window_size` must match the window it was fitted with (a mismatch
+silently degrades accuracy). Fitting it is out of scope; contact support@archetypeai.dev.
+
 ## File Layout
 
 ```
 skills/atai-operational-state-monitoring-agent/
 ├── SKILL.md                  ← this file
 ├── references/
-│   ├── run_osm_agent.py      ← the whole managed flow on the official client (upload → resolve pre-packaged bundle → run → poll → download → score)
-│   ├── requirements.txt      ← archetypeai
-│   ├── .env.example          ← copy to .env and fill in
-│   └── sample_data/
-│       ├── volve_states_opt_slice_04.csv         ← 4,200-row six-state eval slice (prepared + z-scored)
-│       ├── volve_states_opt_slice_04_labels.csv  ← ground-truth sidecar (DATE_TIME,label), scoring only
-│       └── README.md                             ← dataset attribution (Equinor Volve) + prep provenance
+│   ├── run_osm_agent.py      ← Path 1: the managed flow on the official client (upload → resolve bundle → run → poll → download → score)
+│   ├── requirements.txt      ← Path 1: archetypeai
+│   ├── .env.example          ← copy to .env and fill in (both paths)
+│   ├── sample_data/          ← Path 1: the Volve six-state eval slice + labels sidecar + attribution
+│   ├── platform-notes.md     ← Path 2: measured platform behaviour (dev, 2026-09-30)
+│   └── osm_lifecycle/        ← Path 2 (stdlib HTTP until the client covers these APIs)
+│       ├── atai_http.py        requests with retries, uploads with a cache, paging, polling
+│       ├── common.py           the role-file manifest, examples, logging
+│       ├── background.py       --background: nohup (+ caffeinate on macOS), output to a log
+│       ├── optimize.py         Step 1: search space → Optimizations API → trials
+│       ├── promote_and_test.py Step 2: best trial → blueprint → one eval
+│       ├── deliver.py          Step 3: bundle from the blueprint → runs → outputs matched by time
+│       ├── score.py            Step 4: last-record pairing against the held-back labels
+│       └── requirements.txt    numpy, pandas, pyarrow (score.py)
 └── tests/
-    └── test_references.py    ← network-free unit tests (python -m unittest)
+    ├── test_references.py    ← Path 1: network-free unit tests (python -m unittest)
+    └── test_lifecycle.py     ← Path 2: network-free unit tests
 ```
+
+Run both: `python -m unittest discover -s skills/atai-operational-state-monitoring-agent/tests`
+(`test_references.py` needs `archetypeai` installed; `test_lifecycle.py`'s scoring tests need pandas).

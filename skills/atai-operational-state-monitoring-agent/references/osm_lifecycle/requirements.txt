@@ -1,0 +1,5 @@
+# Runtime dependencies for Path 2 (osm_lifecycle/): only score.py needs them.
+#   pip install -r requirements.txt
+numpy>=1.24
+pandas>=2.0
+pyarrow>=14
