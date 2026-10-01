@@ -66,7 +66,7 @@ def main():
     ap.add_argument("--name", default="osm", help="the blueprint key's prefix")
     ap.add_argument("--trial", metavar="OTR_ID", help="promote this trial instead of the best one")
     ap.add_argument("--upload-jobs", type=int, default=3)
-    add_background_flag(ap, default_log="out/test.log")
+    add_background_flag(ap, default_log="{out}/test.log")
     args = ap.parse_args()
     maybe_detach(args)
     load_dotenv()

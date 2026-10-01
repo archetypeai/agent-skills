@@ -83,7 +83,7 @@ def main():
     ap.add_argument("--upload-jobs", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resume", metavar="OPT_ID")
-    add_background_flag(ap, default_log="out/optimize.log")
+    add_background_flag(ap, default_log="{out}/optimize.log")
     args = ap.parse_args()
     maybe_detach(args)
 
@@ -124,6 +124,8 @@ def main():
                progress=lambda o: o.get("progress", {}))
     trials = list_trials(opt_id)
     print(f"\noptimization {opt_id}: {opt['status']}")
+    if opt.get("error"):
+        print(f"  error from the platform: {opt['error']}")
     rows = summarize(trials, states)
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"optimize_{opt_id}.json")

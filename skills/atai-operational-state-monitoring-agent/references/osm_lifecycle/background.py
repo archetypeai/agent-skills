@@ -4,7 +4,7 @@ The relaunched run survives closing the terminal (nohup), and on macOS keeps the
 idle-sleeping until it ends (caffeinate -i). Output goes to a log file. Stdlib only.
 
     ap = argparse.ArgumentParser(...)
-    add_background_flag(ap, default_log="out/optimize.log")
+    add_background_flag(ap, default_log="{out}/optimize.log")    # {out} = the script's --out
     args = ap.parse_args()
     maybe_detach(args)          # returns only in the foreground run
 """
@@ -17,7 +17,8 @@ import sys
 
 def add_background_flag(ap, default_log):
     ap.add_argument("--background", nargs="?", const=default_log, metavar="LOG",
-                    help=f"run detached under nohup (+ caffeinate on macOS), output to LOG (default {default_log})")
+                    help=f"run detached under nohup (+ caffeinate on macOS), output to LOG "
+                         f"(default {default_log.replace('{out}', '<--out>')})")
 
 
 def _strip_flag(argv):
@@ -41,7 +42,9 @@ def maybe_detach(args):
     if not getattr(args, "background", None):
         return
     cwd = os.getcwd()          # relative --roles / --out keep meaning the same folders
-    log = os.path.abspath(args.background)
+    # the default log lives in the run's own --out folder, so runs against different
+    # deployments (out-staging/, …) never share a log
+    log = os.path.abspath(args.background.replace("{out}", getattr(args, "out", None) or "out"))
     os.makedirs(os.path.dirname(log), exist_ok=True)
     keep_awake = ["caffeinate", "-i"] if shutil.which("caffeinate") else []
     cmd = ["nohup", *keep_awake, sys.executable, "-u", os.path.abspath(sys.argv[0]), *_strip_flag(sys.argv[1:])]

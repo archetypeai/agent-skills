@@ -148,7 +148,7 @@ def main():
     ap.add_argument("--files-per-run", type=int, default=0, help="files per run (default 0: all in one run)")
     ap.add_argument("--upload-jobs", type=int, default=3)
     ap.add_argument("--resume", action="store_true", help="collect the runs in runs.json")
-    add_background_flag(ap, default_log="out/deliver.log")
+    add_background_flag(ap, default_log="{out}/deliver.log")
     args = ap.parse_args()
     maybe_detach(args)
     load_dotenv()
