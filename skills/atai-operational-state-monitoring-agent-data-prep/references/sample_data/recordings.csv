@@ -1,6 +1,9 @@
 recording,file,role,group
 becken_warm_15-min_40_2,becken_warm_15-min_40_2.parquet,library,becken_warm_15-min_40_2
 becken_warm_sport_40_2,becken_warm_sport_40_2.parquet,library,becken_warm_sport_40_2
+becken_warm_delicate_30_0,becken_warm_delicate_30_0.parquet,library,becken_warm_delicate_30_0
+becken_warm_20-deg_20_0,becken_warm_20-deg_20_0.parquet,library,becken_warm_20-deg_20_0
+becken_warm_mix_40_2,becken_warm_mix_40_2.parquet,library,becken_warm_mix_40_2
 becken_warm_15-min_40_0,becken_warm_15-min_40_0.parquet,validation,becken_warm_15-min_40_0
 becken_warm_fast-45_40_0,becken_warm_fast-45_40_0.parquet,test,becken_warm_fast-45_40_0
 becken-flt_warm_fast-15_2,becken-flt_warm_fast-15_2.parquet,delivery,becken-flt_warm_fast-15_2

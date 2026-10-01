@@ -91,11 +91,11 @@ timestamp,back.x,back.y,back.z,...,label
 
 ## The steps (on the shipped sample)
 
-[`references/sample_data/`](references/sample_data/) holds five short LARCO washing-machine
+[`references/sample_data/`](references/sample_data/) holds eight short LARCO washing-machine
 cycles (9 accelerometer channels at ~200 Hz, raw jittered timestamps, a state per row,
-13 MB) and a filled-in `recordings.csv`: library, validation and test from the healthy
-machine, delivery from the second one, as in the LARCO examples. Everything below runs on
-it in about 15 s:
+28 MB) and a filled-in `recordings.csv`: a library of five programs, then validation and
+test from the same, healthy machine, and delivery from the second one, as in the LARCO
+examples. Everything below runs on it in about 20 s:
 
 ```bash
 cd skills/atai-operational-state-monitoring-agent-data-prep/references
@@ -120,7 +120,7 @@ shorter than `--min-rows`.
 ```
   becken_warm_15-min_40_2                     188,566 rows  1 segment(s)  raw 201.204 Hz, 0 gap(s) > 1.0 s
   ...
-5 recordings, 1,686,852 rows -> prepared/
+8 recordings, 3,698,100 rows -> prepared/
 ```
 
 **Why an exact grid:** the platform checks each window's sample rate against its own mean
@@ -138,22 +138,23 @@ spectrum), training classes balanced. Per state: the recall on recordings it nev
 and where the misses go.
 
 ```
-  ok    drain            recall 0.75  (228 windows)  → mostly spin (13%)
-  ok    fill             recall 0.99  (356 windows)  → mostly wash (1%)
-  ok    spin             recall 0.59  (326 windows)  → mostly wash (23%)
-  ok    wash             recall 0.91  (800 windows)  → mostly drain (4%)
-balanced accuracy 0.81
+  ok    drain            recall 0.88  (517 windows)  → mostly spin (8%)
+  ok    fill             recall 0.99  (816 windows)  → mostly wash (1%)
+  ok    spin             recall 0.67  (975 windows)  → mostly wash (20%)
+  ok    wash             recall 0.89  (3,174 windows)  → mostly spin (6%)
+balanced accuracy 0.86
 ```
 
 **Read it before committing to a state list.** A state the sensor can't see caps every
 model's macro-F1 at (n−1)/n. In LARCO, "heating" (the heater on during wash) scored 0.62
 balanced accuracy against wash — near chance — and was folded into wash; the four-state
-agent then worked. But a low recall can also mean **the recordings differ**. An earlier
-version of this sample put a cycle of the second machine in the library: its spin is about
-twice as hard, so spin recall fell to 0.41 here, and to ~0 on the platform. That's the
-cross-unit effect the full LARCO example saw on delivery. Look at which recordings the
-misses come from before merging a state, and keep training and scoring data from the same
-kind of asset.
+agent then worked. But a low recall can also mean **the recordings differ** — another
+unit, or a mode the library hasn't seen (see "Cover the modes you'll score" below). Look at
+which recordings the misses come from before merging a state.
+
+**It's a quick local check, not a forecast of the platform.** Omega's embeddings separate
+some differences more sharply than these features: on a two-program library this check gave
+spin 0.59, while the platform scored spin 0.05 on validation (next section).
 
 ### 3. `split_roles.py` — optional: roles by group, at random
 
@@ -168,14 +169,14 @@ any score, and never re-roll it** — re-rolling until the test looks good leaks
 ### 4. `build_roles.py` — the role files
 
 ```bash
-python build_roles.py --index $S --prepared prepared --out roles --window 1024 --per-state 75
+python build_roles.py --index $S --prepared prepared --out roles --window 1024 --per-state 200
 ```
 
 ```
-library   drain__library.csv                  75 windows, 29 pieces from 2 recordings
-library   fill__library.csv                   75 windows, 48 pieces from 2 recordings
-library   spin__library.csv                   75 windows, 49 pieces from 2 recordings
-library   wash__library.csv                   75 windows, 54 pieces from 2 recordings
+library   drain__library.csv                 200 windows, 71 pieces from 5 recordings
+library   fill__library.csv                  200 windows, 133 pieces from 5 recordings
+library   spin__library.csv                  200 windows, 146 pieces from 5 recordings
+library   wash__library.csv                  200 windows, 175 pieces from 5 recordings
 validation   1 files from 1 recordings, 193 windows of 1024 rows
 test        1 files from 1 recordings, 538 windows of 1024 rows
 delivery    1 files from 1 recordings, 183 windows of 1024 rows
@@ -184,9 +185,9 @@ delivery    1 files from 1 recordings, 183 windows of 1024 rows
 - **z-score** from the library recordings only (never validation, test or delivery).
 - **Library:** `--per-state` windows of `--window` rows per state, spread evenly over the
   library recordings that have the state and evenly within each, written as **one file
-  per state** of continuous single-state pieces with real timestamps. This two-recording
-  library runs out of drain at 77 windows, hence `--per-state 75`; the build warns when a
-  state falls short. (The LARCO examples used 100 and 400 with 8 and 54 cycles.)
+  per state** of continuous single-state pieces with real timestamps. This five-recording
+  library runs out of drain at 215 windows, hence `--per-state 200`; the build warns when
+  a state falls short. (The LARCO examples used 100 and 400 with 8 and 54 cycles.)
 - **Validation / test / delivery:** one continuous file per recording segment; delivery
   without `label`, its labels held back in `delivery_labels/`.
 - **`--window`** is the library cut; the platform window (chosen later in the Optimize
@@ -236,6 +237,18 @@ The ones that fail silently or expensively:
 
 ## Pitfalls
 
+- **Cover the modes you'll score, with enough examples of each.** A state can look different in
+  each operating mode (each washing programme spins at its own speed), and the library needs
+  real examples of every look you'll score. Measured on dev with this sample's cycles: a
+  library of two programs, `15-min_40_2` and `sport_40_2`, scored **spin 0.05** on the
+  validation cycle `15-min_40_0` — almost every spin window called wash or drain — even
+  though its programme was in the library: that cycle has only ~1.8 min of spin, so ~20 of
+  the 75 spin windows, and the rest came from `sport`. Spin on the test cycle (`fast-45`, a
+  programme not in the library) was 0.14. With **five** library programmes, the same
+  validation scored **spin 0.57** (macro-F1 0.62 → 0.79, Optimize
+  `opt_16vkrh56kd8dnbdfcsjckbeshw`). Spread the library over modes, assets and conditions,
+  and check how many windows of each state each mode contributes (the manifest's pieces
+  list it).
 - **Balanced library, unbalanced world.** Every state gets the same number of library
   windows, but in real recordings some states are rare (LARCO's drain: 3 % of the time).
   kNN then over-predicts the rare states — high recall, low precision. Expect it; judge
@@ -287,7 +300,7 @@ skills/atai-operational-state-monitoring-agent-data-prep/
 │   ├── requirements.txt      ← numpy, pandas, pyarrow, scipy
 │   └── sample_data/
 │       ├── recordings.csv    ← the index, roles filled in
-│       ├── *.parquet         ← 5 short LARCO cycles (13 MB), raw timestamps, a state per row
+│       ├── *.parquet         ← 8 short LARCO cycles (28 MB), raw timestamps, a state per row
 │       └── README.md         ← provenance + CC BY 4.0 attribution
 └── tests/
     └── test_osm_prep.py      ← synthetic end-to-end + deliberately broken role files (pytest)
