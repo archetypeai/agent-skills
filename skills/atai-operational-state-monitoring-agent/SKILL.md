@@ -434,6 +434,17 @@ curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
 (`DELETE` on a running instance returns 409 — cancel first with
 `POST /agents/instances/{id}/cancel`.)
 
+**What Path 2 leaves behind, and what you can delete** (checked on dev and staging, 2026-10-01,
+with a regular user key):
+
+| object | delete | notes |
+|---|---|---|
+| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` → 204 | one per delivery run |
+| your delivery bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` → 204 | delete the instances first |
+| promoted blueprints (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
+| optimizations (`opt_…`), evals (`evl_…`) | not attempted | records of what was fitted and scored, small; keep them if your docs cite them |
+| uploaded files | — | uploaded once per `--out` folder and reused through its `uploads.json` |
+
 
 ## Bring your own classifier artifact (legacy route)
 
@@ -455,7 +466,7 @@ skills/atai-operational-state-monitoring-agent/
 │   ├── requirements.txt      ← Path 1: archetypeai
 │   ├── .env.example          ← copy to .env and fill in (both paths)
 │   ├── sample_data/          ← Path 1: the Volve six-state eval slice + labels sidecar + attribution
-│   ├── platform-notes.md     ← Path 2: measured platform behaviour (dev, 2026-09-30)
+│   ├── platform-notes.md     ← Path 2: measured platform behaviour, per deployment (prod, staging, dev)
 │   └── osm_lifecycle/        ← Path 2 (stdlib HTTP until the client covers these APIs)
 │       ├── atai_http.py        requests with retries, uploads with a cache, paging, polling
 │       ├── common.py           the role-file manifest, examples, logging

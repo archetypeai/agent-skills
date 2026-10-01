@@ -1,0 +1,36 @@
+name: Test atai-operational-state-monitoring-agent
+
+on:
+  pull_request:
+    paths:
+      - 'skills/atai-operational-state-monitoring-agent/**'
+      - '.github/workflows/test-atai-operational-state-monitoring-agent.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/atai-operational-state-monitoring-agent/**'
+      - '.github/workflows/test-atai-operational-state-monitoring-agent.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # Path 1 (run_osm_agent.py) needs the official client; Path 2 (osm_lifecycle/) numpy + pandas
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r skills/atai-operational-state-monitoring-agent/references/requirements.txt \
+                      -r skills/atai-operational-state-monitoring-agent/references/osm_lifecycle/requirements.txt
+
+      - name: Run the network-free tests
+        run: python -m unittest discover -s skills/atai-operational-state-monitoring-agent/tests -v
