@@ -14,12 +14,16 @@ trip over it.
 | production (`api.u1`) | ✅ | the sample reproduced dev exactly: 0.7920 / 0.8463 / 0.7431 |
 | staging (`api.stage.u1`) | ✅ | the same, exactly |
 | dev (`api.dev.u1`) | ✅ | where everything here was measured |
-| Tokyo (`api.u2`) | ❌ for now | the APIs and the `osm` blueprint (`blp_1nmjch8d1y86xtj5e3kmqgb57d`) answer, uploads work, but optimizations fail at job creation: `Pipeline 'optimizer-runner-cuda' has no active versions` (`opt_6qjjc8sc3f899adgrthe1m8597`, 2026-10-01) |
+| Tokyo (`api.u2`) | ⚠️ Optimize and promote ✅, Evals ❌ for now | the optimizer runner went live 2026-10-01 and the sample's trials matched dev exactly (0.7920 / 0.7496, `opt_3kbpar0d08937ry8j01bknr7rf`); promote works; an eval reports `completed` with no `metrics_report` (`evl_0vc5381dwb8v19b47fxmy4md5k`) |
 
 **If optimizations fail the moment they're created** with `JOS job creation failed: … Pipeline
 'optimizer-runner-cuda' has no active versions`, that deployment's optimizer job runner isn't
-deployed: the API and blueprint are there, the runner behind them isn't. Staging and production
-both did this until 2026-10-01, and Tokyo still did that day. Nothing client-side fixes it; ask the platform team.
+deployed: the API and blueprint are there, the runner behind them isn't. Staging, production
+and Tokyo all did this until 2026-10-01. Nothing client-side fixes it; ask the platform team.
+
+**If an eval reports `completed` with no `metrics_report`,** the scores never arrived:
+`promote_and_test.py` waits 10 min for them, then stops with the eval id to report. A rerun
+resumes the same eval and checks again; nothing is created twice.
 
 Each deployment has its own `osm` blueprint id (resolve it by key) and its own API keys: a key
 for one returns 401 on another.

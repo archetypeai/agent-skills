@@ -21,11 +21,14 @@ import glob
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
+
+REPORT_WAIT_S = 600            # how long to wait for the metrics report after the platform says completed
 
 
 def blueprint_key(trial, name="osm"):
@@ -109,9 +112,20 @@ def main():
         save()
         log(f"eval {ev['id']}: {len(paths)} test file(s)")
     ev = wait(f"{agents()}/evals/{state['eval']}", state["eval"], every_s=60, log=log)
+    # the platform can report completed before the eval's metrics report is there: the
+    # eval counts as completed here only once it is
+    deadline = time.time() + REPORT_WAIT_S
+    if ev["status"] == "completed" and not ev.get("metrics_report"):
+        log(f"{state['eval']}: platform: completed; waiting for its metrics report")
+    while ev["status"] == "completed" and not ev.get("metrics_report") and time.time() < deadline:
+        time.sleep(30)
+        ev = request("GET", f"{agents()}/evals/{state['eval']}")
     json.dump(ev, open(os.path.join(args.out, f"test_{state['eval']}.json"), "w"), indent=1)
-    if ev["status"] != "completed" or not ev.get("metrics_report"):
+    if ev["status"] != "completed":
         sys.exit(f"eval {state['eval']} ended {ev['status']}: {ev.get('error')}")
+    if not ev.get("metrics_report"):
+        sys.exit(f"eval {state['eval']} completed but has no metrics report after {REPORT_WAIT_S // 60} min: "
+                 f"a platform problem (report the eval id); rerun this command to check again")
 
     f1, n = report_f1(ev["metrics_report"])
     macro = ev["metrics_report"]["primary"]["value"]
