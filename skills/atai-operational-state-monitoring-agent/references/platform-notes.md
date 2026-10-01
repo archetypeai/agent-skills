@@ -14,11 +14,12 @@ trip over it.
 | production (`api.u1`) | ✅ | the sample reproduced dev exactly: 0.7920 / 0.8463 / 0.7431 |
 | staging (`api.stage.u1`) | ✅ | the same, exactly |
 | dev (`api.dev.u1`) | ✅ | where everything here was measured |
+| Tokyo (`api.u2`) | ❌ for now | the APIs and the `osm` blueprint (`blp_1nmjch8d1y86xtj5e3kmqgb57d`) answer, uploads work, but optimizations fail at job creation: `Pipeline 'optimizer-runner-cuda' has no active versions` (`opt_6qjjc8sc3f899adgrthe1m8597`, 2026-10-01) |
 
 **If optimizations fail the moment they're created** with `JOS job creation failed: … Pipeline
 'optimizer-runner-cuda' has no active versions`, that deployment's optimizer job runner isn't
 deployed: the API and blueprint are there, the runner behind them isn't. Staging and production
-both did this until 2026-10-01. Nothing client-side fixes it; ask the platform team.
+both did this until 2026-10-01, and Tokyo still did that day. Nothing client-side fixes it; ask the platform team.
 
 Each deployment has its own `osm` blueprint id (resolve it by key) and its own API keys: a key
 for one returns 401 on another.
