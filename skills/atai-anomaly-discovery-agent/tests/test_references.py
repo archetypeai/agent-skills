@@ -309,3 +309,38 @@ def test_sample_spans_the_transition():
     assert len(snaps) >= 100
     # 2 windows per snapshot at window 1024 / step 1024 over 2,048 rows
     assert len(rows) == 2 * len(snaps)
+
+
+def _write_ad(path, finish):
+    path.write_text("finish_timestamp,start_timestamp,predicted_label,invalid,anomaly_score\n"
+                    f"360000.05,360000.0,normal,false,1.0\n{finish},{finish - 0.05},normal,false,1.0\n")
+
+
+def test_output_must_reach_the_inputs_end(tmp_path):
+    inp = tmp_path / "in.csv"
+    inp.write_text("timestamp,vibration\n360000.0,0.1\n431400.099951,0.4\n")
+    out = tmp_path / "out.csv"
+    _write_ad(out, 431400.05)
+    assert runner.output_reaches_end(str(out), str(inp))
+    _write_ad(out, 400000.0)
+    assert runner.output_reaches_end(str(out), str(inp)) is False
+
+
+def test_downloads_again_until_complete(tmp_path, monkeypatch):
+    """The platform can report completed while the output is still being written."""
+    inp = tmp_path / "in.csv"
+    inp.write_text("timestamp,vibration\n360000.0,0.1\n431400.099951,0.4\n")
+    out = tmp_path / "out.csv"
+    n = {"downloads": 0}
+
+    class Local:
+        def download(self, name, out_path):
+            n["downloads"] += 1
+            _write_ad(out, 431400.05 if n["downloads"] >= 3 else 400000.0)
+
+    fake = FakeClient(results={"data": [{"data": {"filename": "o.csv"}}]})
+    fake.files.local = Local()
+    monkeypatch.setattr(runner, "client", lambda: fake)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    assert runner.download_results("agt_x", str(out), str(inp))
+    assert n["downloads"] == 3

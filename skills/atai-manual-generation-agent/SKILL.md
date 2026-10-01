@@ -326,6 +326,12 @@ GET {endpoint}/agents/instances/{agent_id}/results
 
 The `ref` is a **relative** platform path that resolves under `/v0.5` and needs the bearer token. Run outputs do **not** expire.
 
+**A `completed` run can still be writing its output** (a known platform issue): a download
+within seconds can return a partial file. A partly written JSON document doesn't parse, so the
+runner downloads again every 15 s until it does, for up to 10 min. (A whole document that the
+model cut short, like `mga-output-truncated-active-blueprint.json`, parses: that's a different
+failure.)
+
 ## Output JSON — one document per run
 
 **It is JSON, not JSONL.** The results metadata says so (`file_extension: "json"`,
