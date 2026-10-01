@@ -216,8 +216,10 @@ cd skills/atai-operational-state-monitoring-agent/references
 # One dependency: the official Archetype AI client. Note the -r.
 pip install -r requirements.txt
 
-# Create the .env IN THIS DIRECTORY — the script reads ./.env from where it
-# runs (the file is gitignored). BOTH variables required, no default endpoint:
+# A .env with BOTH variables (no default endpoint). The scripts use the nearest
+# .env from where they run, upwards: one at the repo root serves every skill, and
+# a closer one (e.g. here) wins. Variables exported in your shell beat any .env.
+# Every .env is gitignored.
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
@@ -292,7 +294,7 @@ Every step below runs as-is on the prep skill's sample: build its role files fir
 ```sh
 cd references/osm_lifecycle
 pip install -r requirements.txt
-cp /path/to/.env .                 # ATAI_API_KEY and ATAI_API_ENDPOINT (dev, for now)
+# ATAI_API_KEY + ATAI_API_ENDPOINT: the nearest .env from here upwards is used (e.g. one at the repo root)
 R=../../../atai-operational-state-monitoring-agent-data-prep/references/roles
 python optimize.py --roles $R --dry-run                                    # the plan: no uploads, no jobs
 python optimize.py --roles $R --out out --name osm-sample --background     # tail -f out/optimize.log

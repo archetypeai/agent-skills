@@ -55,8 +55,24 @@ POLL_INTERVAL_S = 15
 TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; generous margin
 
 
-def load_dotenv(path=".env"):
-    if not os.path.exists(path):
+def find_dotenv():
+    """The nearest .env from the current folder upwards (else from this script's folder
+    upwards), so one .env at the repo root serves every skill; a closer one still wins."""
+    for base in (os.getcwd(), os.path.dirname(os.path.abspath(__file__))):
+        d = os.path.abspath(base)
+        while True:
+            if os.path.isfile(os.path.join(d, ".env")):
+                return os.path.join(d, ".env")
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    return None
+
+
+def load_dotenv(path=None):
+    path = path or find_dotenv()
+    if not path or not os.path.exists(path):
         return
     with open(path) as handle:
         for line in handle:

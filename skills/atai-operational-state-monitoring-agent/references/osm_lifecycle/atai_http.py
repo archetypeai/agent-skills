@@ -4,7 +4,8 @@ The official `archetypeai` client does not yet cover the Optimizations API, prom
 or the Evals API, so Path 2 talks to them directly. Move these calls onto the client
 once it does; the rest of Path 2 only uses the functions below.
 
-Auth / endpoint come from the environment (a ./.env is loaded if present):
+Auth / endpoint come from the environment, else from the nearest .env (the current folder
+upwards, e.g. the repo root's):
     ATAI_API_KEY        required
     ATAI_API_ENDPOINT   required, with or without a /vX.Y suffix: the Agents API is
                         versionless (<root>/agents), the files API is <root>/v0.5/files
@@ -27,13 +28,31 @@ MAX_WAIT_S = 600
 SOURCE = {}          # ATAI_* variable -> "shell" or the .env path it came from
 
 
-def load_dotenv(path=".env"):
-    """Fill ATAI_* from `path`. A variable already set in the shell wins, and is reported
-    as such by check_auth(): an exported key for another deployment is a common mix-up."""
+def find_dotenv(start=None):
+    """The nearest .env from `start` (default: the current folder) upwards, else the nearest
+    from this script's folder upwards, else None. So one .env at the repo root serves every
+    skill, as the model skills' python-dotenv lookup does, while a closer one still wins."""
+    for base in ([start] if start else [os.getcwd(), os.path.dirname(os.path.abspath(__file__))]):
+        d = os.path.abspath(base)
+        while True:
+            if os.path.isfile(os.path.join(d, ".env")):
+                return os.path.join(d, ".env")
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    return None
+
+
+def load_dotenv(path=None):
+    """Fill ATAI_* from `path`, or from find_dotenv() when no path is given. A variable already
+    set in the shell wins, and is reported as such by check_auth(): an exported key for another
+    deployment is a common mix-up."""
     for k in ("ATAI_API_KEY", "ATAI_API_ENDPOINT"):
         if os.environ.get(k):
             SOURCE[k] = "shell"
-    if not os.path.exists(path):
+    path = path or find_dotenv()
+    if not path or not os.path.exists(path):
         return
     for line in open(path):
         line = line.strip()

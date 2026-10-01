@@ -190,6 +190,23 @@ class TestHttp(unittest.TestCase):
                         atai_http.check_auth(log=lambda m: None)
                 self.assertIn("unset ATAI_API_KEY", str(cm.exception))
 
+    def test_dotenv_is_found_upwards_and_the_nearest_wins(self):
+        import run_osm_agent
+        with tempfile.TemporaryDirectory() as root:
+            deep = os.path.join(root, "skills", "x", "references", "osm_lifecycle")
+            os.makedirs(deep)
+            open(os.path.join(root, ".env"), "w").write("ATAI_API_ENDPOINT=https://root.test\n")
+            self.assertEqual(atai_http.find_dotenv(deep), os.path.join(root, ".env"))   # the repo root's
+            open(os.path.join(root, "skills", ".env"), "w").write("ATAI_API_ENDPOINT=https://near.test\n")
+            self.assertEqual(atai_http.find_dotenv(deep), os.path.join(root, "skills", ".env"))  # nearer wins
+            cwd = os.getcwd()
+            try:
+                os.chdir(deep)
+                self.assertEqual(os.path.realpath(run_osm_agent.find_dotenv()),
+                                 os.path.realpath(os.path.join(root, "skills", ".env")))
+            finally:
+                os.chdir(cwd)
+
     def test_report_f1(self):
         rep = {"targets": {"state": {"class_names": ["drain", "wash"], "confusion_matrix": [[3, 1], [0, 6]]}}}
         f1, n = atai_http.report_f1(rep)
