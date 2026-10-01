@@ -98,20 +98,20 @@ cp -r skills/* your-project/.claude/skills/
 
 ```
 # Agents — managed pipelines over the Agents API
-/atai-operational-state-monitoring-agent # Every operating regime, from a full labelled library
-/atai-operational-state-monitoring-agent-data-prep # Labelled recordings -> OSM role files, preflighted
-/atai-rare-event-detection-agent   # One named fault, from a handful of labelled examples
-/atai-anomaly-discovery-agent      # Normal-only fit; per-window anomaly score, no fault history needed
-/atai-manual-generation-agent      # Procedure video -> ordered, timestamped manual
-/atai-task-verification-agent      # Recording + SOP -> per-step PASSED / FAILED / MISSING
+/atai-operational-state-monitoring-agent            # Every operating regime, from a full labelled library
+/atai-operational-state-monitoring-agent-data-prep  # Labelled recordings -> OSM role files, preflighted
+/atai-rare-event-detection-agent                    # One named fault, from a handful of labelled examples
+/atai-anomaly-discovery-agent                       # Normal-only fit; per-window anomaly score, no fault history needed
+/atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
+/atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
 # Models — Direct Query API
-/atai-newton-omega-model-data-prep # Clean / split / featurize time-series before the Omega model
-/atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
-/atai-newton-fusion-model          # Multimodal (text/image/video) queries on the C 2.6 fusion model
+/atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
+/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
+/atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
 # Design
-/atai-design-system                # Scaffold + build a Newton demo front-end with the Design System
+/atai-design-system                                 # Scaffold + build a Newton demo front-end with the Design System
 ```
 
 ## Architecture
@@ -136,9 +136,17 @@ Resolve:  GET  /agents/bundles?query=<name> ────────────
 Run:      POST /agents/bundles/<bnd_…>/run ───────────────────► agt_…
 Poll:     GET  /agents/instances/<agt_…>/logs | /events
 Collect:  GET  /agents/instances/<agt_…>/results ─────────────► output file
+
+Fit (OSM Path 2: your own labelled data):
+          POST /agents/optimizations ─────────────────────────► opt_… (trials, scored)
+          POST /agents/optimizations/<opt_…>/trials/<otr_…>/promote ► blp_…
+          POST /agents/evals ─────────────────────────────────► evl_… (the test score)
 ```
 
-Every reference script is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
+A run can report `completed` before its last output file is fully written (a known platform
+issue): check that an output reaches its input's end before using it, as the OSM runners do.
+
+Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
 
 ## API Base URL
 
