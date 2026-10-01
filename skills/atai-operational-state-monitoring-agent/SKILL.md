@@ -284,12 +284,20 @@ Three contract rules decide whether a run works at all:
 
 ## Step 1 — Optimize: fit and score settings
 
+Every step below runs as-is on the prep skill's sample: build its role files first
+(`atai-operational-state-monitoring-agent-data-prep`, "The steps"), then:
+
 ```sh
 cd references/osm_lifecycle
 pip install -r requirements.txt
-python optimize.py --roles /path/to/roles --dry-run            # the plan: no uploads, no jobs
-python optimize.py --roles /path/to/roles --out out --name larco --background
+cp /path/to/.env .                 # ATAI_API_KEY and ATAI_API_ENDPOINT (dev, for now)
+R=../../../atai-operational-state-monitoring-agent-data-prep/references/roles
+python optimize.py --roles $R --dry-run                                    # the plan: no uploads, no jobs
+python optimize.py --roles $R --out out --name osm-sample --background     # tail -f out/optimize.log
 ```
+
+Use your own `--name`: it prefixes every platform object (blueprints, bundles), so they're
+easy to find and clean up.
 
 `POST /agents/optimizations` with the `osm` blueprint's id (resolved from its key), the library
 files as `training_examples` (ground truth `{"from": {"constant": "<state>"}}`, the state from the
@@ -318,13 +326,18 @@ last row), `"objective": "macro_f1"`, a `budget.max_trials`, and a search space:
   `per_class.{f1, precision, recall, support}` in that order, and the `confusion_matrix`
   (rows = true).
 
-Writes `out/optimize_<id>.json`. On the LARCO quickstart (2 trials, 4 min): k 5 scored
-0.8305, k 31 0.7980.
+Writes `out/optimize_<id>.json`. **Expect, on the sample** (2 trials, ~3 min plus the 85 MB
+upload; reproduced exactly by two runs on dev):
+
+```
+  #1   w=512   step=512   k=5   cosine uniform  completed macro-F1 0.7920  drain 0.87  fill 1.00  spin 0.57  wash 0.73  windows 386
+  #2   w=512   step=512   k=31  cosine uniform  completed macro-F1 0.7496  drain 0.81  fill 0.99  spin 0.51  wash 0.68  windows 386
+```
 
 ## Step 2 — Promote, then test once
 
 ```sh
-python promote_and_test.py --roles /path/to/roles --out out --name larco --background
+python promote_and_test.py --roles $R --out out --name osm-sample --background   # tail -f out/test.log
 ```
 
 1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
@@ -339,12 +352,17 @@ python promote_and_test.py --roles /path/to/roles --out out --name larco --backg
 
 Every id is saved in `out/test_state.json`, so a rerun resumes instead of promoting or testing
 again. Once you've seen the test number, the setting is frozen: tuning after it makes the test
-optimistic. LARCO quickstart: test macro-F1 0.8617 on 3 cycles, 3 min.
+optimistic. **Expect, on the sample** (~1 min for the eval):
+
+```
+promoted otr_… -> osm-sample-w512-s512-cosine-k5-uniform-<6 chars> (blp_…)
+test, 1 files: macro-F1 0.8463  drain 0.87  fill 0.98  spin 0.60  wash 0.93  windows 1,076
+```
 
 ## Step 3 — Deliver: your bundle, run in batches
 
 ```sh
-python deliver.py --roles /path/to/roles --out out --name larco --background
+python deliver.py --roles $R --out out --name osm-sample --background   # tail -f out/deliver.log
 ```
 
 `POST /agents/bundles {"blueprint": "<your key>", "name": …}` creates the deployable agent; then
@@ -356,18 +374,29 @@ a time, and several runs one at a time too.
 **Outputs don't name their inputs:** the script matches every output row to its delivery file by
 `finish_timestamp` (recordings must not overlap in time) and writes `out/delivery/<file>.csv`.
 Run ids are saved to `out/delivery/runs.json` as each run starts; `--resume` collects them.
+**Expect, on the sample** (~1 min): `1 of 1 files have predictions: 367 windows (0 invalid); 0
+rows matched no file`.
 
 ## Step 4 — Score the delivery
 
 ```sh
-python score.py --roles /path/to/roles --out out
+python score.py --roles $R --out out
 ```
 
 Each prediction is paired with the held-back label at its window's last row (the
 `delivery_labels/` row whose timestamp equals `finish_timestamp`); `invalid` windows are left out
 and counted. Macro-F1 is platform-style: over every state in the manifest, an absent state
-counting 0. Reported pooled and per recording, next to the test number. LARCO quickstart:
-delivery 0.7707 on a second, faulty unit, against 0.8617 on test.
+counting 0. Reported pooled and per recording, next to the test number. **Expect, on the
+sample:**
+
+```
+delivery: 1 recordings, 1 files, 367 windows scored; left out {'invalid': 0, 'no label at finish time': 0}
+  all                                      macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62  windows 367
+next to the test: macro-F1 0.8463
+```
+
+The second machine scores lower than the test, as in the LARCO examples (quickstart: delivery
+0.7707 against test 0.8617 over 5 and 3 cycles).
 
 ## Path 2 pitfalls
 

@@ -130,7 +130,7 @@ def main():
     with open(path, "w") as f:
         json.dump({"optimization": opt, "trials": trials, "summary": rows, "search_space": space,
                    "validation": [os.path.relpath(p, args.roles) for p in validation]}, f, indent=1)
-    log(f"wrote {path}; next: python promote_and_test.py --roles {args.roles} --out {args.out}")
+    log(f"wrote {path}; next: python promote_and_test.py --roles {args.roles} --out {args.out} --name {args.name}")
 
 
 if __name__ == "__main__":

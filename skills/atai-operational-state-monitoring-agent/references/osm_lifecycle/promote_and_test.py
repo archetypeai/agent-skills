@@ -122,7 +122,7 @@ def main():
     json.dump(res, open(os.path.join(args.out, "test.json"), "w"), indent=1)
     print(f"\ntest, {len(paths)} files: macro-F1 {macro:.4f}  " + "  ".join(f"{s} {res['f1'][s]:.2f}" for s in states)
           + f"  windows {n:,}")
-    log(f"wrote {os.path.join(args.out, 'test.json')}; next: python deliver.py --roles {args.roles} --out {args.out}")
+    log(f"wrote {os.path.join(args.out, 'test.json')}; next: python deliver.py --roles {args.roles} --out {args.out} --name {args.name}")
 
 
 if __name__ == "__main__":
