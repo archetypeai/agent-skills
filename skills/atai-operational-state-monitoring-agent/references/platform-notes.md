@@ -14,7 +14,7 @@ trip over it.
 | production (`api.u1`) | ✅ | the sample reproduced dev exactly: 0.7920 / 0.8463 / 0.7431 |
 | staging (`api.stage.u1`) | ✅ | the same, exactly |
 | dev (`api.dev.u1`) | ✅ | where everything here was measured |
-| Tokyo (`api.u2`) | ⚠️ Optimize and promote ✅, Evals ❌ for now | the optimizer runner went live 2026-10-01 and the sample's trials matched dev exactly (0.7920 / 0.7496, `opt_3kbpar0d08937ry8j01bknr7rf`); promote works; an eval reports `completed` with no `metrics_report` (`evl_0vc5381dwb8v19b47fxmy4md5k`) |
+| Tokyo (`api.u2`) | ✅ | the same, exactly, once the optimizer runner and eval metrics went live on 2026-10-01 (before that, optimizations failed at job creation and evals completed with no `metrics_report`) |
 
 **If optimizations fail the moment they're created** with `JOS job creation failed: … Pipeline
 'optimizer-runner-cuda' has no active versions`, that deployment's optimizer job runner isn't
