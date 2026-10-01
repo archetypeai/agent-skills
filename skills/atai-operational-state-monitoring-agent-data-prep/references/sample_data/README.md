@@ -1,14 +1,18 @@
 # Sample data — five short LARCO washing-machine cycles
 
-Raw-ish recordings for trying the whole prep in about 10 seconds:
+Raw-ish recordings for trying the whole prep in about 15 seconds:
 
 | recording | role (in `recordings.csv`) | raw rows | length |
 |---|---|---|---|
 | `becken_warm_15-min_40_2` | library | 188,820 | ~16 min |
-| `becken-flt_warm_fast-15_11` | library | 248,171 | ~21 min |
+| `becken_warm_sport_40_2` | library | 561,851 | ~47 min |
 | `becken_warm_15-min_40_0` | validation | 198,476 | ~17 min |
-| `becken-flt_warm_fast-15_2` | test | 186,976 | ~16 min |
+| `becken_warm_fast-45_40_0` | test | 551,813 | ~46 min |
 | `becken-flt_warm_fast-15_0` | delivery | 204,798 | ~17 min |
+
+As in the LARCO examples, library, validation and test come from the healthy machine
+(`becken`), and delivery from the second unit of the same model (`becken-flt`, marked
+faulty in the dataset). Each cycle is in the role the examples' split gave it.
 
 Each Parquet file has `timestamp` (epoch seconds, the sensor's own jittered ~200 Hz
 timestamps), the 9 accelerometer channels in g (`back.x` … `top.z`: three triaxial sensors,
@@ -22,12 +26,6 @@ else `wash`; the heater label is not a state (vibration can't tell it from wash)
 vibration sample takes the label of the second it falls in; samples outside any labelled
 second were dropped. Nothing else was changed: no resampling, no scaling, no glitch removal
 — that's what the prep skill does.
-
-**Not the examples' split.** To keep the sample small, the library mixes cycles of the two
-machines (`becken`, healthy, and `becken-flt`, marked faulty in the dataset); the LARCO
-examples train on `becken` only and deliver to `becken-flt`. So `check_states.py` sees the
-second machine's harder spin as something new — which is exactly the kind of difference it
-is meant to surface.
 
 ## Attribution
 
