@@ -29,6 +29,7 @@ import csv
 import io
 import os
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -176,6 +177,45 @@ class TestRequestBodies(unittest.TestCase):
         calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv")])
         run = next(c for c in calls if c[0] == "bundles.run")
         self.assertNotIn("fil_x", run[2])
+
+
+class TestOutputCompleteness(unittest.TestCase):
+    """The platform can report completed while the output is still being written."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.input = os.path.join(self.dir, "in.csv")
+        with open(self.input, "w") as f:
+            f.write("DATE_TIME,a\n1247008660,0\n1223651115,1\n")   # seams: not monotonic
+        self.output = os.path.join(self.dir, "out.csv")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def _write(self, last):
+        with open(self.output, "w") as f:
+            f.write(f"finish_timestamp,start_timestamp\n1247008705.0,1247008660.0\n{last},0\n")
+
+    def test_output_reaches_the_inputs_last_row(self):
+        self._write("1223651115.0")
+        self.assertTrue(run_osm_agent.output_reaches_end(self.output, self.input))
+        self._write("1223650000.0")
+        self.assertFalse(run_osm_agent.output_reaches_end(self.output, self.input))
+
+    def test_downloads_again_until_complete(self):
+        n = {"downloads": 0}
+        test = self
+
+        class _Local:
+            def download(self, filename, out_path):
+                n["downloads"] += 1
+                test._write("1223651115.0" if n["downloads"] >= 3 else "1223650000.0")
+
+        client = mock.Mock()
+        client.files.local = _Local()
+        with mock.patch.object(run_osm_agent.time, "sleep"), mock.patch("builtins.print"):
+            self.assertTrue(run_osm_agent.download_complete(client, "out", self.output, self.input))
+        self.assertEqual(n["downloads"], 3)
 
 
 class TestEvaluate(unittest.TestCase):
