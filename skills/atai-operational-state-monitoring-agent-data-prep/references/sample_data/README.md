@@ -8,11 +8,17 @@ Raw-ish recordings for trying the whole prep in about 15 seconds:
 | `becken_warm_sport_40_2` | library | 561,851 | ~47 min |
 | `becken_warm_15-min_40_0` | validation | 198,476 | ~17 min |
 | `becken_warm_fast-45_40_0` | test | 551,813 | ~46 min |
-| `becken-flt_warm_fast-15_0` | delivery | 204,798 | ~17 min |
+| `becken-flt_warm_fast-15_2` | delivery | 186,976 | ~16 min |
 
 As in the LARCO examples, library, validation and test come from the healthy machine
 (`becken`), and delivery from the second unit of the same model (`becken-flt`, marked
 faulty in the dataset). Each cycle is in the role the examples' split gave it.
+
+**Why this delivery cycle:** becken-flt's `warm_fast-15_0` was the first choice, but its
+spin is unusually hard for every model we ran on it (spin F1 0.00–0.32 across three runs,
+where the LARCO quickstart's other short becken-flt cycles scored 0.53–0.72), which makes a
+first run look broken. `warm_fast-15_2` (spin 0.72 in the quickstart, the same length) was
+chosen instead. It's a choice made for the sample, not a result.
 
 Each Parquet file has `timestamp` (epoch seconds, the sensor's own jittered ~200 Hz
 timestamps), the 9 accelerometer channels in g (`back.x` … `top.z`: three triaxial sensors,

@@ -93,7 +93,7 @@ timestamp,back.x,back.y,back.z,...,label
 
 [`references/sample_data/`](references/sample_data/) holds five short LARCO washing-machine
 cycles (9 accelerometer channels at ~200 Hz, raw jittered timestamps, a state per row,
-14 MB) and a filled-in `recordings.csv`: library, validation and test from the healthy
+13 MB) and a filled-in `recordings.csv`: library, validation and test from the healthy
 machine, delivery from the second one, as in the LARCO examples. Everything below runs on
 it in about 15 s:
 
@@ -120,7 +120,7 @@ shorter than `--min-rows`.
 ```
   becken_warm_15-min_40_2                     188,566 rows  1 segment(s)  raw 201.204 Hz, 0 gap(s) > 1.0 s
   ...
-5 recordings, 1,706,925 rows -> prepared/
+5 recordings, 1,686,852 rows -> prepared/
 ```
 
 **Why an exact grid:** the platform checks each window's sample rate against its own mean
@@ -178,7 +178,7 @@ library   spin__library.csv                   75 windows, 49 pieces from 2 recor
 library   wash__library.csv                   75 windows, 54 pieces from 2 recordings
 validation   1 files from 1 recordings, 193 windows of 1024 rows
 test        1 files from 1 recordings, 538 windows of 1024 rows
-delivery    1 files from 1 recordings, 203 windows of 1024 rows
+delivery    1 files from 1 recordings, 183 windows of 1024 rows
 ```
 
 - **z-score** from the library recordings only (never validation, test or delivery).
@@ -287,7 +287,7 @@ skills/atai-operational-state-monitoring-agent-data-prep/
 │   ├── requirements.txt      ← numpy, pandas, pyarrow, scipy
 │   └── sample_data/
 │       ├── recordings.csv    ← the index, roles filled in
-│       ├── *.parquet         ← 5 short LARCO cycles (14 MB), raw timestamps, a state per row
+│       ├── *.parquet         ← 5 short LARCO cycles (13 MB), raw timestamps, a state per row
 │       └── README.md         ← provenance + CC BY 4.0 attribution
 └── tests/
     └── test_osm_prep.py      ← synthetic end-to-end + deliberately broken role files (pytest)
