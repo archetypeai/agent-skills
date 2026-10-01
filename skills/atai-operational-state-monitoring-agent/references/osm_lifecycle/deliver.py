@@ -30,6 +30,12 @@ from atai_http import TERMINAL, agents, check_auth, list_all, load_dotenv, reque
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, load_manifest, log, stamp  # noqa: E402
 
+# The platform can report a run completed while its last output file is still being
+# written (a known issue), so a run counts as completed here only once every file's
+# predictions reach that file's end.
+END_SLACK_MS = 60_000          # a file's last prediction lands within a window of its end
+OUTPUT_WAIT_S = 600            # how long to wait for outputs after the platform says completed
+
 
 def to_ms(value):
     """A timestamp as epoch ms: epoch seconds (`1694181225.45`), epoch ms, or ISO 8601."""
@@ -95,24 +101,10 @@ def start(args, manifest, state_path, test_state):
     return state
 
 
-def collect(args, state, state_path):
-    pending = {r["agent"] for r in state["runs"] if r.get("status") not in TERMINAL}
-    while pending:
-        for aid in sorted(pending):
-            a = request("GET", f"{agents()}/instances/{aid}")
-            if a["status"] in TERMINAL:
-                pending.discard(aid)
-                r = next(r for r in state["runs"] if r["agent"] == aid)
-                r["status"], r["error"] = a["status"], a.get("error")
-                log(f"  {aid} {a['status']}" + (f" ({a.get('error')})" if a.get("error") else ""))
-        json.dump(state, open(state_path, "w"), indent=1)
-        if pending:
-            time.sleep(60)
-
-    ranges = [(v["first_ms"], v["last_ms"], n) for n, v in state["files"].items()]
+def download(runs, ranges):
+    """The runs' output rows, matched to delivery files: ({file: [rows]}, header, unmatched)."""
     per_file, header, unmatched = {}, None, 0
-    for r in state["runs"]:
-        # a "failed" status can hide a successful run: collect whatever /results holds
+    for r in runs:
         for item in list_all(f"{agents()}/instances/{r['agent']}/results"):
             body = list(csv.reader(io.StringIO(fetch(item["data"]["filename"]))))
             if not body:
@@ -125,6 +117,63 @@ def collect(args, state, state_path):
             unmatched += miss
             for name, rows in got.items():
                 per_file.setdefault(name, []).extend(rows)
+    return per_file, header, unmatched
+
+
+def incomplete(names, state, per_file, header):
+    """The files among `names` whose predictions stop more than END_SLACK_MS before the file's end."""
+    if not header:
+        return list(names)
+    fin = header.index("finish_timestamp")
+    return [n for n in names if not per_file.get(n)
+            or state["files"][n]["last_ms"] - max(to_ms(row[fin]) for row in per_file[n]) > END_SLACK_MS]
+
+
+def collect(args, state, state_path):
+    ranges = [(v["first_ms"], v["last_ms"], n) for n, v in state["files"].items()]
+    pending = {r["agent"] for r in state["runs"] if r.get("status") not in TERMINAL}
+    finishing = {}                 # run -> deadline, once the platform says completed
+    while pending:
+        for aid in sorted(pending):
+            r = next(r for r in state["runs"] if r["agent"] == aid)
+            if aid not in finishing:
+                a = request("GET", f"{agents()}/instances/{aid}")
+                if a["status"] not in TERMINAL:
+                    continue
+                if a["status"] != "completed":
+                    pending.discard(aid)
+                    r["status"], r["error"] = a["status"], a.get("error")
+                    log(f"  {aid} {a['status']}" + (f" ({a.get('error')})" if a.get("error") else ""))
+                    continue
+                finishing[aid] = time.time() + OUTPUT_WAIT_S
+            per_file, header, _ = download([r], ranges)
+            short = incomplete(r["files"], state, per_file, header)
+            n = len(r["files"])
+            if not short:
+                pending.discard(aid)
+                r["status"], r["error"] = "completed", None
+                log(f"  {aid} completed: all {n} outputs complete")
+            elif time.time() > finishing[aid]:
+                pending.discard(aid)
+                r["status"], r["error"] = "completed", f"outputs incomplete: {', '.join(short)}"
+                log(f"  {aid} WARNING platform completed {OUTPUT_WAIT_S // 60} min ago but {len(short)} of {n} "
+                    f"outputs still end early ({', '.join(os.path.basename(x) for x in short)}); "
+                    f"--resume downloads them again")
+            else:
+                log(f"  {aid} platform: completed; outputs {n - len(short)} of {n} complete "
+                    f"({', '.join(os.path.basename(x) for x in short)} still being written)")
+        json.dump(state, open(state_path, "w"), indent=1)
+        if pending:
+            time.sleep(15 if pending <= set(finishing) else 60)
+
+    # a "failed" status can hide a successful run: collect whatever every run's /results holds
+    per_file, header, unmatched = download(state["runs"], ranges)
+    done = [r for r in state["runs"] if r.get("status") == "completed"]
+    short = incomplete([n for r in done for n in r["files"]], state, per_file, header)
+    for r in done:
+        if not set(r["files"]) & set(short) and (r.get("error") or "").startswith("outputs incomplete"):
+            r["error"] = None      # a --resume found them complete
+    json.dump(state, open(state_path, "w"), indent=1)
     out_dir = os.path.join(args.out, "delivery")
     fin = header.index("finish_timestamp") if header else 0
     for name, rows in per_file.items():
@@ -137,7 +186,8 @@ def collect(args, state, state_path):
     n = sum(map(len, per_file.values()))
     bad = sum(1 for v in per_file.values() for row in v if inv is not None and row[inv].lower() == "true")
     log(f"{len(per_file)} of {len(state['files'])} files have predictions: {n:,} windows ({bad:,} invalid); "
-        f"{unmatched:,} rows matched no file -> {out_dir}/")
+        f"{unmatched:,} rows matched no file; incomplete outputs: "
+        f"{[os.path.basename(x) for x in short] or 'none'} -> {out_dir}/")
 
 
 def main():

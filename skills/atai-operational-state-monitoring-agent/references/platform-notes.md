@@ -91,6 +91,11 @@ Why they exist:
 - **Outputs don't name their inputs.** Match each output row to its file by
   `finish_timestamp`, which works when recordings don't overlap in time. Output
   timestamps drop trailing zeros (`1694181225.45`).
+- **`completed` can come before the last output is fully written.** A run's status
+  and its `/results` listing can be ahead of the last output file: downloaded within
+  seconds, prod's last file held 326 of 997 rows, and minutes later all 997. Check
+  that each file's predictions reach its end, and download again if they don't
+  (`deliver.py` reports a run completed only once its outputs reach every file's end).
 - **`finish_timestamp` is the window's last row**, so pair each prediction with the
   label at that row, as the Evals API does (`downsampling: last_record`).
 

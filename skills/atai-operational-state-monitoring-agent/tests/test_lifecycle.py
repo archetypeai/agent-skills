@@ -107,6 +107,37 @@ class TestTimestamps(unittest.TestCase):
             os.unlink(f.name)
 
 
+    def test_incomplete_flags_outputs_that_end_early(self):
+        state = {"files": {n: {"last_ms": 1_000_000} for n in ("a.csv", "b.csv", "c.csv")}}
+        per_file = {"a.csv": [["998.0"]], "b.csv": [["500.0"]]}  # b ends 500 s early, c has none
+        got = deliver.incomplete(["a.csv", "b.csv", "c.csv"], state, per_file, ["finish_timestamp"])
+        self.assertEqual(got, ["b.csv", "c.csv"])
+
+    def test_run_is_completed_only_once_its_outputs_are(self):
+        calls = {"status": 0, "results": 0}
+
+        def request(method, url, **kw):
+            calls["status"] += 1
+            return {"status": "completed"}
+
+        def list_all(url):
+            calls["results"] += 1
+            return [{"data": {"filename": "out"}}]
+
+        def fetch(name):        # the platform finishes writing the output on the 3rd download
+            return f"finish_timestamp,predicted_state\n110.0,y\n{299.0 if calls['results'] >= 3 else 150.0},y\n"
+
+        state = {"runs": [{"agent": "agt_x", "files": ["b.csv"]}],
+                 "files": {"b.csv": {"first_ms": 100_001, "last_ms": 300_000}}}
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.multiple(deliver, request=request, list_all=list_all, fetch=fetch, agents=lambda: "x"), \
+                mock.patch.object(deliver.time, "sleep"), mock.patch.object(deliver, "log"):
+            os.makedirs(os.path.join(out, "delivery"))
+            deliver.collect(mock.Mock(out=out), state, os.path.join(out, "delivery", "runs.json"))
+        self.assertEqual(calls["status"], 1)
+        self.assertEqual((state["runs"][0]["status"], state["runs"][0]["error"]), ("completed", None))
+        self.assertEqual(calls["results"], 4)     # 3 checks, then the final collection
+
 @unittest.skipIf(score is None, "pandas / numpy not installed")
 class TestScoring(unittest.TestCase):
     STATES = ["drain", "fill", "spin", "wash"]
