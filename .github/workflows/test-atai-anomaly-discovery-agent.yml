@@ -1,0 +1,35 @@
+name: Test atai-anomaly-discovery-agent
+
+on:
+  pull_request:
+    paths:
+      - 'skills/atai-anomaly-discovery-agent/**'
+      - '.github/workflows/test-atai-anomaly-discovery-agent.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/atai-anomaly-discovery-agent/**'
+      - '.github/workflows/test-atai-anomaly-discovery-agent.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # the runner needs the official client; pytest runs the tests (unittest or pytest style)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r skills/atai-anomaly-discovery-agent/references/requirements.txt pytest
+
+      - name: Run the network-free tests
+        run: python -m pytest skills/atai-anomaly-discovery-agent/tests -v

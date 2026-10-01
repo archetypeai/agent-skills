@@ -39,7 +39,9 @@ def code_only(src: str) -> str:
     """
     out = []
     for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        if tok.type in (tokenize.COMMENT, tokenize.STRING):
+        # f-strings are one STRING token before Python 3.12 and FSTRING_* parts from
+        # 3.12 on: drop both, so every version sees the same code
+        if tok.type in (tokenize.COMMENT, tokenize.STRING) or tokenize.tok_name[tok.type].startswith("FSTRING_"):
             continue
         out.append(tok.string)
     return " ".join(out)
@@ -321,7 +323,9 @@ class TestRequestShapes(unittest.TestCase):
     """Shapes that have each cost someone real time."""
 
     def test_bundle_endpoint_is_plural(self):
-        self.assertIn("/agents/bundles", RUNNER_CODE)
+        # the client's bundles API is the plural /agents/bundles
+        self.assertIn("agents . bundles .", RUNNER_CODE)
+        self.assertNotIn("agents . bundle .", RUNNER_CODE)
 
     def test_run_accepts_202(self):
         # the client owns HTTP status handling, including 202 on /run.
@@ -331,8 +335,8 @@ class TestRequestShapes(unittest.TestCase):
         self.assertIn("client().agents.bundles.run(", raw)
 
     def test_polls_logs_not_events(self):
-        self.assertIn("/logs", RUNNER_CODE)
-        self.assertNotIn("/events", RUNNER_CODE)
+        self.assertIn("get_logs", RUNNER_CODE)
+        self.assertNotIn("get_events", RUNNER_CODE)
 
     def test_no_artifacts_map(self):
         # The tva blueprint pins its own models; unlike red/osm there is nothing
