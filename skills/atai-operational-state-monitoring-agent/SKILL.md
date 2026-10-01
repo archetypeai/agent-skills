@@ -13,7 +13,7 @@ description: >
   Covers the search space, promote, Evals, batch runs, the output CSV schema
   (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
   and the platform's limits (1 MiB config, time jumps, absent states score 0).
-  Path 2 is verified end to end on production and dev. Do NOT use for
+  Path 2 is verified end to end on production, staging and dev. Do NOT use for
   client-side embedding + KNN over `/query` (that's `atai-newton-omega-model`), for
   turning raw sensor recordings into role files (that's
   `atai-operational-state-monitoring-agent-data-prep`), or for generic time-series
@@ -42,7 +42,7 @@ either.
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1–2 min on a clear queue | ~15 min for a small dataset (the LARCO quickstart); hours for large ones |
-| status | verified on production | **verified on production (2026-10-01) and dev (2026-09-30), identical results** |
+| status | verified on production | **verified on production, staging (2026-10-01) and dev (2026-09-30), identical results** |
 
 Path 2's last step *is* Path 1, run on your own bundle instead of the maintained one, so the
 output schema, polling, pitfalls and cleanup below apply to both.
@@ -241,14 +241,15 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 
 # Path 2 — Build an OSM agent on your own data
 
-> **Status: verified end to end on production (2026-10-01) and dev (2026-09-30)**, with
-> identical results on both: the prep skill's sample below scored the same at every step
+> **Status: verified end to end on production, staging (2026-10-01) and dev (2026-09-30)**,
+> with identical results on all three: the prep skill's sample below scored the same at every step
 > (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
 > [osm-agent-example-larco-quickstart](https://github.com/archetypeai/osm-agent-example-larco-quickstart)
 > (19 short cycles, the whole lifecycle in ~15 min) and
 > [osm-agent-example-larco](https://github.com/archetypeai/osm-agent-example-larco) (199 cycles,
-> the full study). **Staging** (2026-10-01) has the APIs but not yet the optimizer job runner:
-> optimizations fail at once with `Pipeline 'optimizer-runner-cuda' has no active versions`.
+> the full study). A deployment without the optimizer job runner fails every optimization at
+> once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging and prod did,
+> until it was deployed on 2026-10-01).
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
