@@ -37,8 +37,8 @@ recordings (any rate, gaps, jitter)          role files (the contract)
 Everything here is **local and needs no API key**. The contract itself is in
 [`references/role-files.md`](references/role-files.md); the platform rules in it were
 measured on the dev deployment (2026-09-30) while building the LARCO washing-machine
-examples ([quickstart](https://github.com/archetypeai/osm-agent-example-larco-quickstart),
-[full](https://github.com/archetypeai/osm-agent-example-larco)).
+examples (the [quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart),
+and a full version that isn't published).
 
 ## When to Apply
 
@@ -74,7 +74,7 @@ timestamp,back.x,back.y,back.z,...,label
 - **Labels:** turning your source's annotations into one state per row is the
   dataset-specific part, and it's yours. (In LARCO, the washing machine's own spin,
   water-flow and heater labels become fill / wash / spin / drain by a priority rule —
-  see the [quickstart's `prep/states.py`](https://github.com/archetypeai/osm-agent-example-larco-quickstart/blob/main/prep/states.py).)
+  see the [quickstart's `prep/states.py`](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart/blob/main/prep/states.py).)
 
 **An index,** `recordings.csv`:
 
