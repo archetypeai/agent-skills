@@ -407,6 +407,11 @@ The second machine scores lower than the test, as in the LARCO examples (quickst
 - **Suspiciously low macro-F1 with one state at 0** usually means that state is missing from the
   scored set, not that the model can't see it.
 - **Don't time trials by their `created_at`:** every trial gets the optimization's creation time.
+- **A key exported in your shell beats `.env`.** Keys are per deployment, so a staging key left
+  exported while `.env` points at prod makes every upload fail with "Broken pipe": the server
+  rejects the request before the body is sent. The scripts now check the key with one GET
+  first, and say whether it came from the shell or `.env`; `unset ATAI_API_KEY
+  ATAI_API_ENDPOINT` lets `.env` decide.
 - **Keep upload concurrency low (~3):** parallel large uploads can saturate the uplink until DNS
   lookups fail. The helper retries uploads and GETs; it never retries a POST that may have
   reached the server.

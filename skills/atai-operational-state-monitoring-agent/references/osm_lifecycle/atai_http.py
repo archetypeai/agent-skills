@@ -24,14 +24,45 @@ RETRY_CODES = (502, 503, 504)
 MAX_WAIT_S = 600
 
 
+SOURCE = {}          # ATAI_* variable -> "shell" or the .env path it came from
+
+
 def load_dotenv(path=".env"):
+    """Fill ATAI_* from `path`. A variable already set in the shell wins, and is reported
+    as such by check_auth(): an exported key for another deployment is a common mix-up."""
+    for k in ("ATAI_API_KEY", "ATAI_API_ENDPOINT"):
+        if os.environ.get(k):
+            SOURCE[k] = "shell"
     if not os.path.exists(path):
         return
     for line in open(path):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+            key = key.strip()
+            if key not in os.environ:
+                os.environ[key] = value.strip()
+                SOURCE.setdefault(key, os.path.abspath(path))
+
+
+def check_auth(log=print):
+    """One cheap authenticated GET, before any upload: say where the endpoint and key came
+    from, and fail at once on a wrong key. (A rejected large upload only shows up in Python
+    as "Broken pipe", retried for minutes: the server closes before the body is sent.)"""
+    ep = os.environ.get("ATAI_API_ENDPOINT", "")
+    log(f"endpoint {root()} (from {SOURCE.get('ATAI_API_ENDPOINT', 'the environment')}), "
+        f"key {os.environ.get('ATAI_API_KEY', '')[:6]}… (from {SOURCE.get('ATAI_API_KEY', 'the environment')})")
+    req = urllib.request.Request(f"{agents()}/blueprints?limit=1")
+    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            return
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            hint = (" An ATAI_API_KEY exported in your shell overrides .env: `unset ATAI_API_KEY ATAI_API_ENDPOINT`."
+                    if "shell" in SOURCE.values() else "")
+            sys.exit(f"the API key is not valid for {ep} (HTTP {e.code}). Keys are per deployment.{hint}")
+        raise
 
 
 def root():

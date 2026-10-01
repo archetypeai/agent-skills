@@ -171,6 +171,25 @@ class TestHttp(unittest.TestCase):
         with mock.patch.object(atai_http.urllib.request, "urlopen", side_effect=[bad, ok]):
             self.assertEqual(atai_http.request("GET", "https://x.test/agents/evals/e")["status"], "completed")
 
+    def test_check_auth_fails_fast_and_blames_an_exported_key(self):
+        # a key for another deployment, exported in the shell, beats .env; a rejected large
+        # upload only looks like "Broken pipe", so the check runs before any upload
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, ".env")
+            open(env, "w").write("ATAI_API_KEY=sk_from_dotenv\nATAI_API_ENDPOINT=https://x.test\n")
+            denied = urllib.error.HTTPError("u", 401, "no", {}, io.BytesIO(b""))
+            with mock.patch.dict(os.environ, {"ATAI_API_KEY": "sk_from_shell"}, clear=False):
+                os.environ.pop("ATAI_API_ENDPOINT", None)
+                atai_http.SOURCE.clear()
+                atai_http.load_dotenv(env)
+                self.assertEqual(os.environ["ATAI_API_KEY"], "sk_from_shell")         # the shell wins
+                self.assertEqual(atai_http.SOURCE["ATAI_API_KEY"], "shell")
+                self.assertEqual(os.environ["ATAI_API_ENDPOINT"], "https://x.test")   # filled from .env
+                with mock.patch.object(atai_http.urllib.request, "urlopen", side_effect=denied):
+                    with self.assertRaises(SystemExit) as cm:
+                        atai_http.check_auth(log=lambda m: None)
+                self.assertIn("unset ATAI_API_KEY", str(cm.exception))
+
     def test_report_f1(self):
         rep = {"targets": {"state": {"class_names": ["drain", "wash"], "confusion_matrix": [[3, 1], [0, 6]]}}}
         f1, n = atai_http.report_f1(rep)

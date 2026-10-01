@@ -26,7 +26,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
@@ -105,6 +105,7 @@ def main():
         return
 
     load_dotenv()
+    check_auth(log)
     if args.resume:
         opt_id = args.resume
     else:
