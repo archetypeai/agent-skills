@@ -53,6 +53,11 @@ BUNDLE_NAME_EMBEDDINGS = "OSM Quick Start (Volve Six State, Embeddings)"
 
 POLL_INTERVAL_S = 15
 TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; generous margin
+# The platform can report a run completed while its output file is still being written
+# (a known issue), so the output counts as complete only once its last window ends at
+# the input's last row.
+END_SLACK_S = 60
+OUTPUT_WAIT_S = 600
 
 
 def find_dotenv():
@@ -146,6 +151,40 @@ def watch(client, agent_id):
     return status
 
 
+def last_field(path, column=0):
+    """A CSV's last row's field, read from the file's end."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - 4096))
+        return f.read().strip().split(b"\n")[-1].split(b",")[column].decode().strip()
+
+
+def output_reaches_end(output_csv, input_csv):
+    """Whether the output's last window ends within END_SLACK_S of the input's last row.
+    None when the timestamps aren't epoch numbers (no check then)."""
+    try:
+        return float(last_field(input_csv)) - float(last_field(output_csv)) <= END_SLACK_S
+    except (ValueError, IndexError):
+        return None
+
+
+def download_complete(client, filename, output_csv, input_csv):
+    """Download the output, again every POLL_INTERVAL_S while it ends before the input does."""
+    deadline = time.time() + OUTPUT_WAIT_S
+    while True:
+        client.files.local.download(filename, output_csv)
+        done = output_reaches_end(output_csv, input_csv)
+        if done is not False:
+            return done
+        if time.time() > deadline:
+            print(f"  WARNING output still ends early {OUTPUT_WAIT_S // 60} min after the run finished: "
+                  f"last window {last_field(output_csv)}, input ends {last_field(input_csv)}")
+            return False
+        print(f"  platform: finished; output still being written (last window {last_field(output_csv)}, "
+              f"input ends {last_field(input_csv)})")
+        time.sleep(POLL_INTERVAL_S)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=DEFAULT_CSV, help="input CSV to run inference on")
@@ -212,8 +251,10 @@ def main():
         print(f"  {inner['filename']}  ({inner['num_bytes']} bytes)")
 
     filename = outputs[0]["data"]["filename"]
-    client.files.local.download(filename, args.output)
-    print(f"saved output to {args.output}")
+    complete = download_complete(client, filename, args.output, args.csv)
+    print(f"saved output to {args.output}" + {True: " (complete: its last window ends at the input's end)",
+                                              False: " (INCOMPLETE: rerun to download again)",
+                                              None: ""}[complete])
 
     # 6. If the input ships a ground-truth sidecar (the sample slice does),
     #    score the predictions: each window is judged against the label of its

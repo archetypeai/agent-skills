@@ -159,6 +159,8 @@ GET $ATAI_API_ENDPOINT/agents/instances/{agent_id}/events   # audit log (level, 
 
 Poll every ~15 s, echoing new audit events (`run started`, `dispatched to JOS as job_…`, `JOS job completed`). Runtime is dominated by worker contention, not window count — see the Runtime section below.
 
+**A `completed` status can come before the output is fully written** (a known platform issue). The status, and the `/results` listing, can be ahead of the output file: a download within seconds of `completed` can return a partial CSV, and minutes later the full one (prod: 326 of 997 rows at first, all 997 later). Treat a run as complete only once its output is: the output's last window ends at the input's last row (`finish_timestamp` = the input's last timestamp, seams and all). Until then, download again every ~15 s.
+
 **A `failed` status can hide a successful run.** Observed live: a job whose container logged "terminated successfully" (output present) surfaced as `status=failed` with `error: repeated failures polling JOS job` — the service's job poller flaked, not the job. Before re-running a "failed" agent, check `/results`; if the output is there, the run succeeded.
 
 ## Step 5 — Fetch results and download
@@ -172,7 +174,7 @@ GET $ATAI_API_ENDPOINT/v0.5/files/download/{filename}
 
 Like the other list endpoints, `/results` **pages**: `data`, `has_more`, `next_cursor`, with `limit` (default 100, max 1000) and `after`/`before` cursors. **The cursor is opaque** — pass `next_cursor` back verbatim and never derive it from `data[last].id`; a fabricated value is rejected with `400 invalid cursor`. One run through a quick-start bundle emits one output, so the first page is the whole answer — a bundle with several sink ports is where paging starts to matter.
 
-[`references/run_osm_agent.py`](references/run_osm_agent.py) scripts the whole flow (upload → resolve bundle → run → poll → download) on the official [`archetypeai` python client](https://github.com/archetypeai/python-client) and — if a `<input>_labels.csv` ground-truth sidecar sits next to the input — scores the run automatically: accuracy (all-windows and steady-state cuts), per-class precision/recall/F1, macro-F1.
+[`references/run_osm_agent.py`](references/run_osm_agent.py) scripts the whole flow (upload → resolve bundle → run → poll → download, again until the output reaches the input's end) on the official [`archetypeai` python client](https://github.com/archetypeai/python-client) and — if a `<input>_labels.csv` ground-truth sidecar sits next to the input — scores the run automatically: accuracy (all-windows and steady-state cuts), per-class precision/recall/F1, macro-F1.
 
 ## Output CSV — one row per window
 
@@ -203,6 +205,7 @@ Budget by the **audit events, not the clock** — you cannot see other tenants' 
 - **The bundle API is plural everywhere** (as of 2026-08-11). `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch), `POST /agents/bundles` (create), `POST /agents/bundles/{id}/run` (run). Every singular form (`/agents/bundle/…`) 404s.
 - **Source connectors take the `file_id` (filename), not the `fil_` uid.** Both come back from the upload; using the uid fails to resolve.
 - **The Agents API is versionless.** `POST {endpoint}/v0.5/agents/…` 404s; strip any `/vX.Y` suffix and use `/agents/…`. The files API keeps its `/v0.5`.
+- **`completed` ≠ complete until the output reaches the input's end.** The status can arrive before the output file is fully written; check the last window's `finish_timestamp` against the input's last row, and download again if it ends early.
 - **`failed` ≠ failed until you check `/results`.** The job poller can flake after a successful job; output present ⇒ the run succeeded.
 - **Prefer sequential runs.** Whether concurrent runs queue depends on what else is running on the deployment at that moment: they queue when other workloads hold the workers, and run as concurrent jobs when they don't. Under load, N parallel runs ran ~N× slower each; with an empty queue, concurrent runs completed at full speed. There is no serialization to rely on and no parallelism to count on — sequential stays the predictable default.
 - **Sampling-rate warnings are expected on irregular data.** The bundle loosens the tolerance for Volve's irregular sampling (Δt 1–27 s); expect warnings, not failures.
@@ -378,6 +381,20 @@ a time, and several runs one at a time too.
 **Outputs don't name their inputs:** the script matches every output row to its delivery file by
 `finish_timestamp` (recordings must not overlap in time) and writes `out/delivery/<file>.csv`.
 Run ids are saved to `out/delivery/runs.json` as each run starts; `--resume` collects them.
+
+**A run counts as completed only once its outputs are.** The platform can report a run
+`completed` while its last output file is still being written (Path 1's Step 4), so the
+script checks that each file's predictions reach that file's last timestamp (within 60 s),
+downloading again every 15 s until they do. The log keeps the platform's status and the
+script's apart, and `runs.json` records `completed` only after the check:
+
+```
+11:53:37   agt_… platform: completed; outputs 4 of 5 complete (…sport_40_2__seg0.csv still being written)
+11:53:52   agt_… completed: all 5 outputs complete
+```
+
+Outputs still short 10 min after the platform said `completed` are logged as a warning and
+recorded on the run (`error: outputs incomplete: …`); `--resume` downloads them again.
 **Expect, on the sample** (~1 min): `1 of 1 files have predictions: 367 windows (0 invalid); 0
 rows matched no file`.
 
@@ -411,6 +428,10 @@ The second machine scores lower than the test, as in the LARCO examples (quickst
 - **Suspiciously low macro-F1 with one state at 0** usually means that state is missing from the
   scored set, not that the model can't see it.
 - **Don't time trials by their `created_at`:** every trial gets the optimization's creation time.
+- **Don't download outputs the moment a run says `completed`.** The last output file can still
+  be being written: the quickstart's prod delivery came back with 2,507 of 3,178 windows, one
+  file cut at 326 of 997. `deliver.py` waits for every file's predictions to reach its end; a
+  hand-rolled client should do the same.
 - **A key exported in your shell beats `.env`.** Keys are per deployment, so a staging key left
   exported while `.env` points at prod makes every upload fail with "Broken pipe": the server
   rejects the request before the body is sent. The scripts now check the key with one GET
