@@ -16,7 +16,7 @@ Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or c
 
 | Skill | Description |
 |-------|-------------|
-| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the OSM agent over the Agents API, two paths. **Path 1:** resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions. **Path 2 (verified on production and staging):** build an agent on your own labelled data — fit and score settings with the Optimizations API, promote the best trial to a blueprint, test it once with the Evals API, deliver it as a bundle, and score the delivery |
+| [atai-operational-state-monitoring-agent](skills/atai-operational-state-monitoring-agent/) | Run the OSM agent over the Agents API, two paths. **Path 1:** resolve the pre-packaged "OSM Quick Start" bundle by name (classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window state predictions. **Path 2:** build an agent on your own labelled data — fit and score settings with the Optimizations API, promote the best trial to a blueprint, test it once with the Evals API, deliver it as a bundle, and score the delivery. Worked example: the [LARCO washing-machine quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart), the whole lifecycle in ~15 min |
 | [atai-operational-state-monitoring-agent-data-prep](skills/atai-operational-state-monitoring-agent-data-prep/) | Turn labelled sensor recordings into the role files the OSM platform accepts — exact sample grid split at gaps, a check that the sensor can tell the states apart, a group-aware split, library-only z-score, one training file per state, continuous scored files, held-back delivery labels — and preflight every platform rule before upload. Local, no API key |
 | [atai-rare-event-detection-agent](skills/atai-rare-event-detection-agent/) | Run the managed RED agent over the Agents API — resolve the pre-packaged "RED Quick Start" bundle by name (nearest-prototype classifier + windowing already pinned), run one agent per input CSV, poll, and download per-window rare-event predictions |
 | [atai-anomaly-discovery-agent](skills/atai-anomaly-discovery-agent/) | Run the managed Anomaly Discovery agent over the Agents API — resolve the pre-packaged "AD Quick Start" bundle by name (fitted LOF detector + threshold already pinned), run one agent per input CSV, poll, and download a per-window anomaly score. For assets with **no fault history**: fitted on normal-only data, so everything it flags is something it was never shown |
@@ -62,6 +62,14 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 | [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (stateless `/query`) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
 | [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via stateless `/query`; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
 
+## Agent examples
+
+The agent lifecycle end to end on real data, over the Agents API (Python scripts, one per stage):
+
+| Example | Skills | What it demonstrates |
+|---------|--------|----------------------|
+| [LARCO washing-machine quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart) | `atai-operational-state-monitoring-agent` + `atai-operational-state-monitoring-agent-data-prep` | LARCO washing-machine vibration (9 channels, 200 Hz) → an OSM agent fitted on the platform: an Optimizations search over windowing and kNN settings, the best trial promoted to a blueprint, one Evals test, then a bundle delivered to a second machine and scored against its held-back labels (fill / wash / spin / drain). The whole lifecycle in ~15 min: test macro-F1 0.86, delivery 0.77. |
+
 ## Quick Start
 
 ### Any coding agent (recommended)
@@ -90,20 +98,20 @@ cp -r skills/* your-project/.claude/skills/
 
 ```
 # Agents — managed pipelines over the Agents API
-/atai-operational-state-monitoring-agent # Every operating regime, from a full labelled library
-/atai-operational-state-monitoring-agent-data-prep # Labelled recordings -> OSM role files, preflighted
-/atai-rare-event-detection-agent   # One named fault, from a handful of labelled examples
-/atai-anomaly-discovery-agent      # Normal-only fit; per-window anomaly score, no fault history needed
-/atai-manual-generation-agent      # Procedure video -> ordered, timestamped manual
-/atai-task-verification-agent      # Recording + SOP -> per-step PASSED / FAILED / MISSING
+/atai-operational-state-monitoring-agent            # Every operating regime, from a full labelled library
+/atai-operational-state-monitoring-agent-data-prep  # Labelled recordings -> OSM role files, preflighted
+/atai-rare-event-detection-agent                    # One named fault, from a handful of labelled examples
+/atai-anomaly-discovery-agent                       # Normal-only fit; per-window anomaly score, no fault history needed
+/atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
+/atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
 # Models — Direct Query API
-/atai-newton-omega-model-data-prep # Clean / split / featurize time-series before the Omega model
-/atai-newton-omega-model           # Omega time-series embeddings + client-side KNN via /query
-/atai-newton-fusion-model          # Multimodal (text/image/video) queries on the C 2.6 fusion model
+/atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
+/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
+/atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
 # Design
-/atai-design-system                # Scaffold + build a Newton demo front-end with the Design System
+/atai-design-system                                 # Scaffold + build a Newton demo front-end with the Design System
 ```
 
 ## Architecture
@@ -128,9 +136,17 @@ Resolve:  GET  /agents/bundles?query=<name> ────────────
 Run:      POST /agents/bundles/<bnd_…>/run ───────────────────► agt_…
 Poll:     GET  /agents/instances/<agt_…>/logs | /events
 Collect:  GET  /agents/instances/<agt_…>/results ─────────────► output file
+
+Fit (OSM Path 2: your own labelled data):
+          POST /agents/optimizations ─────────────────────────► opt_… (trials, scored)
+          POST /agents/optimizations/<opt_…>/trials/<otr_…>/promote ► blp_…
+          POST /agents/evals ─────────────────────────────────► evl_… (the test score)
 ```
 
-Every reference script is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
+A run can report `completed` before its last output file is fully written (a known platform
+issue): check that an output reaches its input's end before using it, as the OSM runners do.
+
+Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
 
 ## API Base URL
 
