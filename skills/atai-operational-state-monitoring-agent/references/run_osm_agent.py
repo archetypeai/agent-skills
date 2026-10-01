@@ -80,7 +80,8 @@ def load_dotenv(path=None):
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+            if not os.environ.get(key.strip()):  # unset, or set but empty
+                os.environ[key.strip()] = value.strip()
 
 
 def versioned(endpoint):

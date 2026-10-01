@@ -190,6 +190,16 @@ class TestHttp(unittest.TestCase):
                         atai_http.check_auth(log=lambda m: None)
                 self.assertIn("unset ATAI_API_KEY", str(cm.exception))
 
+    def test_an_empty_exported_variable_does_not_hide_dotenv(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, ".env")
+            open(env, "w").write("ATAI_API_KEY=sk_x\nATAI_API_ENDPOINT=https://from-dotenv.test\n")
+            with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "", "ATAI_API_KEY": ""}, clear=False):
+                atai_http.SOURCE.clear()
+                atai_http.load_dotenv(env)
+                self.assertEqual(os.environ["ATAI_API_ENDPOINT"], "https://from-dotenv.test")
+                self.assertEqual(atai_http.SOURCE["ATAI_API_ENDPOINT"], env)
+
     def test_dotenv_is_found_upwards_and_the_nearest_wins(self):
         import run_osm_agent
         with tempfile.TemporaryDirectory() as root:

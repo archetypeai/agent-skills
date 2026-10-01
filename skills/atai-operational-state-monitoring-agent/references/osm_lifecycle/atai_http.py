@@ -59,9 +59,9 @@ def load_dotenv(path=None):
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             key = key.strip()
-            if key not in os.environ:
+            if not os.environ.get(key):         # unset, or set but empty: an empty export mustn't hide .env
                 os.environ[key] = value.strip()
-                SOURCE.setdefault(key, os.path.abspath(path))
+                SOURCE[key] = os.path.abspath(path)
 
 
 def check_auth(log=print):
