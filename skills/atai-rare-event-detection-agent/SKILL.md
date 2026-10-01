@@ -192,6 +192,12 @@ is the audit log and announces the JOS job id at dispatch.
 curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
 ```
 
+**A `completed` run can still be writing its output** (a known platform issue): a download
+within seconds can return a partial CSV, its rows cut off before the input's end. The runner
+counts the output complete only once its last window's `finish_timestamp` reaches the input's
+last timestamp (within one window span and a minute), downloading again every 15 s until it
+does, for up to 10 min.
+
 Each result nests its fields under an inner `data` object: `filename`,
 `num_bytes`, and `ref`. For a **run output** the `ref` is a *relative*
 `/files/download/{name}` path that resolves under `/v0.5` and needs the bearer

@@ -348,6 +348,30 @@ def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 20) -> str:
     return "timeout"
 
 
+# The platform can report a run completed while its output file is still being
+# written (a known issue). A partly written JSON document doesn't parse, so the
+# output counts as complete only once it does.
+OUTPUT_WAIT_S = 600
+
+
+def wait_until_parses(save, out_path: str) -> bool:
+    """save() downloads the output; again every 15 s while it isn't valid JSON."""
+    deadline = time.time() + OUTPUT_WAIT_S
+    while True:
+        try:
+            json.load(open(out_path, encoding="utf-8"))
+            return True
+        except (ValueError, UnicodeDecodeError):
+            pass
+        if time.time() > deadline:
+            print(f"  WARNING: the output still isn't valid JSON {OUTPUT_WAIT_S // 60} min "
+                  f"after the run finished; rerun to download it again")
+            return False
+        print("  run finished; output still being written, downloading again in 15 s")
+        time.sleep(15)
+        save()
+
+
 def fetch_results(agent_id: str, out_path: str) -> bytes | None:
     """Save the first output. The `ref` is RELATIVE, resolves under /v0.5, and
     needs the bearer token; an absolute ref is presigned and must not get it.
@@ -364,17 +388,20 @@ def fetch_results(agent_id: str, out_path: str) -> bytes | None:
         print("  results carried no download ref")
         return None
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    if ref.startswith("http"):
-        # A presigned S3 ref expires (~20 min), so fetch it directly.
-        with urllib.request.urlopen(ref, timeout=300) as resp:
-            payload = resp.read()
-        with open(out_path, "wb") as fh:
-            fh.write(payload)
-    else:
-        name = (inner.get("filename") or ref.rsplit("/", 1)[-1])
-        client().files.local.download(name, out_path)
-        payload = open(out_path, "rb").read()
-    return payload
+
+    def save() -> None:
+        if ref.startswith("http"):
+            # A presigned S3 ref expires (~20 min), so fetch it directly.
+            with urllib.request.urlopen(ref, timeout=300) as resp:
+                payload = resp.read()
+            with open(out_path, "wb") as fh:
+                fh.write(payload)
+        else:
+            client().files.local.download(inner.get("filename") or ref.rsplit("/", 1)[-1], out_path)
+
+    save()
+    wait_until_parses(save, out_path)
+    return open(out_path, "rb").read()
 
 
 def parse_labels(text: str) -> dict[int, bool]:

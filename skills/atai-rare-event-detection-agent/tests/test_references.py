@@ -27,6 +27,7 @@ import csv
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -207,6 +208,46 @@ class BundleShapeTests(unittest.TestCase):
                      "client().agents.bundles.run(",
                      "client().agents.instances.get_results("):
             self.assertIn(call, src)
+
+
+class OutputCompletenessTests(unittest.TestCase):
+    """The platform can report completed while the output is still being written."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.input = os.path.join(self.dir, "in.csv")
+        with open(self.input, "w") as f:
+            f.write("timestamp,a\n1526962440,0\n1527490260,1\n")
+        self.output = os.path.join(self.dir, "out.csv")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def write(self, finish):
+        with open(self.output, "w") as f:
+            f.write("finish_timestamp,start_timestamp,predicted_state\n"
+                    f"1526966220.0,1526962440.0,normal\n{finish},{finish - 61440},normal\n")
+
+    def test_output_must_reach_the_inputs_end(self):
+        self.write(1527490260.0)
+        self.assertTrue(run_red_agent.output_reaches_end(self.output, self.input))
+        self.write(1527000000.0)
+        self.assertFalse(run_red_agent.output_reaches_end(self.output, self.input))
+
+    def test_downloads_again_until_complete(self):
+        n = {"downloads": 0}
+
+        def download(name, out_path):
+            n["downloads"] += 1
+            self.write(1527490260.0 if n["downloads"] >= 3 else 1527000000.0)
+
+        fake = mock.Mock()
+        fake.agents.instances.get_results.return_value = {"data": [{"data": {"filename": "o.csv"}}]}
+        fake.files.local.download.side_effect = download
+        with mock.patch.object(run_red_agent, "client", return_value=fake), \
+                mock.patch.object(run_red_agent.time, "sleep"), mock.patch("builtins.print"):
+            run_red_agent.download_results("agt_x", self.output, self.input)
+        self.assertEqual(n["downloads"], 3)
 
 
 if __name__ == "__main__":

@@ -236,7 +236,51 @@ def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 15) -> str:
     return "timeout"
 
 
-def download_results(agent_id: str, out_path: str) -> str | None:
+# The platform can report a run completed while its output file is still being
+# written (a known issue), so the output counts as complete only once its last
+# window ends at the input's end: within one window span (an output row's
+# finish - start) plus a minute.
+END_SLACK_S = 60
+OUTPUT_WAIT_S = 600
+
+
+def tail_row(path: str) -> tuple[list[str], list[str]]:
+    """A CSV's header and last row, read from the file's end."""
+    with open(path, "rb") as f:
+        header = next(csv.reader([f.readline().decode()]))
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - (1 << 20)))
+        last = f.read().strip().split(b"\n")[-1].decode()
+    return header, next(csv.reader([last]))
+
+
+def output_reaches_end(output_csv: str, input_csv: str) -> bool | None:
+    """Whether the output's last window ends at the input's last row. None when
+    the output carries no window span or the timestamps aren't numbers."""
+    try:
+        head, row = tail_row(output_csv)
+        finish = float(row[head.index("finish_timestamp")])
+        span = finish - float(row[head.index("start_timestamp")])
+        end = float(tail_row(input_csv)[1][0])
+    except (ValueError, IndexError, StopIteration):
+        return None
+    return end - finish <= max(span, 0) + END_SLACK_S
+
+
+def wait_until_complete(save, output_csv: str, input_csv: str) -> None:
+    """save() downloads the output; again every 15 s while it ends early."""
+    deadline = time.time() + OUTPUT_WAIT_S
+    while output_reaches_end(output_csv, input_csv) is False:
+        if time.time() > deadline:
+            print(f"  WARNING: the output still ends before the input "
+                  f"{OUTPUT_WAIT_S // 60} min after the run finished; rerun to download it again")
+            return
+        print("  run finished; output still being written, downloading again in 15 s")
+        time.sleep(15)
+        save()
+
+
+def download_results(agent_id: str, out_path: str, input_csv: str | None = None) -> str | None:
     res = client().agents.instances.get_results(agent_id)
     items = res.get("data", res) if isinstance(res, dict) else res
     if not items:
@@ -260,6 +304,8 @@ def download_results(agent_id: str, out_path: str) -> str | None:
         return None
     print(f"  results ({len(items)}): {name}  ({inner.get('num_bytes', '?')} bytes)")
     client().files.local.download(name, out_path)
+    if input_csv:
+        wait_until_complete(lambda: client().files.local.download(name, out_path), out_path, input_csv)
     return out_path
 
 
@@ -424,7 +470,7 @@ def main() -> None:
     if status not in ("completed", "succeeded"):
         sys.exit(f"run did not complete: {status}")
 
-    if not download_results(agent_id, args.output):
+    if not download_results(agent_id, args.output, args.csv):
         sys.exit("no results to score")
     print(f"  saved {args.output}")
 

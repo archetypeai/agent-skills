@@ -387,6 +387,10 @@ GET {endpoint}/agents/instances/{agent_id}/results
 
 The `ref` is a **relative** platform path resolving under `/v0.5`, and needs the bearer token. **Run outputs do not expire**, so a client that dies — closed laptop, dropped network, Ctrl-C — has abandoned nothing. Re-fetch by agent id rather than re-running; the output filename embeds the input name (`…__output_<clip>.json`), which is enough to reassemble a batch after the fact.
 
+**A `completed` run can still be writing its output** (a known platform issue): a download
+within seconds can return a partial file. A partly written JSON document doesn't parse, so the
+runner downloads again every 15 s until it does, for up to 10 min.
+
 ## Output JSON — one record per video
 
 ```json

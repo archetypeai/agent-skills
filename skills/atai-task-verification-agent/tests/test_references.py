@@ -403,5 +403,25 @@ class TestRequestShapes(unittest.TestCase):
             self.assertNotIn(f"import {mod}", RUNNER_SRC)
 
 
+class TestWaitsForCompleteOutput(unittest.TestCase):
+    """The platform can report completed while the output is still being written."""
+
+    def test_downloads_again_until_the_json_parses(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "out.json")
+            open(out, "w").write('{"steps": [{"step": 1')    # cut off mid-write
+            n = {"saves": 0}
+
+            def save():
+                n["saves"] += 1
+                open(out, "w").write('{"steps": [{"step": 1}]}' if n["saves"] >= 2 else '{"steps": [')
+
+            with mock.patch.object(tva.time, "sleep"), mock.patch("builtins.print"):
+                self.assertTrue(tva.wait_until_parses(save, out))
+            self.assertEqual(n["saves"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

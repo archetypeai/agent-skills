@@ -198,6 +198,12 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" \
   "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
 ```
 
+**A `completed` run can still be writing its output** (a known platform issue): a download
+within seconds can return a partial CSV, its rows cut off before the input's end. The runner
+counts the output complete only once its last window's `finish_timestamp` reaches the input's
+last timestamp (within one window span and a minute), downloading again every 15 s until it
+does, for up to 10 min.
+
 `/results` pages like the listing endpoints — `data`, `has_more`,
 `next_cursor`, with `limit` (default 100, max 1000) and `after`/`before`, and
 the **same opaque-cursor rule**: pass `next_cursor` back verbatim, never
