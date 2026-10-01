@@ -49,7 +49,7 @@ Use that scaffolded project as the baseline for your demo: the tokens, brand sty
 
 ## Example apps
 
-End-to-end demos built on these skills (on the Direct Query API, in SvelteKit, unless noted):
+End-to-end demos built on these skills, on the Direct Query API (SvelteKit unless noted):
 
 | Demo | Skills | What it demonstrates |
 |------|--------|----------------------|
@@ -61,7 +61,14 @@ End-to-end demos built on these skills (on the Direct Query API, in SvelteKit, u
 | [Drilling state monitor](https://github.com/archetypeai/archetypeai-drilling-demo) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Equinor Volve North Sea well SCADA: per-channel Omega embeddings + local KNN classify each window as drilling / not-drilling, against a leakage-free n-shot library precomputed offline from held-out reference wells. Replays real well telemetry with live accuracy vs ACTC ground truth. |
 | [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (stateless `/query`) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
 | [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via stateless `/query`; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
-| [Washing-machine state monitor](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart) (Python, Agents API) | `atai-operational-state-monitoring-agent` + `atai-operational-state-monitoring-agent-data-prep` | LARCO washing-machine vibration (9 channels, 200 Hz) → an OSM agent fitted on the platform: an Optimizations search over windowing and kNN settings, the best trial promoted to a blueprint, one Evals test, then a bundle delivered to a second machine and scored against its held-back labels (fill / wash / spin / drain). The whole lifecycle in ~15 min: test macro-F1 0.86, delivery 0.77. |
+
+## Agent examples
+
+The agent lifecycle end to end on real data, over the Agents API (Python scripts, one per stage):
+
+| Example | Skills | What it demonstrates |
+|---------|--------|----------------------|
+| [LARCO washing-machine quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart) | `atai-operational-state-monitoring-agent` + `atai-operational-state-monitoring-agent-data-prep` | LARCO washing-machine vibration (9 channels, 200 Hz) → an OSM agent fitted on the platform: an Optimizations search over windowing and kNN settings, the best trial promoted to a blueprint, one Evals test, then a bundle delivered to a second machine and scored against its held-back labels (fill / wash / spin / drain). The whole lifecycle in ~15 min: test macro-F1 0.86, delivery 0.77. |
 
 ## Quick Start
 
