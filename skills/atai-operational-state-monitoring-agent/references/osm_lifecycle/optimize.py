@@ -58,12 +58,14 @@ def summarize(trials, states):
         f1, n = report_f1(t.get("metrics_report"))
         rows.append({"trial": t["trial_number"], "id": t["id"], "status": t["status"], "window": w, "step": st,
                      "k": k, "metric": metric, "weights": weights, "macro_f1": t.get("objective_value"),
-                     "f1": f1, "windows_scored": n})
+                     "f1": f1, "windows_scored": n, "error": t.get("error")})
     for r in sorted(rows, key=lambda r: -(r["macro_f1"] if r["macro_f1"] is not None else -1)):
         m = "   -  " if r["macro_f1"] is None else f"{r['macro_f1']:.4f}"
         print(f"  #{r['trial']:<3} w={r['window']:<5} step={r['step']:<5} k={r['k']:<3} {r['metric']:<6} {r['weights']:<8} "
               f"{r['status']:<9} macro-F1 {m}  " + "  ".join(f"{s} {r['f1'].get(s, 0):.2f}" for s in states)
               + f"  windows {r['windows_scored']:,}")
+        if r["error"]:
+            print(f"        error: {r['error']}")
     return rows
 
 

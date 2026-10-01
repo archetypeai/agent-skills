@@ -2,8 +2,9 @@
 
 The interface between the two OSM skills. **This skill produces it;**
 [`atai-operational-state-monitoring-agent`](../../atai-operational-state-monitoring-agent/SKILL.md)
-(Path 2) **consumes it.** Everything below was verified on the dev deployment
-(2026-09-30); the "why" column says what breaks if a rule is ignored.
+(Path 2) **consumes it.** The rules below were measured on the dev deployment
+(2026-09-30), and the sample built to them runs identically on production (2026-10-01); the
+"why" column says what breaks if a rule is ignored.
 
 ## Layout
 

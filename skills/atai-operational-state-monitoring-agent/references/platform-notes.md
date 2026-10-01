@@ -3,8 +3,20 @@
 Measured on the **dev** deployment on 2026-09-30, building the LARCO washing-machine
 agent end to end: the [quickstart](https://github.com/archetypeai/osm-agent-example-larco-quickstart)
 (19 short cycles, ~15 min) and the [full example](https://github.com/archetypeai/osm-agent-example-larco)
-(199 cycles, 25 GB of role files). **Production is pending validation.** Each item says
-what you'll see if you trip over it.
+(199 cycles, 25 GB of role files). **Production** (2026-10-01) ran the prep skill's sample end
+to end with results identical to dev at every step. Each item says what you'll see if you
+trip over it.
+
+## Deployments
+
+| deployment | Optimizations / promote / Evals | notes (2026-10-01) |
+|---|---|---|
+| production (`api.u1`) | ✅ | the sample reproduced dev exactly: 0.7920 / 0.8463 / 0.7431 |
+| dev (`api.dev.u1`) | ✅ | where everything here was measured |
+| staging (`api.stage.u1`) | ❌ for now | the APIs answer, but every optimization fails at job creation: `Pipeline 'optimizer-runner-cuda' has no active versions` |
+
+Each deployment has its own `osm` blueprint id (resolve it by key) and its own API keys: a key
+for one returns 401 on another.
 
 ## Data the platform accepts
 
