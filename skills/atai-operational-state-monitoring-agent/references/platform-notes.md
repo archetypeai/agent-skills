@@ -2,7 +2,7 @@
 
 Measured on the **dev** deployment on 2026-09-30, building the LARCO washing-machine
 agent end to end: the [quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart)
-(19 short cycles, ~15 min) and the full example (199 cycles, 25 GB of role files; not
+(19 short cycles) and the full example (199 cycles, 25 GB of role files; not
 published). **Production, staging and Tokyo** (2026-10-01) ran the prep skill's sample end to
 end with results identical to dev at every step. Each item says what you'll see if you
 trip over it.
