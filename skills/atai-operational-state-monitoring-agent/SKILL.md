@@ -41,7 +41,7 @@ either.
 | you get | per-window predictions from Archetype AI's six-state Volve classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
-| time | ~1–2 min on a clear queue | ~15 min for a small dataset (the LARCO quickstart); hours for large ones |
+| time | ~1–2 min on a clear queue | minutes to hours, with the dataset's size and the platform's load |
 | status | verified on production | **verified on production, staging (2026-10-01) and dev (2026-09-30), identical results** |
 
 Path 2's last step *is* Path 1, run on your own bundle instead of the maintained one, so the
@@ -250,7 +250,7 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > with identical results on all four: the prep skill's sample below scored the same at every step
 > (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
 > [operational-state-monitoring-agent-example-larco-quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart)
-> (19 short cycles, the whole lifecycle in ~15 min) and a full version (199 cycles, the full
+> (19 short cycles) and a full version (199 cycles, the full
 > study; not published). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
