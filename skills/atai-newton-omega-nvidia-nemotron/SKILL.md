@@ -133,10 +133,17 @@ Bearing 1 is the one that failed in IMS Set 2 (outer race) — Nemotron picked i
 
 ## Worked demos
 
-| Demo | Omega side | Nemotron side |
-|---|---|---|
-| [SWaT water treatment](https://github.com/archetypeai/archetypeai-swat-demo-nemotron) (SvelteKit) | Per-stage KNN: normal / attack for six plant stages | Upstream / local / downstream **operator action cards** as a JSON array; topology + equipment checks in code; cached per anomaly set |
-| [Penmanshiel wind turbine](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron) (Flask) | Per-window KNN: healthy / fault, WT01 vs WT09 | **Fault brief** comparing the flagged turbine with its healthy peer over the same hours; streamed as an SSE event. Correctly pointed to the pitch system for WT09's real 23 h pitch-circuit stop, without seeing the status log |
+Two full apps built with this skill. Start from the key files — they're short and self-contained.
+
+| Demo | Omega side | Nemotron side | Key files |
+|---|---|---|---|
+| [SWaT × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-swat-demo-nemotron) (SvelteKit) | Per-stage KNN: normal / attack for six plant stages | Upstream / local / downstream **operator action cards** as a JSON array; topology + equipment checks in code; cached per anomaly set | [`nemotron.js`](https://github.com/archetypeai/archetypeai-swat-demo-nemotron/blob/main/src/lib/server/nemotron.js) (client) · [`api/suggestions/+server.js`](https://github.com/archetypeai/archetypeai-swat-demo-nemotron/blob/main/src/routes/api/suggestions/+server.js) (prompt, validation, cache) |
+| [Wind turbine × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron) (Python/Flask) | Per-window KNN: healthy / fault, WT01 vs WT09 | **Fault brief** comparing the flagged turbine with its healthy peer over the same hours; streamed as an SSE event. Correctly pointed to the pitch system for WT09's real 23 h pitch-circuit stop, without seeing the status log | [`nemotron_client.py`](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron/blob/main/nemotron_client.py) (stats, prompt, validation) · [`app.py`](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron/blob/main/app.py) (async brief jobs, SSE) |
+
+Which pattern to copy:
+
+- **Action cards (SWaT)** when the asset has a known structure (stages, lines, a topology) and the operator needs *what to do where*. Validate every card against that structure in code.
+- **Fault brief (wind turbine)** when there's a healthy peer or baseline to compare with and the operator needs *what happened and what to check*.
 
 ## Local Setup
 
