@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'skills/atai-operational-state-monitoring-agent/**'
+      - 'skills/atai-operational-state-monitoring-agent-data-prep/SKILL.md'   # Step 0 repeats its sample commands
       - '.github/workflows/test-atai-operational-state-monitoring-agent.yml'
   push:
     branches: [main]
     paths:
       - 'skills/atai-operational-state-monitoring-agent/**'
+      - 'skills/atai-operational-state-monitoring-agent-data-prep/SKILL.md'   # Step 0 repeats its sample commands
       - '.github/workflows/test-atai-operational-state-monitoring-agent.yml'
 
 jobs:

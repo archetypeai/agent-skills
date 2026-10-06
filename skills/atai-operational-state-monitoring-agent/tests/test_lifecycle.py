@@ -255,5 +255,20 @@ class TestHttp(unittest.TestCase):
         self.assertAlmostEqual(f1["drain"], 6 / 7)
 
 
+class TestSampleCommandsMatchThePrepSkill(unittest.TestCase):
+    """Path 2's Step 0 repeats the prep skill's commands for its sample; they must not drift."""
+
+    def test_step_0_commands_are_the_prep_skills(self):
+        skills = Path(__file__).resolve().parent.parent.parent
+        osm = (skills / "atai-operational-state-monitoring-agent" / "SKILL.md").read_text()
+        prep = (skills / "atai-operational-state-monitoring-agent-data-prep" / "SKILL.md").read_text()
+        block = osm.split("**To try Path 2 on the prep skill's sample**", 1)[1].split("```sh", 1)[1].split("```", 1)[0]
+        commands = [line.split("#", 1)[0].strip() for line in block.splitlines() if line.startswith("python ")]
+        self.assertEqual(len(commands), 4)
+        prep_lines = {line.split("#", 1)[0].strip() for line in prep.splitlines()}
+        for command in commands:
+            self.assertIn(command, prep_lines, f"not in the prep skill's SKILL.md: {command}")
+
+
 if __name__ == "__main__":
     unittest.main()
