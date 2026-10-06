@@ -38,7 +38,7 @@ Everything here is **local and needs no API key**. The contract itself is in
 [`references/role-files.md`](references/role-files.md); the platform rules in it were
 measured on the dev deployment (2026-09-30) while building the LARCO washing-machine
 examples (the [quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart),
-and a full version that isn't published).
+and the [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco)).
 
 ## When to Apply
 

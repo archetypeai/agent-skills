@@ -250,8 +250,8 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > with identical results on all four: the prep skill's sample below scored the same at every step
 > (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
 > [operational-state-monitoring-agent-example-larco-quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart)
-> (19 short cycles) and a full version (199 cycles, the full
-> study; not published). A deployment without the optimizer job runner fails every optimization at
+> (19 short cycles) and the
+> [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
