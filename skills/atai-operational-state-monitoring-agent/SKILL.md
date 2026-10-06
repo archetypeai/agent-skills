@@ -288,10 +288,25 @@ Three contract rules decide whether a run works at all:
 - **No time jumps in scored files:** one scored window across a jump fails the whole trial or eval.
 - **Every state in every scored set:** an absent state scores F1 = 0.
 
+**To try Path 2 on the prep skill's sample** (8 short LARCO washing-machine cycles,
+already labelled and assigned to roles), build its role files first, locally, in a few
+seconds:
+
+```sh
+cd skills/atai-operational-state-monitoring-agent-data-prep/references
+pip install -r requirements.txt
+S=sample_data/recordings.csv
+python prepare.py --index $S --out prepared --hz 200 --abs-max 2.2
+python check_states.py --index $S --prepared prepared --window 512
+python build_roles.py --index $S --prepared prepared --out roles --window 1024 --per-state 200
+python preflight_roles.py --roles roles --prepared prepared --index $S    # expect RESULT: PASS
+```
+
+What each step does and why is in the prep skill; for your own recordings, start there.
+
 ## Step 1 — Optimize: fit and score settings
 
-Every step below runs as-is on the prep skill's sample: build its role files first
-(`atai-operational-state-monitoring-agent-data-prep`, "The steps"), then:
+Every step below runs as-is on the prep skill's sample (role files built as in Step 0):
 
 ```sh
 cd references/osm_lifecycle
