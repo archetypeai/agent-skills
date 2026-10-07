@@ -11,8 +11,9 @@ The Omega half mirrors `atai-newton-omega-model/references/_common.py` (one
 /query per channel, fanned out). The Nemotron half uses only the standard
 library, so there is no OpenAI SDK dependency.
 
-Credential lookup (first hit wins): env vars, then a .env found by walking up
-from cwd, then a .env next to this file.
+Credential lookup (first hit wins): env vars, then the nearest .env found by
+walking up from cwd (normally the one at the repo root, shared by every skill),
+then a .env next to this file.
   ATAI_API_KEY, ATAI_API_ENDPOINT   required for Omega (no default endpoint)
   NVIDIA_API_KEY                    required for Nemotron (nvapi-..., from
                                     https://build.nvidia.com/settings/api-keys)

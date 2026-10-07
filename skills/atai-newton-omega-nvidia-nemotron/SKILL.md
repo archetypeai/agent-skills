@@ -151,6 +151,9 @@ Which pattern to copy:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r skills/atai-newton-omega-nvidia-nemotron/references/requirements.txt
 
+# Drop a .env at the repo root (or anywhere up the tree from the run dir) —
+# one .env serves every skill. Already have one for the other skills? Just add
+# NVIDIA_API_KEY to it. Otherwise start from this skill's template:
 cp skills/atai-newton-omega-nvidia-nemotron/references/.env.example .env
 # fill in ATAI_API_KEY, ATAI_API_ENDPOINT, NVIDIA_API_KEY
 
