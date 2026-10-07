@@ -8,7 +8,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 ## Skills
 
-Three groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/query` and leave the orchestration to you, and **Design** covers the demo front-end.
+Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/query` and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
 
 ### Agents
 
@@ -32,6 +32,14 @@ Direct Query API — one stateless `POST /query` per request, for when you want 
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
+
+### Integrations
+
+Newton paired with a third-party model: Newton does the sensing, the other model reasons over what Newton found.
+
+| Skill | Description |
+|-------|-------------|
+| [atai-newton-omega-nvidia-nemotron](skills/atai-newton-omega-nvidia-nemotron/) | Omega senses, NVIDIA Nemotron explains — Omega embeddings + client-side KNN decide the state of a sensor window, and Nemotron (NVIDIA hosted API) turns the verdict and window statistics into a validated fault brief or operator actions. Covers NVIDIA key types, model retirement, turning Nemotron 3's reasoning off, JSON-only prompts, and caching |
 
 ### Design
 
@@ -58,6 +66,8 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 | [Earthquake monitor](https://github.com/archetypeai/archetypeai-earthquake-demo) | `atai-newton-fusion-model` | Live USGS feed → C 2.6 **text reasoning**. Formats the current quakes as structured text and asks Newton (stateless `/query`) to surface aftershock sequences, spatial clustering, and ranked regional risk — alongside an interactive world map. |
 | [SWaT water treatment](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) | `atai-newton-omega-model` + `atai-newton-fusion-model` | Six-stage plant anomaly detection: Omega per-channel embeddings + client-side KNN, plus C 2.6 text reasoning for operator action suggestions. |
 | [Wind turbine monitor](https://github.com/archetypeai/archetypeai-wind-turbine-demo) (Python/Flask) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Penmanshiel wind-farm SCADA anomaly detection: Omega per-channel embeddings + local KNN against a leakage-free n-shot library precomputed offline. Replays 3 months of telemetry and detects a real frequency-converter fault on one turbine against its healthy peer. |
+| [SWaT × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-swat-demo-nemotron) | `atai-newton-omega-model` + `atai-newton-omega-nvidia-nemotron` | The SWaT demo with NVIDIA Nemotron in place of C 2.6 for operator suggestions: Nemotron returns upstream / local / downstream action cards as JSON, checked in code against the plant topology and each stage's equipment, cached per anomaly set. |
+| [Wind turbine × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron) (Python/Flask) | `atai-newton-omega-model` + `atai-newton-omega-nvidia-nemotron` | The Penmanshiel demo plus NVIDIA Nemotron fault briefs: when Omega flags a turbine, Nemotron compares the window with the healthy peer over the same hours and returns what changed, the likely cause and what to check. |
 | [Drilling state monitor](https://github.com/archetypeai/archetypeai-drilling-demo) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Equinor Volve North Sea well SCADA: per-channel Omega embeddings + local KNN classify each window as drilling / not-drilling, against a leakage-free n-shot library precomputed offline from held-out reference wells. Replays real well telemetry with live accuracy vs ACTC ground truth. |
 | [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (stateless `/query`) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
 | [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via stateless `/query`; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
@@ -110,6 +120,9 @@ cp -r skills/* your-project/.claude/skills/
 /atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
 /atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
+# Integrations
+/atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
+
 # Design
 /atai-design-system                                 # Scaffold + build a Newton demo front-end with the Design System
 ```
@@ -125,6 +138,13 @@ Text:          POST /query ─────────────────�
 Image(s):      Upload file(s) → POST /query (file_ids) ───────► response
 Video (.mp4):  Upload file → POST /query + max_frames ────────► response
 Video frames:  POST /query (frames + query_metadata) ─────────► response
+```
+
+**Integrations** reuse the Direct Query API for the Newton side and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
+
+```
+Omega:     POST /query per channel ──► embeddings ──► local KNN ──► verdict
+Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
 **Agents — the Agents API.** You upload an input, run a pre-packaged bundle or a canonical blueprint, poll, and download the output; the model runs server-side.
