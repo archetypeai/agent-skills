@@ -30,6 +30,7 @@ import urllib.request
 from _common import (
     NemotronError,
     banner,
+    missing_key_message,
     chat_body,
     load_dotenv_if_available,
     nemotron_model,
@@ -74,7 +75,8 @@ def main() -> None:
     parser.add_argument("--model", default=None, help="model id (default: NEMOTRON_MODEL or the skill default)")
     parser.add_argument("--list", action="store_true", help="only list Nemotron chat models")
     args = parser.parse_args()
-    load_dotenv_if_available()
+    loaded = load_dotenv_if_available()
+    print(f".env read: {', '.join(loaded) if loaded else 'none found from ' + os.getcwd() + ' upward'}\n")
     model = args.model or nemotron_model()
 
     banner("Nemotron chat models listed by the NVIDIA API")
@@ -89,7 +91,7 @@ def main() -> None:
 
     banner(f"Calling {model}")
     if not os.environ.get("NVIDIA_API_KEY"):
-        sys.exit("NVIDIA_API_KEY is not set. Create one at https://build.nvidia.com/settings/api-keys.")
+        sys.exit(missing_key_message("NVIDIA_API_KEY", "Create one at https://build.nvidia.com/settings/api-keys."))
     try:
         result = ping(model)
     except NemotronError as exc:

@@ -30,6 +30,55 @@ def _http_error(code: int, body: str = "{}"):
     return urllib.error.HTTPError("https://example", code, "err", {}, io.BytesIO(body.encode()))
 
 
+class DotenvTest(unittest.TestCase):
+    """The repo-root .env convention: found by walking up from cwd."""
+
+    def setUp(self):
+        import tempfile
+
+        self.root = Path(tempfile.mkdtemp())
+        self.run_dir = self.root / "skills" / "x" / "references"
+        self.run_dir.mkdir(parents=True)
+        cwd = os.getcwd()
+        os.chdir(self.run_dir)
+        self.addCleanup(os.chdir, cwd)
+        # Don't let a real .env next to _common.py leak into these tests.
+        sibling = mock.patch.object(_common, "__file__", str(self.run_dir / "_common.py"))
+        sibling.start()
+        self.addCleanup(sibling.stop)
+
+    def test_root_env_found_from_references_dir(self):
+        (self.root / ".env").write_text("NVIDIA_API_KEY=nvapi-from-root\n")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            loaded = _common.load_dotenv_if_available()
+            self.assertEqual(os.environ["NVIDIA_API_KEY"], "nvapi-from-root")
+        self.assertEqual([Path(p).resolve() for p in loaded], [(self.root / ".env").resolve()])
+
+    def test_empty_exported_variable_does_not_mask_env_file(self):
+        (self.root / ".env").write_text("NVIDIA_API_KEY=nvapi-from-root\n")
+        with mock.patch.dict(os.environ, {"NVIDIA_API_KEY": ""}, clear=True):
+            _common.load_dotenv_if_available()
+            self.assertEqual(os.environ["NVIDIA_API_KEY"], "nvapi-from-root")
+
+    def test_real_environment_value_wins(self):
+        (self.root / ".env").write_text("NVIDIA_API_KEY=nvapi-from-root\n")
+        with mock.patch.dict(os.environ, {"NVIDIA_API_KEY": "nvapi-exported"}, clear=True):
+            _common.load_dotenv_if_available()
+            self.assertEqual(os.environ["NVIDIA_API_KEY"], "nvapi-exported")
+
+    def test_message_when_no_env_file(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            message = _common.missing_key_message("NVIDIA_API_KEY", "hint")
+        self.assertIn("no .env was found", message)
+
+    def test_message_when_key_missing_from_env_file(self):
+        (self.root / ".env").write_text("ATAI_API_KEY=sk_x\n")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            message = _common.missing_key_message("NVIDIA_API_KEY", "hint")
+        self.assertIn("not set or empty in", message)
+        self.assertIn(".env", message)
+
+
 class ChatBodyTest(unittest.TestCase):
     def test_reasoning_off_via_chat_template(self):
         body = _common.chat_body("sys", "user")

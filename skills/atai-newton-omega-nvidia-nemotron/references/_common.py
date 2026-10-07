@@ -63,17 +63,38 @@ class NemotronError(RuntimeError):
         self.status = status
 
 
-def load_dotenv_if_available() -> None:
+def load_dotenv_if_available() -> list[str]:
+    """Load the nearest .env (walking up from cwd), then one next to this file.
+
+    Real environment values win, except empty ones: an exported-but-empty
+    variable would otherwise silently mask the .env. Returns the files read.
+    """
     try:
-        from dotenv import find_dotenv, load_dotenv  # type: ignore
+        from dotenv import dotenv_values, find_dotenv  # type: ignore
     except ImportError:
-        return
-    found = find_dotenv(usecwd=True)
-    if found:
-        load_dotenv(found, override=False)
-    sibling = Path(__file__).parent / ".env"
-    if sibling.exists():
-        load_dotenv(sibling, override=False)
+        return []
+    loaded: list[str] = []
+    for path in (find_dotenv(usecwd=True), str(Path(__file__).parent / ".env")):
+        if path and Path(path).exists() and path not in loaded:
+            for key, value in dotenv_values(path).items():
+                if value and not os.environ.get(key):
+                    os.environ[key] = value
+            loaded.append(path)
+    return loaded
+
+
+def missing_key_message(name: str, create_hint: str) -> str:
+    """Explain why `name` is unset: no .env found, dotenv missing, or the key absent from it."""
+    try:
+        import dotenv  # type: ignore  # noqa: F401
+    except ImportError:
+        return (f"{name} is not set, and python-dotenv isn't installed, so no .env was read. "
+                f"Run `pip install -r requirements.txt` or export {name}. {create_hint}")
+    loaded = load_dotenv_if_available()
+    if not loaded:
+        return (f"{name} is not set, and no .env was found from {Path.cwd()} upward. "
+                f"Put one at the repo root (start from references/.env.example). {create_hint}")
+    return f"{name} is not set or empty in {', '.join(loaded)} (or the environment). {create_hint}"
 
 
 # ---------------------------------------------------------------- Omega (/query)
@@ -85,10 +106,10 @@ def make_client():
     load_dotenv_if_available()
     api_key = os.environ.get("ATAI_API_KEY")
     if not api_key:
-        sys.exit("ATAI_API_KEY is not set. Export it or copy .env.example to .env and fill it in.")
+        sys.exit(missing_key_message("ATAI_API_KEY", "Get one from your Archetype AI account."))
     api_endpoint = os.environ.get("ATAI_API_ENDPOINT")
     if not api_endpoint:
-        sys.exit("ATAI_API_ENDPOINT is not set (e.g. https://api.u1.archetypeai.app/v0.5) — there is no default.")
+        sys.exit(missing_key_message("ATAI_API_ENDPOINT", "e.g. https://api.u1.archetypeai.app/v0.5 — there is no default."))
     api_endpoint = api_endpoint.rstrip("/")
     if not api_endpoint.endswith("/v0.5"):
         api_endpoint += "/v0.5"
@@ -194,7 +215,7 @@ def nemotron_chat(system: str, user: str, *, retries: int = 2, **kwargs) -> str:
     load_dotenv_if_available()
     api_key = os.environ.get("NVIDIA_API_KEY")
     if not api_key:
-        sys.exit("NVIDIA_API_KEY is not set. Create one at https://build.nvidia.com/settings/api-keys.")
+        sys.exit(missing_key_message("NVIDIA_API_KEY", "Create one at https://build.nvidia.com/settings/api-keys."))
     request = urllib.request.Request(
         f"{nvidia_endpoint()}/chat/completions",
         data=json.dumps(chat_body(system, user, **kwargs)).encode(),
