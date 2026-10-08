@@ -435,6 +435,8 @@ The second machine scores lower than the test, as in the LARCO examples (quickst
 
 ## Path 2 pitfalls
 
+- **``requires a value for `states` ``** (400 on creating an optimization) means the deployment
+  runs the newer `osm` blueprint; `optimize.py` handles it (see `platform-notes.md`).
 - **A stuck-`pending` optimization with no error** is almost always the 1 MiB config limit: too
   many training files. Pack one file per state.
 - **A trial or eval that fails with `eval-mode test data must not contain windows a validation

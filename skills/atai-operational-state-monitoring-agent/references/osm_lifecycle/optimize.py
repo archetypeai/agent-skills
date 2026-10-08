@@ -26,7 +26,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, states_override, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
@@ -112,13 +112,14 @@ def main():
         opt_id = args.resume
     else:
         ids = upload_all(library + validation, args.roles, cache_path(args.out), prefix=args.name, jobs=args.upload_jobs, log=log)
-        blueprint_id = request("GET", f"{agents()}/blueprints/{args.blueprint}")["id"]
+        bp = request("GET", f"{agents()}/blueprints/{args.blueprint}")
+        training = [example(os.path.basename(p)[:-4], ids[p], os.path.basename(p).split("__")[0]) for p in library]
         body = {
-            "name": f"{args.name} optimize {stamp()}", "blueprint_id": blueprint_id, "objective": "macro_f1",
+            "name": f"{args.name} optimize {stamp()}", "blueprint_id": bp["id"], "objective": "macro_f1",
             "search_space": space, "budget": {"max_trials": args.max_trials or len(points)},
-            "training_examples": [example(os.path.basename(p)[:-4], ids[p], os.path.basename(p).split("__")[0])
-                                  for p in library],
+            "training_examples": training,
             "validation_examples": [example(os.path.basename(p)[:-4], ids[p]) for p in validation],
+            **states_override(bp, training),
         }
         opt_id = request("POST", f"{agents()}/optimizations", body=body)["id"]
         log(f"optimization {opt_id} created (collect later with --resume {opt_id})")
