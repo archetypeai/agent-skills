@@ -237,8 +237,17 @@ def wait(url, label, every_s=30, log=print, progress=lambda o: ""):
 def trial_setting(trial):
     """(window, step, k, metric, weights) of a trial."""
     tv = trial["trial_values"]
-    return (tv["values"]["window_size"], tv["values"]["step_size"], tv["fitting"]["k_neighbors"],
-            tv["fitting"]["metric"], tv["fitting"]["weights"])
+    v = {**tv.get("fitting", {}), **tv["values"]}    # newer blueprints report every setting under values
+    return v["window_size"], v["step_size"], v["k_neighbors"], v["metric"], v["weights"]
+
+
+def states_override(blueprint, training):
+    """The optimization's `overrides` for an osm blueprint that takes the classes to score as a
+    value (newer ones do; older ones read them from the data): the training examples' states."""
+    if "states" not in ((blueprint.get("document") or {}).get("values") or {}):
+        return {}
+    states = list(dict.fromkeys(ex["ground_truth"]["state"]["from"]["constant"] for ex in training))
+    return {"overrides": {"values": {"states": states}}}
 
 
 def report_f1(report):

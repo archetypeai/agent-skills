@@ -51,6 +51,22 @@ def trial(tid, value, status="completed", w=512, st=512, k=5, metric="cosine", w
                              "fitting": {"k_neighbors": k, "metric": metric, "weights": weights}}}
 
 
+
+class TestNewerBlueprint(unittest.TestCase):
+    """The osm blueprint on dev since 2026-10-05 takes `states` as a value and reports every
+    trial setting under `values`; older blueprints don't. Both must work."""
+
+    def test_trial_setting_reads_both_formats(self):
+        newer = {"trial_values": {"values": {"window_size": 512, "step_size": 512, "k_neighbors": 5,
+                                             "metric": "cosine", "weights": "uniform"}, "models": {}}}
+        self.assertEqual(atai_http.trial_setting(trial("a", 0.8)), atai_http.trial_setting(newer))
+
+    def test_states_sent_only_when_the_blueprint_asks(self):
+        training = [{"ground_truth": {"state": {"from": {"constant": s}}}} for s in ("drain", "fill", "spin", "wash")]
+        self.assertEqual(atai_http.states_override({"document": {"values": {"k_neighbors": 5}}}, training), {})
+        self.assertEqual(atai_http.states_override({"document": {"values": {"states": "${required}"}}}, training),
+                         {"overrides": {"values": {"states": ["drain", "fill", "spin", "wash"]}}})
+
 class TestSearchSpace(unittest.TestCase):
     def test_kinds_and_specs(self):
         space = optimize.search_space([512], [256, 512], [5, 31], ["cosine"], ["uniform"])["parameters"]

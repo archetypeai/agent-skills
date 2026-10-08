@@ -28,6 +28,21 @@ resumes the same eval and checks again; nothing is created twice.
 Each deployment has its own `osm` blueprint id (resolve it by key) and its own API keys: a key
 for one returns 401 on another.
 
+**A newer `osm` blueprint (on dev since 2026-10-05; staging, prod and Tokyo still run the older
+one as of 2026-10-08)** changes two things:
+- **It requires `states`,** the classes to score: an optimization without it fails with 400,
+  "requires a value for `states`: give it in `overrides.values`". `optimize.py` sends the
+  training examples' states as `overrides.values.states` when the blueprint asks for them.
+- **Trials report every setting under `values`,** with no `fitting` key; `trial_setting` reads
+  either format.
+- **Dev's optimizer also has an embeddings cache** (in the runner, not the blueprint): trials
+  that share a window and step embed the data once.
+  On the LARCO quickstart, 8 trials (k 1–31 at 512 / 512) took 3 min 53 s: one 3.3 min embedding
+  pass, then each fit in about 5 s. On the full LARCO example (about 24,000 windows), the same 8
+  trials took 30 min, against ≈ 105 min uncached: a 16.9 min embedding pass (longer than one
+  uncached trial), then about 1.9 min per fit. Every score matched the earlier, uncached runs.
+  A single trial gains nothing: the runner skips the cache for it.
+
 ## Data the platform accepts
 
 The rules for role files are the prep skill's contract,
