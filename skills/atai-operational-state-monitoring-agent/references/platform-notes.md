@@ -38,7 +38,10 @@ one as of 2026-10-08)** changes two things:
 - **Dev's optimizer also has an embeddings cache** (in the runner, not the blueprint): trials
   that share a window and step embed the data once.
   On the LARCO quickstart, 8 trials (k 1–31 at 512 / 512) took 3 min 53 s: one 3.3 min embedding
-  pass, then each fit in about 5 s; k5 and k31 scored exactly as before.
+  pass, then each fit in about 5 s. On the full LARCO example (about 24,000 windows), the same 8
+  trials took 30 min, against ≈ 105 min uncached: a 16.9 min embedding pass (longer than one
+  uncached trial), then about 1.9 min per fit. Every score matched the earlier, uncached runs.
+  A single trial gains nothing: the runner skips the cache for it.
 
 ## Data the platform accepts
 
