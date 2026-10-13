@@ -33,7 +33,9 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 - **Trials that share `window_size` and `step_size` share their embeddings** (atai_core's
   trial grouping): those two set a search's cost. Measured on RED (same mechanism): a
   4 × 3 grid of metric × window took 3 encoder passes and 7 min; window as an integer
-  range costs a pass per distinct window drawn.
+  range costs a pass per distinct window drawn. A 24-trial random search over windows
+  16–84 took 41 min (24 passes) and peaked at fault F1 0.8582, against the 12-point
+  grid's 0.8588: on a small, cheap grid a random search buys nothing.
 - **Both legs use the trial's one `step_size`.** The fit and the validation scoring share
   it, so a search that varies the step scores trials on different window sets: macro-F1
   differences under ~0.01 between strides mean little.
