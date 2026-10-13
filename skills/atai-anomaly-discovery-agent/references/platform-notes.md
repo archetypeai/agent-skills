@@ -26,8 +26,14 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   fixed settings still searches one parameter, e.g. `n_neighbors` with one value.
 - **`threshold` is a `float_range` (`{"min": …, "max": …}`) or pinned.** A categorical list
   of floats is a 422, and `low` / `high` is a 422 naming the missing `min`.
-- **A space of categoricals with fewer points than `max_trials` runs every point** (trials
-  are distinct draws); with a float range it is a random search.
+- **The platform draws distinct points at random.** A space of categoricals with no more
+  points than `max_trials` runs every point (a grid); a smaller budget, or a float range,
+  is a random search. The draw isn't seeded on the service, so a rerun samples different
+  points; each optimization records the ones it drew.
+- **Trials that share `window_size` and `step_size` share their embeddings** (atai_core's
+  trial grouping): those two set a search's cost. Measured on RED (same mechanism): a
+  4 × 3 grid of metric × window took 3 encoder passes and 7 min; window as an integer
+  range costs a pass per distinct window drawn.
 - **Both legs use the trial's one `step_size`.** The fit and the validation scoring share
   it, so a search that varies the step scores trials on different window sets: macro-F1
   differences under ~0.01 between strides mean little.

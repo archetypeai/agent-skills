@@ -16,8 +16,11 @@ Each option takes one value (pinned in `overrides.values` for every trial) or se
   --threshold          one value, or LOW:HIGH for a float range
   --features           feature_names, a list: pinned only; search another set with a
                        second optimization
-A space of categorical values with fewer points than --max-trials runs every point;
-the default max_trials is the grid size (or 12 with a threshold range).
+The platform draws distinct points at random: a budget at or above the grid's size runs
+every point once (a grid), below it, or with a threshold range, a random search. By
+default a grid of up to DEFAULT_TRIALS points runs in full; a bigger grid or a threshold
+range gets a DEFAULT_TRIALS-trial random search: with the few settings that matter, a
+dozen random points usually land close to the best. --max-trials sets the budget.
 
 Writes <out>/optimize_<optimization id>.json and <out>/optimize_state.json.
 
@@ -39,6 +42,18 @@ from common import base_values, cache_path, example, load_manifest, log, role_pa
 # The TEP quickstart's search: the full example's 24-trial winner, with k 5 and 10.
 DEFAULTS = {"windows": [48], "steps": [8], "k": [5, 10], "metrics": ["l2"], "pca": [16],
             "threshold": "1.215", "features": ["std", "range", "slope", "median"]}
+
+
+DEFAULT_TRIALS = 12
+
+
+def budget(size, max_trials=None):
+    """Trials to run: --max-trials if given (never more than a grid), else the whole grid
+    up to DEFAULT_TRIALS points, else (a bigger grid, or a float range: size None) a
+    DEFAULT_TRIALS-trial random search."""
+    if size is None:
+        return max_trials or DEFAULT_TRIALS
+    return min(max_trials or min(size, DEFAULT_TRIALS), size)
 
 
 def build(a):
@@ -84,7 +99,9 @@ def main(argv=None):
     ap.add_argument("--pca", type=int, nargs="+", default=DEFAULTS["pca"])
     ap.add_argument("--threshold", default=DEFAULTS["threshold"], help="a value, or LOW:HIGH")
     ap.add_argument("--features", nargs="+", default=DEFAULTS["features"])
-    ap.add_argument("--max-trials", type=int)
+    ap.add_argument("--max-trials", type=int,
+                    help=f"the trial budget (default: every point of a grid up to {DEFAULT_TRIALS}, "
+                         f"else a {DEFAULT_TRIALS}-trial random search)")
     ap.add_argument("--primary", default="anomaly.macro_f1")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resume", metavar="OPT_ID", help="collect an existing optimization instead of creating one")
@@ -102,10 +119,11 @@ def main(argv=None):
         m = load_manifest(a.roles)
         lib, val = role_paths(a.roles, m, "library"), role_paths(a.roles, m, "validation")
         space, pinned, size = build(a)
-        trials = a.max_trials or size or 12
+        trials = budget(size, a.max_trials)
         log(f"library {len(lib)} files, validation {len(val)} files; pinned {json.dumps(pinned)}")
         log(f"searching {sorted(space['parameters'])}: {trials} trial(s)"
-            + (f" of a {size}-point grid" if size else " (a float range: random)"))
+            + (" (a float range: random search)" if size is None else
+               f" of a {size}-point grid" + (" (random search)" if trials < size else "")))
         gaps = sorted({(w, s) for w, s in itertools.product(a.windows, a.steps) if s > w})
         if gaps:
             sys.exit(f"step > window skips rows between windows: {gaps}")
