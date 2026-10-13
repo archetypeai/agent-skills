@@ -9,9 +9,13 @@ window with Omega, fits a kNN on the library, and reports macro-F1 per trial.
 The search space is the product of the values given:
   values  (kind "value"):   --windows, --steps           how the data is windowed
   fitting (kind "fitting"): --k, --metrics, --weights    the kNN
-With --max-trials below the product's size the platform samples: a random search.
-By default max_trials = the size, so every point runs once. Trials run one after
-another. Step > window skips records and needs --allow-gaps.
+The platform draws distinct points at random: a budget at or above the product's
+size runs every point once (a grid), below it a random subset (a random search).
+By default a product of up to DEFAULT_TRIALS points runs in full and a bigger one
+gets a DEFAULT_TRIALS-trial random search: with the few settings that matter, a
+dozen random points usually land close to the best, and a grid's extra trials buy
+little. --max-trials sets the budget (the product's size forces the full grid).
+Trials run one after another. Step > window skips records and needs --allow-gaps.
 
 Writes <out>/optimize_<optimization id>.json (the optimization, every trial, a summary).
 
@@ -42,8 +46,17 @@ def search_space(windows, steps, k, metrics, weights):
     }}
 
 
+DEFAULT_TRIALS = 12
+
+
 def grid(windows, steps, k, metrics, weights):
     return list(itertools.product(windows, steps, k, metrics, weights))
+
+
+def budget(size, max_trials=None):
+    """Trials to run: --max-trials if given, else the whole grid up to DEFAULT_TRIALS
+    points, else a DEFAULT_TRIALS-trial random search. Never more than the grid."""
+    return min(max_trials or min(size, DEFAULT_TRIALS), size)
 
 
 def gap_pairs(points):
@@ -79,7 +92,9 @@ def main():
     ap.add_argument("--k", type=int, nargs="+", default=[5, 31])
     ap.add_argument("--metrics", nargs="+", default=["cosine"])
     ap.add_argument("--weights", nargs="+", default=["uniform"])
-    ap.add_argument("--max-trials", type=int)
+    ap.add_argument("--max-trials", type=int,
+                    help=f"the trial budget (default: every point up to {DEFAULT_TRIALS}, else a "
+                         f"{DEFAULT_TRIALS}-trial random search)")
     ap.add_argument("--allow-gaps", action="store_true", help="allow step > window (skips the records between windows)")
     ap.add_argument("--blueprint", default="osm", help="blueprint key or blp_ id to optimize (default: the canonical osm)")
     ap.add_argument("--upload-jobs", type=int, default=3)
@@ -99,7 +114,7 @@ def main():
     if gaps and not args.allow_gaps:
         sys.exit(f"step > window would skip records for {gaps}: use step <= window, or --allow-gaps to do it deliberately")
     space = search_space(args.windows, args.steps, args.k, args.metrics, args.weights)
-    n = min(args.max_trials or len(points), len(points))
+    n = budget(len(points), args.max_trials)
     log(f"{len(library)} library files ({', '.join(states)}), {len(validation)} validation files; "
         f"{n} trial(s) of a {len(points)}-point space ({'random search' if n < len(points) else 'every point'})")
     if args.dry_run:
@@ -116,7 +131,7 @@ def main():
         training = [example(os.path.basename(p)[:-4], ids[p], os.path.basename(p).split("__")[0]) for p in library]
         body = {
             "name": f"{args.name} optimize {stamp()}", "blueprint_id": bp["id"], "objective": "macro_f1",
-            "search_space": space, "budget": {"max_trials": args.max_trials or len(points)},
+            "search_space": space, "budget": {"max_trials": n},
             "training_examples": training,
             "validation_examples": [example(os.path.basename(p)[:-4], ids[p]) for p in validation],
             **states_override(bp, training),

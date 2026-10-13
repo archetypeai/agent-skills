@@ -4,7 +4,8 @@ Mocks urllib at the request boundary, so these run with NO credentials and NO
 network. They lock in the invariants verified on the dev deployment (2026-09-30):
   * The search space: window / step are `value` parameters, k / metric / weights
     are `fitting` parameters, every spec categorical; max_trials defaults to the
-    product's size (every point once); step > window needs --allow-gaps.
+    product's size up to 12 points (a grid), else 12 (a random search);
+    step > window needs --allow-gaps.
   * Blueprint keys are unique per trial (a rerun never reuses an older model),
     and the promoted trial is the best completed one by objective_value.
   * Scoring pairs each prediction with the label at its window's last row,
@@ -78,6 +79,13 @@ class TestSearchSpace(unittest.TestCase):
 
     def test_grid_size_is_the_default_budget(self):
         self.assertEqual(len(optimize.grid([256, 512], [512], [5, 31], ["cosine", "l1"], ["uniform"])), 8)
+
+    def test_budget_runs_small_grids_in_full_and_samples_big_ones(self):
+        self.assertEqual(optimize.budget(8), 8)                     # a grid: every point
+        self.assertEqual(optimize.budget(12), 12)
+        self.assertEqual(optimize.budget(48), optimize.DEFAULT_TRIALS)   # a random search
+        self.assertEqual(optimize.budget(48, 48), 48)               # --max-trials forces the grid
+        self.assertEqual(optimize.budget(8, 20), 8)                 # never more than the grid
 
     def test_step_over_window_is_flagged(self):
         pts = optimize.grid([256, 512], [512], [5], ["cosine"], ["uniform"])
