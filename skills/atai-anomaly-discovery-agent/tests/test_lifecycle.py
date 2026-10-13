@@ -50,6 +50,14 @@ class SearchSpace(unittest.TestCase):
         self.assertIsNone(size)                                  # a float range: random search
         self.assertEqual(space["parameters"]["window_size"]["spec"]["values"], [32, 48])
 
+    def test_budget_runs_small_grids_in_full_and_samples_big_ones(self):
+        self.assertEqual(optimize.budget(2), 2)                  # the default: every point
+        self.assertEqual(optimize.budget(48), optimize.DEFAULT_TRIALS)   # a random search
+        self.assertEqual(optimize.budget(48, 48), 48)            # --max-trials forces the grid
+        self.assertEqual(optimize.budget(2, 20), 2)              # never more than the grid
+        self.assertEqual(optimize.budget(None), optimize.DEFAULT_TRIALS)  # a float range
+        self.assertEqual(optimize.budget(None, 24), 24)
+
 
 class Scoring(unittest.TestCase):
     def test_sustained(self):
