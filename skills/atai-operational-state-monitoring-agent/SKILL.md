@@ -336,8 +336,14 @@ last row), `"objective": "macro_f1"`, a `budget.max_trials`, and a search space:
 ```
 
 - **`value`** parameters shape the data (windowing); **`fitting`** parameters shape the kNN.
-- **The space is the product** of the values. `max_trials` equal to its size runs every point
-  once (the script's default); below it, the platform **samples at random**, repeats possible.
+- **The space is the product** of the values, and the platform draws **distinct points at
+  random**: a `max_trials` at or above its size runs every point once (a grid), below it a
+  random subset (a random search). **Prefer a random search once the grid is large:** with
+  the one or two settings that matter, a dozen random points usually land close to the
+  best, and the rest of the grid buys little. The script runs a grid of up to 12 points in
+  full and samples 12 from a bigger one; `--max-trials` sets the budget. What a trial costs
+  is mostly its embeddings: trials that share `window_size` and `step_size` share them, so
+  windows and steps are the expensive settings and `k`, `metric` and `weights` are cheap.
 - **Step > window** skips records; the script refuses it unless `--allow-gaps`.
 - **Trials run one after another,** also across optimizations. Poll
   `GET /agents/optimizations/{id}` (status + `progress`), then list
