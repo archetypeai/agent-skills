@@ -19,6 +19,8 @@ import deliver  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
 import score  # noqa: E402
+import serve  # noqa: E402
+import cleanup  # noqa: E402
 
 
 def args(**kw):
@@ -135,6 +137,51 @@ class TestEndpoints(unittest.TestCase):
         item = {"data": {"filename": "o.csv", "file_attributes": {"job_output": {"status": "partial"}}}}
         self.assertEqual(deliver.artifact_status(item), "partial")
         self.assertIsNone(deliver.artifact_status({"data": {"filename": "o.csv"}}))
+
+
+class Serving(unittest.TestCase):
+    SRC = {"name": "ad-sample", "document": {"blueprint_id": "blp_x", "values": {
+        "step_size": 8, "window_size": 48},
+        "connectors": {"source": {"key": "CsvSource"}, "sink": {"key": "CsvSink"}}}}
+
+    def test_served_document(self):
+        doc = serve.served_document(self.SRC, ["a", "b"], "timestamp")
+        self.assertEqual(doc["values"]["step_size"], 1)
+        self.assertNotIn("blueprint_id", doc)
+        src = doc["connectors"]["source"]["config"]
+        self.assertEqual(src["protocols"], ["atai-records"])
+        self.assertEqual(src["models"], ["ad"])
+        self.assertEqual(src["data_columns"], [{"dtype": "f32", "names": ["a", "b"]}])
+        self.assertEqual(doc["connectors"]["sink"]["config"]["format"], "serving")
+        self.assertEqual(self.SRC["document"]["values"]["step_size"], 8)     # the source is left alone
+
+    def test_query_body(self):
+        chunk = np.arange(6.0).reshape(3, 2)                                  # 3 rows, 2 channels
+        ev = serve.query_body(chunk)["events"][0]
+        self.assertEqual(ev["type"], "data.numeric_array")
+        self.assertEqual(ev["event_data"]["contents"], [[0.0, 2.0, 4.0], [1.0, 3.0, 5.0]])
+
+    def test_segments(self):
+        labels = pd.DataFrame({"recording": ["n"] * 10 + ["f"] * 6 + ["s"] * 3})
+        self.assertEqual(serve.segments(labels, 4), [("n", 0, 7), ("f", 10, 3)])   # "s" is shorter than a window
+
+    def test_first_alarm(self):
+        self.assertEqual(serve.first_alarm(["normal", "anomaly", "anomaly", "anomaly"]), 3)
+        self.assertIsNone(serve.first_alarm(["anomaly", "anomaly", "normal", "anomaly"]))
+
+
+class Cleanup(unittest.TestCase):
+    def test_agents_before_their_bundle(self):
+        t = cleanup.targets({"bundle": "bnd_s", "agent": "agt_s"},
+                            {"bundle": "bnd_d", "agents": {"f1": "agt_1", "f2": "agt_2"}}, {"agt_0", "agt_1"})
+        self.assertEqual(t, [("serving", "instances", "agt_s"), ("serving", "bundles", "bnd_s"),
+                             ("delivery", "instances", "agt_0"), ("delivery", "instances", "agt_1"),
+                             ("delivery", "instances", "agt_2"), ("delivery", "bundles", "bnd_d")])
+
+    def test_nothing_recorded(self):
+        self.assertEqual(cleanup.targets({}, {"agents": {"f": "agt_1"}}, set()), [])
+        self.assertEqual(cleanup.targets({"bundle": "bnd_s", "agent": None}, {}, set()),
+                         [("serving", "bundles", "bnd_s")])
 
 
 if __name__ == "__main__":
