@@ -8,12 +8,15 @@ import sys
 import tempfile
 import unittest
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "red_lifecycle"))
+import cleanup  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
 import score  # noqa: E402
+import serve  # noqa: E402
 
 
 def args(**kw):
@@ -118,6 +121,51 @@ class PromoteAndCheck(unittest.TestCase):
     def test_confusion_mismatch_is_caught(self):
         with self.assertRaises(SystemExit):
             promote_and_test.check(self.dir, self.m, self.ev([[1, 0], [1, 1]]), self.preds, 4, 4)
+
+
+class Serving(unittest.TestCase):
+    SRC = {"name": "red-sample", "document": {
+        "blueprint_id": "blp_x", "values": {"window_size": 64, "step_size": 1, "metric": "dot"},
+        "connectors": {"source": {"key": "CsvSource"}, "sink": {"key": "CsvSink"}}}}
+
+    def test_served_document(self):
+        doc = serve.served_document(self.SRC, ["a", "b"], "timestamp")
+        self.assertNotIn("blueprint_id", doc)
+        self.assertEqual(doc["values"], {"window_size": 64, "step_size": 1, "metric": "dot"})
+        src = doc["connectors"]["source"]
+        self.assertEqual(src["key"], "RecordsSource")
+        self.assertEqual(src["config"]["protocols"], ["atai-records"])
+        self.assertEqual(src["config"]["data_columns"], [{"dtype": "f32", "names": ["a", "b"]}])
+        self.assertEqual(doc["connectors"]["sink"]["key"], "RecordsSink")
+        self.assertEqual(self.SRC["document"]["connectors"]["source"]["key"], "CsvSource")   # a copy
+
+    def test_query_body_is_a_list_per_channel(self):
+        chunk = np.arange(12, dtype=float).reshape(6, 2)                  # 6 rows, 2 channels
+        contents = serve.query_body(chunk)["events"][0]["event_data"]["contents"]
+        self.assertEqual(contents, [[0, 2, 4, 6, 8, 10], [1, 3, 5, 7, 9, 11]])
+
+    def test_span_around_the_event(self):
+        lab = ["normal"] * 20 + ["breakdown"] * 5 + ["normal"] * 20      # 45 rows, window 4: 42 windows
+        first, n = serve.span(lab, "normal", 4, 3, 42)
+        self.assertEqual((first, first + 4 - 1), (14, 17))               # the first window ends 3 rows before onset
+        self.assertEqual(first + n - 1 + 4 - 1, 27)                      # the last 3 rows after the last event row
+        self.assertEqual(serve.span(["normal"] * 10, "normal", 4, 3, 7), (0, 7))   # no event: every window
+        self.assertEqual(serve.span(lab, "normal", 4, 100, 42), (0, 42))           # clipped to the file
+
+    def test_outcome_matches_score(self):
+        lab = ["normal"] * 10 + ["breakdown"] * 5 + ["normal"] * 10
+        preds = ["breakdown" if 12 <= 5 + k + 3 <= 16 else "normal" for k in range(10)]   # windows 5..14
+        self.assertEqual(serve.outcome(preds, 5, 4, lab, "normal"), {"incidents": [2], "false_alarms": 0})
+        self.assertEqual(serve.outcome(["breakdown"] + ["normal"] * 9, 0, 4, lab, "normal"),
+                         {"incidents": [None], "false_alarms": 1})
+
+    def test_cleanup_deletes_agents_before_bundles(self):
+        t = cleanup.targets({"bundle": "bnd_s", "agent": "agt_s"},
+                            {"bundle": "bnd_d", "agents": {"delivery/inc04.csv": "agt_d1"}}, {"agt_d0", "agt_d1"})
+        self.assertEqual(t, [("serving", "instances", "agt_s"), ("serving", "bundles", "bnd_s"),
+                             ("delivery", "instances", "agt_d0"), ("delivery", "instances", "agt_d1"),
+                             ("delivery", "bundles", "bnd_d")])
+        self.assertEqual(cleanup.targets({}, {}, set()), [])
 
 
 if __name__ == "__main__":
