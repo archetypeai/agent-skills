@@ -1,6 +1,6 @@
 # AD on the Optimizations and Evals APIs: measured platform behaviour
 
-What Path 2 relies on, measured on the dev deployment (2026-10-12 → 10-13) while building
+What Path 2 relies on, measured on the dev deployment (2026-10-12 → 10-15) while building
 the [TEP quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-12
 (atai_core #7196); check another deployment before relying on it there.
@@ -80,3 +80,37 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   once and 886 s with 4.
 - **The checkpoint abort is fixed** (runtime 1.1.9-590); `deliver.py` turns the triggers off
   anyway, which is harmless where the fix has landed.
+- **A bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>`, every attempt
+  included. The TEP full example's 714 delivered files left 734 agents, the extra 20 from
+  reruns that replaced an attempt; a state file holding the last attempt per file misses them.
+- **A bundle that still has agents can't be deleted** (409): delete its agents first. An
+  agent that is still running is cancelled first (`POST …/cancel` with `{}`).
+- **`output_embeddings: true` works on a promoted blueprint's bundle.** Per channel, an
+  `embedding_<channel>` (768-d) and an `embedding_<channel>_features` column, each cell a JSON
+  list in the CSV. It is the only source of embeddings: trials and evals return metrics and
+  predictions, and the promoted detector (`aar_…`) has no download route. Running the library
+  files in batch at the trial's step recomputes the fit's reference windows (2,280 for TEP).
+
+## Agent serving (Dev only, 2026-10-15)
+
+- **Dev has 3 serving workers, shared by everyone.** A running serving agent holds one until
+  it is cancelled, or released after 20 minutes without a query; a query to a released agent
+  answers 409.
+- **A served blueprint is a copy with other connectors.** The promoted blueprint reads and
+  writes CSV; its served copy swaps both for an `atai-records` serving endpoint (source with
+  `models`, `data_columns`, `timestamp_column`) and keeps the detector, encoder and values.
+  Like the promoted blueprint, a regular key can't delete it.
+- **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
+  the samples 0, 1, 2… itself and answers with sample indices for `start_timestamp` and
+  `finish_timestamp`; records come back with their keys in alphabetical order.
+- **Served equals batch to float32 noise.** Three detectors, 1,826 windows each (the two TEP
+  examples and this skill's sample): every label and every first alarm identical, scores
+  within 3×10⁻⁵ relative, except one window in each k-5 detector, 1.6–2% off and the same on
+  every rerun (most likely a neighbour swap; the k-10 full example had none). Served
+  embeddings differ from batch by about 2×10⁻⁴ relative.
+- **The latency tail depends on Dev's load:** the sample's replay had a median of 836 ms but
+  a p95 of 3.1 s and a 30 s worst query, where the TEP replays had p95 under 1 s.
+- **Latency: ~0.8 s median per one-window query** (p95 under 1 s; about 0.9 s with `output_embeddings`);
+  16 windows per query took 11 s, 13% less per window.
+- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
+  is silently ignored, so pick the serving agents client-side (`select(.mode=="serving")`).
