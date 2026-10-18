@@ -120,6 +120,32 @@ Why they exist:
 - **`finish_timestamp` is the window's last row**, so pair each prediction with the
   label at that row, as the Evals API does (`downsampling: last_record`).
 
+- **A bundle that still has agents can't be deleted** (409), even when they're cancelled:
+  delete its agents first. `GET /agents/instances?bundle_id=<bnd_…>` lists every agent a
+  bundle ran, including the attempts a rerun replaced.
+- **`output_embeddings: true` works on a promoted blueprint's bundle,** in batch and in
+  serving: an `embedding_<channel>` column per channel (768 values, a JSON list in the CSV),
+  predictions unchanged. Nothing else returns embeddings: not trials, not evals, and the
+  promoted kNN has no download route. Running the library files through the promoted
+  blueprint recomputes the fit's reference windows (the same encoder and windows).
+
+## Agent serving (Dev, 2026-10-16 to 10-18)
+
+- **Dev only, 3 serving workers shared by everyone.** A served copy of the promoted
+  blueprint swaps the CSV source and sink for an `atai-records` endpoint; its bundle runs
+  with `{"mode": "serving"}` and answers `POST /agents/instances/{id}/query`.
+- **Served answers are batch's, but for a neighbour now and then:** LARCO's 5 quickstart
+  cycles (3,178 windows) matched step 3 on every state and probability but 7 windows a
+  neighbour's vote off with k 31 (2 changed state at a near-tie), and on all 3,178 with k 5.
+- **A query holds the whole window** (one list per channel) and gets one record per
+  window; the agent keeps nothing between queries and numbers the rows itself (0 to
+  window − 1).
+- **Latency:** median 0.43–0.52 s a query at one window, p95 under 0.8 s, with rare stalls
+  of 2–22 s on a busy Dev. 8 windows a query: 1.9 s (0.23 s a window).
+- **Released after 20 minutes idle:** a query to it then answers 409; start a new agent.
+- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
+  is ignored there, so filter client-side.
+
 ## Timing
 
 **It varies with platform load and job size, not a fixed cost per call:**
