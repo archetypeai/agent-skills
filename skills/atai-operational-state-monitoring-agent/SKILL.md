@@ -9,7 +9,9 @@ description: >
   Path 2 — build an OSM agent on YOUR OWN labelled data: from role files
   (library / validation / test / delivery) fit and score settings with the
   Optimizations API, promote the best trial to a blueprint, test it once with the
-  Evals API, then deliver it as a bundle over new recordings and score the delivery.
+  Evals API, then deliver it as a bundle over new recordings and score the delivery,
+  serve it a window per query over `/query` (agent serving, Dev only) checked against
+  the delivery, and draw the library's embeddings for a live app.
   Covers the search space, promote, Evals, batch runs, the output CSV schema
   (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
   and the platform's limits (1 MiB config, time jumps, absent states score 0).
@@ -39,7 +41,7 @@ either.
 |---|---|---|
 | you have | a prepared CSV (the Volve sample, or data like it) | labelled recordings of **your** machine |
 | you get | per-window predictions from Archetype AI's six-state Volve classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev) |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1–2 min on a clear queue | minutes to hours, with the dataset's size and the platform's load |
 | status | verified on production | **verified on production, staging (2026-10-01) and dev (2026-09-30), identical results** |
@@ -255,6 +257,8 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
+> Steps 5–6 (agent serving and the library view) are on Dev only, built and checked on both
+> LARCO examples (2026-10-16 to 10-18).
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -263,6 +267,8 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
   (prep skill)   fit + score     best trial     one-shot, pooled          predictions per file       held-back labels
                  on validation   → blueprint
+                                                                          └──► 5 serve (/query, Dev): a window per query, checked against step 3
+                                                                          └──► 6 library view: the fit's windows recomputed, drawn in 2-D for a live app
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
@@ -440,6 +446,140 @@ next to the test: macro-F1 0.8463
 The second machine scores lower than the test, as in the LARCO examples (quickstart: delivery
 0.7707 against test 0.8617 over 5 and 3 cycles).
 
+## Step 5 — Serve it (Dev only)
+
+```sh
+python serve.py --roles $R --out out                          # every delivery file, one window a query
+python serve.py --roles $R --out out --files seg0 --max-windows 50 --windows-per-query 8
+```
+
+Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
+window in one round trip, with no upload, queue or polling: how a machine's controller would
+ask about its latest `window_size` readings. It is on Dev only for first tests, with **3
+serving workers shared by everyone**.
+
+1. **A served copy of the promoted blueprint**, made once (`<key>-served-records`): the same
+   document (classifier, encoder, values), with the CSV source and sink swapped for an
+   `atai-records` serving endpoint:
+
+   ```json
+   {"source": {"key": "RecordsSource", "config": {"format": "serving", "kind": "http",
+      "protocols": ["atai-records"], "models": ["osm"], "timestamp_column": "timestamp",
+      "data_columns": [{"dtype": "f32", "names": ["back.x", "…"]}]}},
+    "sink": {"key": "RecordsSink", "config": {"format": "serving", "kind": "http", "protocols": ["atai-records"]}}}
+   ```
+
+   `POST /agents/blueprints` with `blueprint_key`, `name` and `document`.
+2. **A bundle of it, run in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
+   wait until the agent's `status` is `running`.
+3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
+
+   ```json
+   {"model": "osm", "query": "", "events": [{"type": "data.numeric_array",
+     "event_data": {"contents": [[ch1 × window], [ch2 × window], …]}}]}
+   ```
+
+   The answer is at `response.data`, one record per window, the batch output's columns:
+   `{"finish_timestamp": 511, "invalid": "false", "p_drain": 0, "p_fill": 0.645, "p_spin": 0, "p_wash": 0.355, "predicted_state": "fill", "start_timestamp": 0}`.
+   The timestamps are row indices within the query, not times. `--windows-per-query N` sends
+   N consecutive windows (N × window rows) and gets N records; a gap in the tiling (an
+   invalid window batch left out) ends a query.
+4. **Every answer against batch** (step 3's output for the same window): `predicted_state`,
+   every `p_<state>` within 10⁻⁴, and the macro-F1 against the held-back labels, served and
+   batch. Exits 1 if more than 0.1% of the states differ.
+5. **The agent cancelled and deleted, and the bundle deleted**, however the replay ends
+   (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
+   for `cleanup.py`.
+
+Not yet run on the prep skill's sample (367 windows, a few minutes). **Measured on the LARCO
+examples** (Dev, 2026-10-16), the quickstart's 5 delivery cycles, 3,178 windows:
+
+```
+served 3,178 windows of 5 file(s) in 3,178 queries, 1608 s
+  against the delivery (batch): predicted_state identical in 3,176/3,178, probabilities within 1e-4 in 3,171/3,178 (max difference 3.2e-02); invalid 0
+  latency per query: median 433 ms, p95 753 ms, max 22330 ms
+  served  macro-F1 0.7966  fill 0.90  wash 0.87  spin 0.69  drain 0.73
+  batch   macro-F1 0.7962  fill 0.90  wash 0.87  spin 0.69  drain 0.74
+```
+
+- **Served is batch, but for a neighbour now and then.** With k 31 (the full example), 7 of
+  3,178 windows were one neighbour's vote off (a probability 1/31 = 0.032), most likely the
+  tiny float difference between served and batch embeddings; 2 sat at a near-tie and changed
+  state. The quickstart's k 5 model matched batch on all 3,178. The same kind of difference
+  as between two deployments.
+- **~0.4–0.6 s a window** (median, with Dev's load), about 4× faster than LARCO's data
+  arrives (a 512-row window every 2.56 s). 8 windows a query took 1.9 s (0.23 s a window) but
+  waits for 8 windows before it asks. **One window per query is the way to serve it live**;
+  for stored data, deliver in batch.
+- **A query must hold the whole window.** The agent keeps nothing between queries: keep the
+  buffer client-side.
+- **An idle agent is released** after 20 minutes without a query, and a query to it then
+  answers **409**: start a new one.
+
+## Step 6 — The library view, for a live app
+
+```sh
+python library_embeddings.py --roles $R --out out                       # one batch run per library file, then the view
+python library_embeddings.py --roles $R --out out --view                # the view again, no platform calls
+python library_embeddings.py --roles $R --out out --view-dir ../my-app/static
+```
+
+A live app is easier to read with the model's library behind each answer: where this window
+sits among the windows the kNN compares it with. **The library can't be read back**: the
+promoted model is a registry artifact with no download route, and no trial or eval returns
+embeddings. **It can be recomputed:** a bundle on the promoted blueprint with
+`"values": {"output_embeddings": true}` runs each library file through the same encoder on
+the same windows (the blueprint's window and step) and adds an `embedding_<channel>` column
+per channel (768 values, a JSON list in the CSV). One run per library file, so each output's
+state is its file's.
+
+**Draw the two directions that separate the states, not the two largest.** The two largest
+directions of spread (PCA 1–2) follow the data's variance, which needn't be the states': on
+LARCO they mixed fill and wash. The script draws the **linear discriminants** instead: each
+embedding scaled to unit length (the kNN compares by cosine), PCA to 50 dimensions, then LDA
+to 2 (shrinkage 10⁻³), each axis at unit spread. On the share of library windows nearest their
+own state's centre in 2-D:
+
+| | PCA 1–2 | LD 1–2 |
+|---|---|---|
+| LARCO full (3,200 windows, k 31) | 59% | **79%** |
+| LARCO quickstart (800 windows, k 5) | 70% | **86%** |
+
+(79% and 85% on windows held out of the fit, so not an overfit.) **LD 1** is the direction
+along which the states' centres sit furthest apart relative to each state's own spread,
+**LD 2** the next best; neither has a physical unit. Writes `library-view.json` (states,
+channels, the layout) and `library-view.bin` (float32: each window's 2-D point and state, the
+mean and the two projection rows). A served answer with embeddings lands in the same
+coordinates: `(e / |e| − mean) · row`, with `e` the channels' embeddings concatenated in the
+manifest's order. It is a cross-section, not the model: the kNN decides in every dimension.
+
+## A live app on a serving agent
+
+What the LARCO apps (`app-serving/` in both examples: a browser, a local MQTT broker, a
+replayer and a bridge) taught, for any app that streams a machine's windows to a serving agent:
+
+- **One bridge holds the key.** The browser never sees `ATAI_API_KEY`: a local process makes
+  the served blueprint and a bundle (with `output_embeddings: true`, to draw each answer),
+  runs the serving agent, queries it, and publishes the answers. Read the key from the same
+  `.env` the scripts use; ignore any key in the app's own.
+- **Publish the agent's phase on a retained topic,** with a broker will (last-will message)
+  that says stopped, so a page opened later sees the phase, and a killed bridge doesn't leave
+  "running" behind.
+- **Start with retries:** a run that fails to start (all 3 workers busy, say) is tried again after 15 s,
+  doubling to 120 s. **On a 409, replace the agent:** it was released (20 minutes idle), so
+  start a new one and resend.
+- **Send only while the agent is running,** and hold the replay a few windows ahead of the
+  answers at most, so a slow or restarting agent doesn't build a queue.
+- **Delete the agents and the bundle on every exit** (SIGINT, SIGTERM, SIGHUP, an error), and
+  keep their ids in `out/app_serving_state.json` until then: `cleanup.py` finds them after a
+  `kill -9`. A running serving agent holds one of the 3 shared workers.
+- **Show the agent's calls only.** Labels and the batch comparison belong to `serve.py`; a live
+  page that also showed the truth and batch's answer read as three opinions, and in
+  production there is no truth to show.
+- **Draw the library first:** a dot per window and a density per state, in the state's colour,
+  a label on each cloud, then the trail of the latest answers on top. The view ships with the
+  app; rebuild it (`--view`) only after promoting another model.
+
 ## Path 2 pitfalls
 
 - **``requires a value for `states` ``** (400 on creating an optimization) means the deployment
@@ -463,6 +603,10 @@ The second machine scores lower than the test, as in the LARCO examples (quickst
 - **Keep upload concurrency low (~3):** parallel large uploads can saturate the uplink until DNS
   lookups fail. The helper retries uploads and GETs; it never retries a POST that may have
   reached the server.
+- **Serving answers 409** after 20 minutes without a query (the agent was released), and a
+  bundle that still has agents answers 409 on delete: delete its agents first.
+- **Listing serving agents:** `GET /agents/instances?status=running` filters on the server;
+  `mode=serving` is ignored there, so filter it client-side (Cleanup, below).
 - **A state the sensor can't see caps every score.** Check separability in data prep before
   fixing the state list (LARCO's `heating` had to be folded into `wash`).
 
@@ -485,11 +629,28 @@ with a regular user key):
 
 | object | delete | notes |
 |---|---|---|
-| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` → 204 | one per delivery run |
-| your delivery bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` → 204 | delete the instances first |
-| promoted blueprints (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
+| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` → 204 | one per delivery or library run, one per serving session; a running serving agent holds a shared worker |
+| your delivery, library and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` → 204 | delete its agents first: a bundle that still has one answers **409**, even when they're cancelled |
+| promoted blueprints and their served copies (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
 | optimizations (`opt_…`), evals (`evl_…`) | not attempted | records of what was fitted and scored, small; keep them if your docs cite them |
 | uploaded files | — | uploaded once per `--out` folder and reused through its `uploads.json` |
+
+For Path 2, `cleanup.py` does it from the ids in `out/` (delivery, serving, the library runs
+and a serving app's): dry run by default, `--yes` to delete, an id already gone counts as
+done, progress saved for a rerun. `GET /agents/instances?bundle_id=<bnd_…>` also finds the
+runs a rerun replaced.
+
+```sh
+python cleanup.py --out out           # what would be deleted, and what stays
+python cleanup.py --out out --yes
+```
+
+To see which serving agents are running (yours and anyone's on the same workers):
+
+```sh
+curl -s "$ATAI_API_ENDPOINT/agents/instances?status=running&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
+  | jq -c '.data[] | select(.mode=="serving") | {id, blueprint, name, created_at}'
+```
 
 
 ## Bring your own classifier artifact (legacy route)
@@ -521,7 +682,10 @@ skills/atai-operational-state-monitoring-agent/
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval
 │       ├── deliver.py          Step 3: bundle from the blueprint → runs → outputs matched by time
 │       ├── score.py            Step 4: last-record pairing against the held-back labels
-│       └── requirements.txt    numpy, pandas, pyarrow (score.py)
+│       ├── serve.py            Step 5: served blueprint → serving agent → a query per window, against step 3
+│       ├── library_embeddings.py Step 6: the library's embeddings in batch → a 2-D discriminant view
+│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6 (and a serving app's), from the ids in out/
+│       └── requirements.txt    numpy, pandas, pyarrow (score.py, serve.py, library_embeddings.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests (python -m unittest)
     └── test_lifecycle.py     ← Path 2: network-free unit tests
