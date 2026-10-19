@@ -1,3 +1,8 @@
 # Runtime dependency for run_ad_agent.py.
 #   pip install -r requirements.txt
-archetypeai
+#
+# 26.10.14.0 is a floor, not a preference: both API surfaces now live under one
+# /api prefix, and older clients strip the version path for the agents API —
+# turning <root>/api into <root>/agents, which 404s. The 404 carries an empty
+# body, so it surfaces as a bodyless `ApiError: {}` that names nothing.
+archetypeai>=26.10.14.0
