@@ -97,14 +97,15 @@ class TestEndpointResolution(unittest.TestCase):
         # deployment serves /agents/blueprints, /agents/bundles and
         # /agents/instances, and the `tva` blueprint is active there. env()
         # resolves the endpoint and says nothing about which one it is.
-        for endpoint in ("https://api.u1.archetypeai.app",
-                         "https://api.u1.archetypeai.app/v0.5"):
+        for endpoint in ("https://platform.u1.archetypeai.app",
+                         "https://platform.u1.archetypeai.app/v0.5",
+                         "https://platform.u1.archetypeai.app/api"):
             os.environ["ATAI_API_ENDPOINT"] = endpoint
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 key, resolved = tva.env()
             self.assertEqual(buf.getvalue(), "")
-            self.assertEqual(resolved, "https://api.u1.archetypeai.app")
+            self.assertEqual(resolved, "https://platform.u1.archetypeai.app")
 
 
 class TestSinkPreflight(unittest.TestCase):

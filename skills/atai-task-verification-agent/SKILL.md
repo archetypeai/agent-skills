@@ -72,7 +72,7 @@ GET    {endpoint}/agents/instances/{agent_id}/results output refs
 POST   {endpoint}/agents/instances/{agent_id}/cancel  stop a run
 ```
 
-`POST /agents/bundle` (singular) returns **404** — the plural `/agents/bundles` is the endpoint. The Agents API is live on the production deployment (`https://api.u1.archetypeai.app`), where this skill is verified end-to-end.
+`POST /agents/bundle` (singular) returns **404** — the plural `/agents/bundles` is the endpoint. The Agents API is live on the production deployment (`https://platform.u1.archetypeai.app`), where this skill is verified end-to-end.
 
 ## ⚠️ Read before spending a run
 
@@ -488,7 +488,7 @@ pip install -r requirements.txt
 # Drop a .env next to where you run it (BOTH required, NO /v0.5 suffix:
 # the script mounts /agents and /v0.5/files itself):
 #   ATAI_API_KEY=<your API key for that environment>
-#   ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+#   ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 
 python3 references/run_tva_agent.py \
     --video references/sample_data/1_pass_2_pass_3_pass_A.mp4 \

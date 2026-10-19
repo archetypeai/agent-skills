@@ -30,7 +30,7 @@ video ─► sample frames ─┐
 MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit and no `artifacts` map to pass**. A run is upload → bundle → run → download.
 
 > **Availability.** The canonical `mga` blueprint resolves by key on the
-> production deployment (`https://api.u1.archetypeai.app`) — set
+> production deployment (`https://platform.u1.archetypeai.app`) — set
 > `ATAI_API_ENDPOINT` to it and the full upload → bundle → run → score cycle
 > works as documented here. The same 173 s video reproduces an **identical
 > manual** (18/18 instruction texts and timestamps) run to run, at the same
@@ -440,7 +440,7 @@ default endpoint, and the endpoint takes **no `/v0.5` suffix** (the script mount
 
 ```
 ATAI_API_KEY=<your API key>
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 ```
 
 ```sh

@@ -5,7 +5,7 @@ Built on the official archetypeai python client (`pip install -r
 requirements.txt`). Put a .env next to where you run:
 
     ATAI_API_KEY=<your API key>
-    ATAI_API_ENDPOINT=https://api.u1.archetypeai.app   # /v0.5 suffix optional
+    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app   # /v0.5 suffix optional
 
     python3 run_mga_agent.py --video procedure.mp4
     python3 run_mga_agent.py --video procedure.mp4 --blueprint mga    # active blueprint
@@ -94,23 +94,29 @@ def client() -> "ArchetypeAI":
     global _CLIENT
     if _CLIENT is None:
         key, endpoint = env()
-        _CLIENT = ArchetypeAI(key, api_endpoint=versioned(endpoint))
+        _CLIENT = build_client(key, endpoint)
     return _CLIENT
 
 
-def versioned(endpoint: str) -> str:
-    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+def api_root(endpoint: str) -> str:
+    """Return the deployment root, with any /api or /vX.Y suffix removed.
 
-    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
-    strips the version itself for the versionless agents API. Passing a bare
-    root therefore breaks uploads while bundle calls keep working — an empty
-    `ApiError: {}` that points at nothing.
-
-    Accept either form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    Accept every form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
+    and the console shows it bare.
     """
-    endpoint = endpoint.rstrip("/")
-    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
+    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
+    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+
+
+def build_client(api_key: str, endpoint: str) -> ArchetypeAI:
+    """The official client, pointed at the deployment's /api prefix.
+
+    Both API surfaces live under one versionless prefix — /api/agents and
+    /api/files — so a single client serves both. The client uses api_endpoint
+    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
+    """
+    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
 
 # Target the blueprint KEY, never an id.
 #

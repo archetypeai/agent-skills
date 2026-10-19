@@ -103,7 +103,7 @@ default endpoint.
 > sibling skill) describing a singular/plural split predate this migration.
 
 > **Availability.** The pre-packaged "RED Quick Start" bundles are published
-> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> on the production deployment (`https://platform.u1.archetypeai.app`) — set
 > `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
 > documented here. If name resolution reports `no bundle named … found`, the
 > bundle isn't published in the deployment you're pointed at: resolving by
@@ -366,7 +366,7 @@ pip install -r requirements.txt
 # runs (the file is gitignored). BOTH variables required, no default endpoint.
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 python3 run_red_agent.py                       # bundled sample slice
@@ -375,11 +375,12 @@ python3 run_red_agent.py --csv my_slice.csv    # your own prepared CSV
 python3 run_red_agent.py --score-only out.csv  # re-score a downloaded output
 ```
 
-Either endpoint form works — the runner normalises. The client wants the `/v0.5`
-suffix (it keeps the version for `/v0.5/files` and strips it for the versionless
-`/agents`), so a bare root passed straight to the client breaks uploads with an
-empty `ApiError: {}` while bundle calls keep working. The model skills in this
-repo ship `ATAI_API_ENDPOINT` with `/v0.5`; one `.env` serves both families.
+Either endpoint form works — the runner reduces it to a root and mounts each API
+surface where the platform serves it: files under `/v0.5/files`, the agents API
+versionless at `/agents`. No single `api_endpoint` serves both, so the runner
+builds one client per surface; handing the client a single endpoint 404s half the
+calls and reports a bodyless `ApiError: {}`. The model skills in this repo ship
+`ATAI_API_ENDPOINT` with `/v0.5`; one `.env` serves both families.
 
 ## References
 

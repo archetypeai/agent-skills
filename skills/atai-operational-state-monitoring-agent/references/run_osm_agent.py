@@ -5,9 +5,9 @@ terminal, download the per-window predictions — and, if the input ships a
 `<input>_labels.csv` ground-truth sidecar, score the run.
 
 Built on the official Archetype AI python client (`pip install archetypeai`),
-which owns auth, endpoint resolution, and the Agents API surface. The client
-mounts the versionless `/agents` and the versioned `/v0.5/files` itself, so a
-`/vX.Y` suffix on ATAI_API_ENDPOINT is handled for you.
+which owns auth, retries, and both API surfaces. Both live under one
+versionless `/api` prefix, so a single client serves both; pass
+ATAI_API_ENDPOINT in any form (see build_client).
 
 No bundle creation, no classifier URI: the platform ships canonical quick-start
 bundles (classifier + windowing already pinned). This script just finds one and
@@ -89,19 +89,25 @@ def load_dotenv(path=None):
                 os.environ[key.strip()] = value.strip()
 
 
-def versioned(endpoint):
-    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+def api_root(endpoint):
+    """Return the deployment root, with any /api or /vX.Y suffix removed.
 
-    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
-    strips the version itself for the versionless agents API. Passing a bare
-    root therefore breaks uploads while bundle calls keep working — an empty
-    `ApiError: {}` that looks like anything but a missing version path.
-
-    Accept either form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    Accept every form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
+    and the console shows it bare.
     """
-    endpoint = endpoint.rstrip("/")
-    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
+    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
+    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+
+
+def build_client(api_key, endpoint):
+    """The official client, pointed at the deployment's /api prefix.
+
+    Both API surfaces live under one versionless prefix — /api/agents and
+    /api/files — so a single client serves both. The client uses api_endpoint
+    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
+    """
+    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
 
 
 def resolve_bundle(client, name):
@@ -207,7 +213,7 @@ def main():
         sys.exit("ATAI_API_KEY is not set")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set")
-    client = ArchetypeAI(api_key, api_endpoint=versioned(endpoint))
+    client = build_client(api_key, endpoint)
 
     # 1. Upload the input CSV. Source connectors use the returned file_id (the
     #    filename), NOT the fil_ uid — client.agents.bundles.run() builds the
