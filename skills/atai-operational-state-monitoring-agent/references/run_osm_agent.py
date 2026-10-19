@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import re
 import sys
@@ -157,21 +158,42 @@ def watch(client, agent_id):
     return status
 
 
-def last_field(path, column=0):
-    """A CSV's last row's field, read from the file's end."""
+def tail_row(path):
+    """A CSV's header and last row, read from the file's end.
+
+    The 1 MiB window has to clear one whole record. The Embeddings bundle
+    writes an `embedding_{variate}` column per channel, so a row runs to ~75 KB
+    — a smaller window lands mid-vector and the "last line" is a fragment of a
+    float. That fragment still parses as a number, so it survives every guard
+    below and reads as an output that stopped early.
+    """
     with open(path, "rb") as f:
+        header = next(csv.reader([f.readline().decode()]))
         f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - 4096))
-        return f.read().strip().split(b"\n")[-1].split(b",")[column].decode().strip()
+        f.seek(max(0, f.tell() - (1 << 20)))
+        last = f.read().strip().split(b"\n")[-1].decode()
+    return header, next(csv.reader([last]))
+
+
+def last_window_end(output_csv):
+    """The output's last `finish_timestamp`, for logging."""
+    try:
+        header, row = tail_row(output_csv)
+        return row[header.index("finish_timestamp")]
+    except (IndexError, StopIteration, ValueError):
+        return "?"
 
 
 def output_reaches_end(output_csv, input_csv):
     """Whether the output's last window ends within END_SLACK_S of the input's last row.
     None when the timestamps aren't epoch numbers (no check then)."""
     try:
-        return float(last_field(input_csv)) - float(last_field(output_csv)) <= END_SLACK_S
-    except (ValueError, IndexError):
+        header, row = tail_row(output_csv)
+        finish = float(row[header.index("finish_timestamp")])
+        end = float(tail_row(input_csv)[1][0])
+    except (ValueError, IndexError, StopIteration):
         return None
+    return end - finish <= END_SLACK_S
 
 
 def download_complete(client, filename, output_csv, input_csv):
@@ -184,10 +206,12 @@ def download_complete(client, filename, output_csv, input_csv):
             return done
         if time.time() > deadline:
             print(f"  WARNING output still ends early {OUTPUT_WAIT_S // 60} min after the run finished: "
-                  f"last window {last_field(output_csv)}, input ends {last_field(input_csv)}")
+                  f"last window {last_window_end(output_csv)}, "
+                  f"input ends {tail_row(input_csv)[1][0]}")
             return False
-        print(f"  platform: finished; output still being written (last window {last_field(output_csv)}, "
-              f"input ends {last_field(input_csv)})")
+        print(f"  platform: finished; output still being written "
+              f"(last window {last_window_end(output_csv)}, "
+              f"input ends {tail_row(input_csv)[1][0]})")
         time.sleep(POLL_INTERVAL_S)
 
 
