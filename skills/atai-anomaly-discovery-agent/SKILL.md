@@ -108,7 +108,7 @@ default endpoint.
 > still the cheapest path when you control the run.
 
 > **Availability.** The pre-packaged "AD Quick Start" bundles are published
-> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> on the production deployment (`https://platform.u1.archetypeai.app`) — set
 > `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
 > documented here. If name resolution reports no match, the bundle isn't
 > published in the deployment you're pointed at: resolving by name is
@@ -455,7 +455,7 @@ pip install -r requirements.txt
 # note: NO /v0.5 suffix — the runner mounts /agents and /v0.5/files itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 python3 run_ad_agent.py                          # bundled sample slice, base bundle

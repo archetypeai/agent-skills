@@ -45,25 +45,29 @@ STATES = {"drilling", "reaming", "off_bottom", "in_slips", "trip_in_slips", "shu
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """The client wants the endpoint WITH its /vX.Y suffix.
+    """Each API surface gets its own client, mounted where the platform serves it.
 
-    It uses api_endpoint verbatim for the files API and strips the version
-    itself for the versionless agents API. A bare root therefore breaks uploads
-    while bundle calls keep working. Both .env conventions in this repo must
-    normalise to the same thing.
+    Files are versioned (/v0.5/files), the agents API is versionless
+    (/agents), so no single api_endpoint serves both. Both .env conventions in
+    this repo must reduce to the same root.
     """
 
-    def test_bare_root_gains_the_version(self):
-        for endpoint in ("https://api.u1.archetypeai.app",
-                         "https://api.u1.archetypeai.app/"):
-            self.assertEqual(run_osm_agent.versioned(endpoint),
-                             "https://api.u1.archetypeai.app/v0.5")
+    ROOT = "https://platform.u1.archetypeai.app"
 
-    def test_versioned_endpoint_is_left_alone(self):
-        for endpoint in ("https://api.u1.archetypeai.app/v0.5",
-                         "https://api.u1.archetypeai.app/v0.5/"):
-            self.assertEqual(run_osm_agent.versioned(endpoint),
-                             "https://api.u1.archetypeai.app/v0.5")
+    def test_any_env_convention_reduces_to_one_root(self):
+        for endpoint in (self.ROOT, self.ROOT + "/", self.ROOT + "/v0.5",
+                         self.ROOT + "/v0.5/", self.ROOT + "/api",
+                         self.ROOT + "/api/"):
+            self.assertEqual(run_osm_agent.api_root(endpoint), self.ROOT)
+
+    def test_both_surfaces_mount_under_one_api_prefix(self):
+        """One client serves agents and files; both live under /api."""
+        seen = []
+        with mock.patch.object(run_osm_agent, "ArchetypeAI",
+                               lambda key, api_endpoint: seen.append(api_endpoint)
+                               or mock.MagicMock()):
+            run_osm_agent.build_client("sk_test", self.ROOT + "/v0.5")
+        self.assertEqual(seen, [self.ROOT + "/api"])
 
 
 class _FakeClient:
@@ -136,7 +140,7 @@ class TestRequestBodies(unittest.TestCase):
     def _run_main(self, argv):
         calls = []
         env = {"ATAI_API_KEY": "sk_test",
-               "ATAI_API_ENDPOINT": "https://api.u1.archetypeai.app"}
+               "ATAI_API_ENDPOINT": "https://platform.u1.archetypeai.app"}
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.dict(os.environ, env), \
                 mock.patch.object(run_osm_agent, "ArchetypeAI",
@@ -169,7 +173,9 @@ class TestRequestBodies(unittest.TestCase):
     def test_bundle_id_override_skips_lookup(self):
         calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
                                 "--bundle-id", "bnd_pinned"])
-        self.assertNotIn("bundles.list", [c[0] for c in calls])
+        # The /api probe also calls bundles.list, with no query — what must not
+        # happen is a NAME lookup.
+        self.assertEqual([c for c in calls if c[0] == "bundles.list" and c[1]], [])
         run = next(c for c in calls if c[0] == "bundles.run")
         self.assertEqual(run[1], "bnd_pinned")
 

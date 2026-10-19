@@ -17,6 +17,7 @@ import json
 import pathlib
 import sys
 import textwrap
+from unittest import mock
 
 import pytest
 
@@ -100,15 +101,26 @@ class FakeClient:
 # endpoints
 # --------------------------------------------------------------------------
 
-def test_endpoint_is_normalised_for_the_client():
-    """The client wants the /vX.Y suffix: verbatim for files, stripped for agents.
+def test_endpoint_reduces_to_one_root():
+    """Files are versioned, the agents API is not, so each gets its own client.
 
-    A bare root breaks uploads with an empty ApiError while bundle calls keep
-    working, so both .env conventions in this repo normalise to one string.
+    No single api_endpoint serves both surfaces, so both .env conventions in
+    this repo reduce to the same root.
     """
     for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
-                     "https://x.test/v0.5/"):
-        assert runner.versioned(endpoint) == "https://x.test/v0.5", endpoint
+                     "https://x.test/v0.5/", "https://x.test/api",
+                     "https://x.test/api/"):
+        assert runner.api_root(endpoint) == "https://x.test", endpoint
+
+
+def test_both_surfaces_mount_under_one_api_prefix():
+    """One client serves agents and files; both live under /api."""
+    seen = []
+    with mock.patch.object(runner, "ArchetypeAI",
+                           lambda key, api_endpoint: seen.append(api_endpoint)
+                           or mock.MagicMock()):
+        runner.build_client("sk_test", "https://x.test/v0.5")
+    assert seen == ["https://x.test/api"]
 
 
 def test_agent_paths_come_from_the_client():

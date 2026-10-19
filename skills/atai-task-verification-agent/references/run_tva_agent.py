@@ -5,7 +5,7 @@ Stdlib only — no third-party imports, no GPU, no atai_core. Drop a .env next t
 where you run this:
 
     ATAI_API_KEY=<your API key>
-    ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 
     # verify a recording against a procedure
     python3 run_tva_agent.py --video assembly.mp4 --sop sop.txt
@@ -75,23 +75,29 @@ def client() -> "ArchetypeAI":
     global _CLIENT
     if _CLIENT is None:
         key, endpoint = env()
-        _CLIENT = ArchetypeAI(key, api_endpoint=versioned(endpoint))
+        _CLIENT = build_client(key, endpoint)
     return _CLIENT
 
 
-def versioned(endpoint: str) -> str:
-    """Return the endpoint in the form the client expects: WITH the /vX.Y suffix.
+def api_root(endpoint: str) -> str:
+    """Return the deployment root, with any /api or /vX.Y suffix removed.
 
-    The client uses api_endpoint verbatim for the files API (/v0.5/files) and
-    strips the version itself for the versionless agents API. Passing a bare
-    root therefore breaks uploads while bundle calls keep working — an empty
-    `ApiError: {}` that points at nothing.
-
-    Accept either form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without.
+    Accept every form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
+    and the console shows it bare.
     """
-    endpoint = endpoint.rstrip("/")
-    return endpoint if re.search(r"/v[0-9]+(\.[0-9]+)*$", endpoint) else f"{endpoint}/v0.5"
+    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
+    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+
+
+def build_client(api_key: str, endpoint: str) -> ArchetypeAI:
+    """The official client, pointed at the deployment's /api prefix.
+
+    Both API surfaces live under one versionless prefix — /api/agents and
+    /api/files — so a single client serves both. The client uses api_endpoint
+    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
+    """
+    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
 
 # Log event types that end a run. The instance `status` field is NOT usable for
 # this — it has read `running` 20+ minutes after a pod died with exit=1.
@@ -153,11 +159,11 @@ def load_dotenv(path: str = ".env") -> None:
 
 
 def env() -> tuple[str, str]:
-    """(key, endpoint). The endpoint is normalised to bare — no /v0.5 suffix.
+    """(key, endpoint). The endpoint is normalised to a bare deployment root.
 
-    The Agents API is mounted WITHOUT a version prefix while files live under
-    /v0.5, so this script mounts each itself. A user pasting the /query base URL
-    would otherwise produce /v0.5/agents/... and 404 everywhere.
+    Both API surfaces live under one /api prefix, which build_client appends.
+    A user pasting the /query base URL would otherwise produce
+    /v0.5/api/agents/... and 404 everywhere.
     """
     key = os.environ.get("ATAI_API_KEY")
     endpoint = (os.environ.get("ATAI_API_ENDPOINT") or "").rstrip("/")
@@ -165,7 +171,7 @@ def env() -> tuple[str, str]:
         sys.exit("ATAI_API_KEY is not set (put it in .env)")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (put it in .env)")
-    endpoint = re.sub(r"/v\d+(\.\d+)?$", "", endpoint).rstrip("/")
+    endpoint = api_root(endpoint)
     return key, endpoint
 
 

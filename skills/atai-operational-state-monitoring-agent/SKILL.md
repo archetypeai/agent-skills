@@ -93,7 +93,7 @@ The Agents API is **versionless** — it lives at `/agents`, not `/v0.5/agents`.
 > skill described a singular/plural split that predates this migration.
 
 > **Availability.** The pre-packaged "OSM Quick Start" bundles are published
-> on the production deployment (`https://api.u1.archetypeai.app`) — set
+> on the production deployment (`https://platform.u1.archetypeai.app`) — set
 > `ATAI_API_ENDPOINT` to it and the full upload → run → score cycle works as
 > documented here. If name resolution returns `no bundle named … found`, the
 > bundle isn't published in the deployment you're pointed at: resolving by
@@ -225,14 +225,15 @@ pip install -r requirements.txt
 # Every .env is gitignored.
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
-# Either endpoint form works: the runner normalises. The client itself wants the
-# /v0.5 suffix (it strips the version for the versionless /agents and keeps it for
-# /v0.5/files), so a bare root passed straight to it breaks uploads with an empty
-# `ApiError: {}` while bundle calls keep working. The model skills in this repo ship
-# ATAI_API_ENDPOINT with /v0.5; one .env now serves both families.
+# Either endpoint form works: the runner reduces it to a root and mounts each API
+# surface where the platform serves it — files under /v0.5, the agents API
+# versionless at /agents. No single api_endpoint serves both, so the runner builds
+# one client per surface; handing the client a single endpoint 404s half the calls
+# and reports a bodyless `ApiError: {}`. The model skills in this repo ship
+# ATAI_API_ENDPOINT with /v0.5; one .env serves both families.
 
 python3 run_osm_agent.py                        # default sample slice, base bundle
 python3 run_osm_agent.py --embeddings           # + Newton Omega embedding per window

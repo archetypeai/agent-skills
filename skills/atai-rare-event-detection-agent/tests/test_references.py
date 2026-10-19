@@ -55,17 +55,24 @@ class EnvTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run_red_agent.require_key()
 
-    def test_endpoint_is_normalised_for_the_client(self):
-        """The client wants the /vX.Y suffix: verbatim for files, stripped for agents.
+    def test_endpoint_reduces_to_one_root(self):
+        """Files are versioned, the agents API is not, so each gets its own client.
 
-        A bare root breaks uploads with an empty ApiError while bundle calls
-        keep working, so both .env conventions in this repo must normalise to
-        the same string.
+        No single api_endpoint serves both surfaces, so both .env conventions
+        in this repo must reduce to the same root.
         """
-        self.assertEqual(run_red_agent.versioned("https://x"), "https://x/v0.5")
-        self.assertEqual(run_red_agent.versioned("https://x/"), "https://x/v0.5")
-        self.assertEqual(run_red_agent.versioned("https://x/v0.5"), "https://x/v0.5")
-        self.assertEqual(run_red_agent.versioned("https://x/v0.5/"), "https://x/v0.5")
+        for endpoint in ("https://x", "https://x/", "https://x/v0.5",
+                         "https://x/v0.5/", "https://x/api", "https://x/api/"):
+            self.assertEqual(run_red_agent.api_root(endpoint), "https://x")
+
+    def test_both_surfaces_mount_under_one_api_prefix(self):
+        """One client serves agents and files; both live under /api."""
+        seen = []
+        with mock.patch.object(run_red_agent, "ArchetypeAI",
+                               lambda key, api_endpoint: seen.append(api_endpoint)
+                               or mock.MagicMock()):
+            run_red_agent.build_client("sk_test", "https://x")
+        self.assertEqual(seen, ["https://x/api"])
 
 
 class ScoringTests(unittest.TestCase):
