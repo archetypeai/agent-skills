@@ -218,6 +218,70 @@ class TestOutputCompleteness(unittest.TestCase):
         self.assertEqual(n["downloads"], 3)
 
 
+class TestTailRow(unittest.TestCase):
+    """The completeness check must survive a row wider than the tail window."""
+
+    HEADER = "finish_timestamp,start_timestamp,predicted_state,embedding_a\n"
+
+    def _write(self, directory, floats_per_row):
+        """An output CSV whose embedding column is a quoted, comma-filled vector."""
+        path = os.path.join(directory, "out.csv")
+        vector = ",".join(["-0.123456"] * floats_per_row)
+        with open(path, "w", newline="") as handle:
+            handle.write(self.HEADER)
+            for finish, start in ((1000.0, 900.0), (2000.0, 1900.0)):
+                handle.write(f'{finish},{start},drilling,"[{vector}]"\n')
+        return path
+
+    def _input(self, directory, last_timestamp):
+        path = os.path.join(directory, "in.csv")
+        with open(path, "w", newline="") as handle:
+            handle.write("DATE_TIME,sensor\n")
+            handle.write(f"1500.0,1\n{last_timestamp},2\n")
+        return path
+
+    def test_reads_past_a_row_wider_than_a_small_window(self):
+        """An Embeddings row is ~75 KB of quoted vector, far past a 4 KB tail.
+
+        A window landing mid-vector yields a fragment of a float. It still
+        parses as a number, so no guard catches it — it just reads as an
+        output that stopped early, and the caller re-downloads a complete
+        314 MB file until it gives up.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            wide = self._write(directory, 2000)       # ~24 KB per row
+            self.assertGreater(os.path.getsize(wide), 4096)
+            header, row = tail_row_of(wide)
+            self.assertEqual(row[header.index("finish_timestamp")], "2000.0")
+
+    def test_narrow_rows_are_unaffected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            header, row = tail_row_of(self._write(directory, 1))
+            self.assertEqual(row[header.index("finish_timestamp")], "2000.0")
+
+    def test_quoted_commas_do_not_shift_the_columns(self):
+        """csv.reader must treat the vector as ONE field, not hundreds."""
+        with tempfile.TemporaryDirectory() as directory:
+            header, row = tail_row_of(self._write(directory, 50))
+            self.assertEqual(len(row), len(header))
+
+    def test_wide_output_counts_as_reaching_the_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wide = self._write(directory, 2000)
+            self.assertIs(run_osm_agent.output_reaches_end(
+                wide, self._input(directory, 2000.0)), True)
+
+    def test_short_output_still_counts_as_early(self):
+        with tempfile.TemporaryDirectory() as directory:
+            wide = self._write(directory, 2000)
+            self.assertIs(run_osm_agent.output_reaches_end(
+                wide, self._input(directory, 999999.0)), False)
+
+
+def tail_row_of(path):
+    return run_osm_agent.tail_row(path)
+
+
 class TestEvaluate(unittest.TestCase):
     def _score(self, labels_rows, pred_rows, window=2):
         with tempfile.TemporaryDirectory() as td:
