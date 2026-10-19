@@ -26,6 +26,7 @@ import csv
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -109,10 +110,9 @@ def make_client():
         sys.exit(missing_key_message("ATAI_API_KEY", "Get one from your Archetype AI account."))
     api_endpoint = os.environ.get("ATAI_API_ENDPOINT")
     if not api_endpoint:
-        sys.exit(missing_key_message("ATAI_API_ENDPOINT", "e.g. https://api.u1.archetypeai.app/v0.5 — there is no default."))
-    api_endpoint = api_endpoint.rstrip("/")
-    if not api_endpoint.endswith("/v0.5"):
-        api_endpoint += "/v0.5"
+        sys.exit(missing_key_message("ATAI_API_ENDPOINT", "e.g. https://platform.u1.archetypeai.app/api — there is no default."))
+    api_endpoint = re.sub(r"/api(/lens)?$", "", api_endpoint.rstrip("/"))
+    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint) + "/api"
     return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 
@@ -124,7 +124,7 @@ def _embed_channel(client, channel_values: list[float]) -> list[float]:
         "events": [{"type": "data.numeric_array", "event_data": {"contents": [channel_values]}}],
     }
     payload = client.requests_post(
-        f"{client.api_endpoint}/query",
+        f"{client.api_endpoint}/lens/query",
         data_payload=json.dumps(body),
         additional_headers={"Content-Type": "application/json"},
     )

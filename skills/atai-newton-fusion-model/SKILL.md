@@ -49,17 +49,17 @@ Newton::c2_6_8b_260424d7a55d5e        ❌ missing _fp8_
 c2_6_8b_260424d7a55d5e                ❌ both missing
 ```
 
-This was probed end-to-end against `https://api.u1.archetypeai.app/v0.5/query` on prod.
+This was probed end-to-end against `https://platform.u1.archetypeai.app/api/lens/query` on prod.
 
 ## Endpoint
 
 ```
-POST {ATAI_API_ENDPOINT}/v0.5/query
+POST {ATAI_API_ENDPOINT}/api/lens/query
 Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup instead of silently at query time. Prod is `https://api.u1.archetypeai.app/v0.5`. The same endpoint serves all three modalities below — what changes is the request body.
+**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup instead of silently at query time. Prod is `https://platform.u1.archetypeai.app/api`. The same endpoint serves all three modalities below — what changes is the request body.
 
 ## Wire Shapes
 
@@ -78,7 +78,7 @@ Content-Type: application/json
 - Put the system turn in `instruction_prompt`. That is the only field C 2.6 honors — a directive sent in the legacy `system_prompt` field alone is silently ignored (verified against `Newton::c2_6_8b_fp8_260424d7a55d5e`: the same directive is obeyed in `instruction_prompt` and dropped in `system_prompt`), so omit `system_prompt` entirely.
 - JSON output: put the schema in `instruction_prompt`, the input in `query`, and **explicitly tell the model not to wrap in markdown fences**. The model otherwise often returns <code>```json ... ```</code>.
 
-For reasoning over an attached text file: upload it as **`text/plain`** (a `.txt` file) via `/v0.5/files`, then put the **filename** in `file_ids`. The model then sees the file contents in its prompt context. **Critical:** this only works for `text/plain`. A file uploaded as `text/csv` (a `.csv`) is accepted and stored byte-identically, but its contents never reach the model on `/query` — it silently confabulates from priors (see the gotcha below and [`csv_vs_txt_proof.py`](references/csv_vs_txt_proof.py)). `application/json` uploads are rejected outright. So put tabular data in a `.txt`, or inline it in `query`.
+For reasoning over an attached text file: upload it as **`text/plain`** (a `.txt` file) via `/api/files`, then put the **filename** in `file_ids`. The model then sees the file contents in its prompt context. **Critical:** this only works for `text/plain`. A file uploaded as `text/csv` (a `.csv`) is accepted and stored byte-identically, but its contents never reach the model on `/query` — it silently confabulates from priors (see the gotcha below and [`csv_vs_txt_proof.py`](references/csv_vs_txt_proof.py)). `application/json` uploads are rejected outright. So put tabular data in a `.txt`, or inline it in `query`.
 
 See [`text_query.py`](references/text_query.py) for runnable demos of all three patterns. Its examples are framed as smart-home WiFi flow analysis; the attached flow log in example 3 is real data from the [GHOST-IoT dataset](https://github.com/gspathoulas/ghost-iot-dataset) (Anagnostopoulos et al., *Sensors* 2020, [DOI:10.3390/s20226600](https://doi.org/10.3390/s20226600)) — see the script's docstring for full attribution.
 
@@ -89,7 +89,7 @@ Two attachment paths, both reach the same fusion model — pick by use case — 
 **(a) Upload + reference by filename in `file_ids`** — best when the same image is reused across queries (one upload, many `/query` calls):
 
 ```bash
-curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
+curl -X POST $ATAI_API_ENDPOINT/api/files \
   -H "Authorization: Bearer $ATAI_API_KEY" \
   -F "file=@dashboard.png;type=image/png"
 ```
@@ -147,7 +147,7 @@ C 2.6 reasons over video on `/query` two ways. This distinguishes it from the C 
 **(a) `.mp4` + `max_frames`** — upload the clip, and GPQ decodes and uniformly samples it server-side before the model sees the frames. No client-side video tooling needed:
 
 ```bash
-curl -X POST $ATAI_API_ENDPOINT/v0.5/files \
+curl -X POST $ATAI_API_ENDPOINT/api/files \
   -H "Authorization: Bearer $ATAI_API_KEY" \
   -F "file=@clip.mp4;type=video/mp4"
 ```
@@ -262,7 +262,7 @@ pip install -r skills/atai-newton-fusion-model/references/requirements.txt
 # BOTH variables are required — there is no default endpoint:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app/v0.5
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 python skills/atai-newton-fusion-model/references/text_query.py
