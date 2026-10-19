@@ -44,12 +44,12 @@ Note the `OmegaEncoder::` prefix (not `Newton::`). Output is a **768-dimensional
 ## Endpoint
 
 ```
-POST {ATAI_API_ENDPOINT}/v0.5/query
+POST {ATAI_API_ENDPOINT}/api/lens/query
 Authorization: Bearer <API_KEY>
 Content-Type: application/json
 ```
 
-Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. Prod is `https://api.u1.archetypeai.app/v0.5`.
+Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. Prod is `https://platform.u1.archetypeai.app/api`.
 
 ## Request Shape
 
@@ -141,7 +141,7 @@ pip install -r skills/atai-newton-omega-model/references/requirements.txt
 # BOTH variables are required — there is no default endpoint:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://api.u1.archetypeai.app/v0.5
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 cd skills/atai-newton-omega-model/references

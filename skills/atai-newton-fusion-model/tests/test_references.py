@@ -115,9 +115,18 @@ class TestMakeClient(_Base):
             _common.make_client()
 
     def test_endpoint_normalized_and_headers(self):
-        self.hermetic_env(ATAI_API_KEY="test-key", ATAI_API_ENDPOINT="https://example.test/")
-        client = _common.make_client()
-        self.assertTrue(client.api_endpoint.endswith("/v0.5"))
+        """Any .env convention reduces to one root with /api appended.
+
+        Both surfaces live under /api, so one client serves query and files
+        alike. Accepting every form lets a single .env serve the model skills
+        and the agent skills.
+        """
+        for given in ("https://example.test", "https://example.test/",
+                      "https://example.test/v0.5", "https://example.test/api",
+                      "https://example.test/api/lens"):
+            self.hermetic_env(ATAI_API_KEY="test-key", ATAI_API_ENDPOINT=given)
+            client = _common.make_client()
+            self.assertEqual(client.api_endpoint, "https://example.test/api", given)
         self.assertEqual(client.auth_headers["Authorization"], "Bearer test-key")
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -60,12 +61,11 @@ def make_client() -> ArchetypeAI:
     if not api_endpoint:
         sys.exit(
             "ATAI_API_ENDPOINT is not set. Export it (e.g. "
-            "https://api.u1.archetypeai.app/v0.5) or add it to your .env — "
+            "https://platform.u1.archetypeai.app/api) or add it to your .env — "
             "there is no default."
         )
-    api_endpoint = api_endpoint.rstrip("/")
-    if not api_endpoint.endswith("/v0.5"):
-        api_endpoint = api_endpoint + "/v0.5"
+    api_endpoint = re.sub(r"/api(/lens)?$", "", api_endpoint.rstrip("/"))
+    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint) + "/api"
     return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 
@@ -126,7 +126,7 @@ def query(
 
     start_time = time.time()
     payload = client.requests_post(
-        f"{client.api_endpoint}/query",
+        f"{client.api_endpoint}/lens/query",
         data_payload=json.dumps(body),
         additional_headers={"Content-Type": "application/json"},
     )
