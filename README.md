@@ -8,7 +8,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 ## Skills
 
-Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/query` and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
+Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/api/lens/query` and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
 
 ### Agents
 
@@ -25,13 +25,13 @@ Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or c
 
 ### Models
 
-Direct Query API — one stateless `POST /query` per request, for when you want control over the pipeline or the raw vectors to build on.
+Direct Query API — one stateless `POST /api/lens/query` per request, for when you want control over the pipeline or the raw vectors to build on.
 
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
-| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via `/query` |
+| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/api/lens/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
+| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
 
 ### Integrations
 
@@ -61,16 +61,16 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 
 | Demo | Skills | What it demonstrates |
 |------|--------|----------------------|
-| [Traffic Monitor](https://github.com/archetypeai/archetypeai-traffic-demo) | `atai-newton-fusion-model` | Live Caltrans CCTV feed → C 2.6 vision. Samples a short burst of frames per interval and sends it as one multi-frame `/query` clip to reason over traffic flow, incidents, and conditions. |
-| [Wildfire Watch](https://github.com/archetypeai/archetypeai-wildfire-demo) | `atai-newton-fusion-model` | 1,200+ ALERTCalifornia cameras → C 2.6 vision. Per-camera smoke/fire/haze detection, a zone scan that batches frames per `/query`, and text-only zone Q&A. |
-| [Earthquake monitor](https://github.com/archetypeai/archetypeai-earthquake-demo) | `atai-newton-fusion-model` | Live USGS feed → C 2.6 **text reasoning**. Formats the current quakes as structured text and asks Newton (stateless `/query`) to surface aftershock sequences, spatial clustering, and ranked regional risk — alongside an interactive world map. |
+| [Traffic Monitor](https://github.com/archetypeai/archetypeai-traffic-demo) | `atai-newton-fusion-model` | Live Caltrans CCTV feed → C 2.6 vision. Samples a short burst of frames per interval and sends it as one multi-frame Direct Query API clip to reason over traffic flow, incidents, and conditions. |
+| [Wildfire Watch](https://github.com/archetypeai/archetypeai-wildfire-demo) | `atai-newton-fusion-model` | 1,200+ ALERTCalifornia cameras → C 2.6 vision. Per-camera smoke/fire/haze detection, a zone scan that batches frames per query, and text-only zone Q&A. |
+| [Earthquake monitor](https://github.com/archetypeai/archetypeai-earthquake-demo) | `atai-newton-fusion-model` | Live USGS feed → C 2.6 **text reasoning**. Formats the current quakes as structured text and asks Newton (one stateless query) to surface aftershock sequences, spatial clustering, and ranked regional risk — alongside an interactive world map. |
 | [SWaT water treatment](https://github.com/archetypeai/archetypeai-swat-demo-direct-query) | `atai-newton-omega-model` + `atai-newton-fusion-model` | Six-stage plant anomaly detection: Omega per-channel embeddings + client-side KNN, plus C 2.6 text reasoning for operator action suggestions. |
 | [Wind turbine monitor](https://github.com/archetypeai/archetypeai-wind-turbine-demo) (Python/Flask) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Penmanshiel wind-farm SCADA anomaly detection: Omega per-channel embeddings + local KNN against a leakage-free n-shot library precomputed offline. Replays 3 months of telemetry and detects a real frequency-converter fault on one turbine against its healthy peer. |
 | [SWaT × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-swat-demo-nemotron) | `atai-newton-omega-model` + `atai-newton-omega-nvidia-nemotron` | The SWaT demo with NVIDIA Nemotron in place of C 2.6 for operator suggestions: Nemotron returns upstream / local / downstream action cards as JSON, checked in code against the plant topology and each stage's equipment, cached per anomaly set. |
 | [Wind turbine × NVIDIA Nemotron](https://github.com/archetypeai/archetypeai-wind-turbine-demo-nemotron) (Python/Flask) | `atai-newton-omega-model` + `atai-newton-omega-nvidia-nemotron` | The Penmanshiel demo plus NVIDIA Nemotron fault briefs: when Omega flags a turbine, Nemotron compares the window with the healthy peer over the same hours and returns what changed, the likely cause and what to check. |
 | [Drilling state monitor](https://github.com/archetypeai/archetypeai-drilling-demo) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Equinor Volve North Sea well SCADA: per-channel Omega embeddings + local KNN classify each window as drilling / not-drilling, against a leakage-free n-shot library precomputed offline from held-out reference wells. Replays real well telemetry with live accuracy vs ACTC ground truth. |
-| [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (stateless `/query`) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
-| [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via stateless `/query`; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
+| [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (one stateless query) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
+| [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via one stateless query; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
 
 ## Agent examples
 
@@ -131,50 +131,54 @@ cp -r skills/* your-project/.claude/skills/
 
 Two API surfaces, one per skill family.
 
-**Models — the Direct Query API.** One stateless POST to `/query` per request: no session lifecycle, no batch jobs, no SSE plumbing.
+**Models — the Direct Query API.** One stateless POST to `/api/lens/query` per request: no session lifecycle, no batch jobs, no SSE plumbing.
 
 ```
-Text:          POST /query ──────────────────────────────────► response
-Image(s):      Upload file(s) → POST /query (file_ids) ───────► response
-Video (.mp4):  Upload file → POST /query + max_frames ────────► response
-Video frames:  POST /query (frames + query_metadata) ─────────► response
+Text:          POST /api/lens/query ───────────────────────────────► response
+Image(s):      Upload file(s) → POST /api/lens/query (file_ids) ────► response
+Video (.mp4):  Upload file → POST /api/lens/query + max_frames ─────► response
+Video frames:  POST /api/lens/query (frames + query_metadata) ──────► response
 ```
 
 **Integrations** reuse the Direct Query API for the Newton side and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
 
 ```
-Omega:     POST /query per channel ──► embeddings ──► local KNN ──► verdict
+Omega:     POST /api/lens/query per channel ──► embeddings ──► local KNN ──► verdict
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
 **Agents — the Agents API.** You upload an input, run a pre-packaged bundle or a canonical blueprint, poll, and download the output; the model runs server-side.
 
 ```
-Upload:   POST /v0.5/files ───────────────────────────────────► file_id
-Resolve:  GET  /agents/bundles?query=<name> ──────────────────► bnd_…
-          (or GET /agents/blueprints/<key> → POST /agents/bundles)
-Run:      POST /agents/bundles/<bnd_…>/run ───────────────────► agt_…
-Poll:     GET  /agents/instances/<agt_…>/logs | /events
-Collect:  GET  /agents/instances/<agt_…>/results ─────────────► output file
+Upload:   POST /api/files ───────────────────────────────────► file_id
+Resolve:  GET  /api/agents/bundles?query=<name> ──────────────► bnd_…
+          (or GET /api/agents/blueprints/<key> → POST /api/agents/bundles)
+Run:      POST /api/agents/bundles/<bnd_…>/run ──────────────► agt_…
+Poll:     GET  /api/agents/instances/<agt_…>/logs | /events
+Collect:  GET  /api/agents/instances/<agt_…>/results ────────► output file
 
 Fit (OSM Path 2: your own labelled data):
-          POST /agents/optimizations ─────────────────────────► opt_… (trials, scored)
-          POST /agents/optimizations/<opt_…>/trials/<otr_…>/promote ► blp_…
-          POST /agents/evals ─────────────────────────────────► evl_… (the test score)
+          POST /api/agents/optimizations ────────────────────► opt_… (trials, scored)
+          POST /api/agents/optimizations/<opt_…>/trials/<otr_…>/promote ► blp_…
+          POST /api/agents/evals ────────────────────────────► evl_… (the test score)
 ```
 
 A run can report `completed` before its last output file is fully written (a known platform
 issue): check that an output reaches its input's end before using it, as the OSM runners do.
 
-Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception, for now:** the OSM skill's Path 2 (`references/osm_lifecycle/`) uses a small stdlib HTTP helper, because the client doesn't cover the Optimizations, Evals and promote endpoints yet; it moves onto the client when it does.
+Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception:** the OSM skill's Path 2 (`references/osm_lifecycle/`) drives the Optimizations, Evals and promote endpoints through a small stdlib HTTP helper of its own, rather than the client's `agents.optimizations` and `agents.evals` namespaces.
 
 ## API Base URL
 
 ```
-https://api.u1.archetypeai.app
+https://platform.u1.archetypeai.app
 ```
 
-**The two surfaces are mounted differently, and this is the most common way to lose a run:** the files API is versioned (`/v0.5/files`) while the Agents API is **versionless** (`/agents`, never `/v0.5/agents`). The client handles both from one value — pass the endpoint *with* the `/v0.5` suffix and it strips the version for `/agents` itself. Pass a bare root and uploads fail with an empty `ApiError: {}` while bundle calls keep working, which points at nothing. The agent runners normalise either form, so one `.env` serves every skill here.
+**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
+
+**A wrong prefix is the most common way to lose a run, because it says nothing:** a 404 comes back with an empty body, which the client raises as `ApiError: {}` — no status, no URL, no message. To tell a wrong path from a wrong key, repeat the call **without the auth header**: 404 means the route isn't registered, 401 means it exists and your key or scope is the problem.
+
+Note that `/api/query` is not a route. The Direct Query API keeps its `lens/` namespace at `/api/lens/query` — that is the current path, not a deprecated one. The python client deprecates the `client.lens` *accessor* in favour of `client.agents` for agent workflows; the HTTP route is unaffected.
 
 ## License
 
