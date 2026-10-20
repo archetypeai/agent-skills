@@ -224,6 +224,51 @@ class TestOutputCompleteness(unittest.TestCase):
         self.assertEqual(n["downloads"], 3)
 
 
+class TestArtifactGate(unittest.TestCase):
+    """A run reports completed while its artifacts are still being written."""
+
+    @staticmethod
+    def _item(status, name="out.csv"):
+        data = {"filename": name}
+        if status is not None:
+            data["file_attributes"] = {"job_output": {"status": status}}
+        return {"data": data}
+
+    def test_waits_until_every_artifact_is_complete(self):
+        """The run says completed; one artifact is still partial. Do not collect it."""
+        calls = []
+        rounds = [[self._item("complete"), self._item("partial")],
+                  [self._item("complete"), self._item("complete")]]
+
+        def fetch():
+            calls.append(1)
+            return rounds[min(len(calls) - 1, len(rounds) - 1)]
+
+        with mock.patch.object(run_osm_agent.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            items = run_osm_agent.complete_results(fetch)
+        self.assertEqual(len(calls), 2)          # polled again rather than taking the prefix
+        self.assertTrue(all(run_osm_agent.artifact_status(i) == "complete" for i in items))
+
+    def test_returns_immediately_when_all_complete(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            items = run_osm_agent.complete_results(lambda: [self._item("complete")])
+        self.assertEqual(len(items), 1)
+
+    def test_a_platform_that_reports_no_status_is_not_blocked(self):
+        """Absent status must not stall a client: older deployments report none."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            items = run_osm_agent.complete_results(lambda: [self._item(None)])
+        self.assertEqual(len(items), 1)
+
+    def test_gives_up_rather_than_hanging(self):
+        out = io.StringIO()
+        with mock.patch.object(run_osm_agent.time, "sleep"), contextlib.redirect_stdout(out):
+            items = run_osm_agent.complete_results(lambda: [self._item("partial")], wait_s=0)
+        self.assertEqual(len(items), 1)
+        self.assertIn("still incomplete", out.getvalue())
+
+
 class TestTailRow(unittest.TestCase):
     """The completeness check must survive a row wider than the tail window."""
 
