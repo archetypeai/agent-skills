@@ -158,21 +158,34 @@ def watch(client, agent_id):
     return status
 
 
+# csv.reader caps one field at 128 KB by default. An `embedding_{variate}`
+# column is a whole vector in a single quoted field, so the cap is reachable —
+# and it raises rather than truncating, which at least fails loudly.
+csv.field_size_limit(1 << 31)
+
+
 def tail_row(path):
     """A CSV's header and last row, read from the file's end.
 
-    The 1 MiB window has to clear one whole record. The Embeddings bundle
-    writes an `embedding_{variate}` column per channel, so a row runs to ~75 KB
-    — a smaller window lands mid-vector and the "last line" is a fragment of a
-    float. That fragment still parses as a number, so it survives every guard
-    below and reads as an output that stopped early.
+    The window grows until it holds a complete final record. A fixed window is
+    correct only while every row fits inside it, and the failure is silent: a
+    window narrower than one row yields a fragment of a field, which still
+    parses as a number and reads as an output that stopped early. An
+    Embeddings row already runs to ~75 KB, so the margin is narrower than it
+    looks. Growing also reads LESS in the common case — 4 KiB rather than a
+    megabyte.
     """
+    size = os.path.getsize(path)
     with open(path, "rb") as f:
         header = next(csv.reader([f.readline().decode()]))
-        f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - (1 << 20)))
-        last = f.read().strip().split(b"\n")[-1].decode()
-    return header, next(csv.reader([last]))
+        window = 4096
+        while True:
+            f.seek(max(0, size - window))
+            lines = f.read().strip().split(b"\n")
+            # A leading partial line proves the trailing one is whole.
+            if len(lines) > 1 or window >= size:
+                return header, next(csv.reader([lines[-1].decode()]))
+            window *= 4
 
 
 def last_window_end(output_csv):
