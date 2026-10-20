@@ -254,8 +254,50 @@ def wait_until_parses(save, out_path: str) -> bool:
         save()
 
 
+ARTIFACT_WAIT_S = 600          # how long to wait for artifacts after a run reports completed
+
+
+def artifact_status(item):
+    """An output's own completion status, or None if the platform reports none.
+
+    A run reports `completed` while its artifacts are still being written. One
+    measured instance: an output held 16,018 of an eventual 50,547 bytes at the
+    moment its run reported completed -- 318 rows of ~997. Reading it gives a
+    well-formed file that is simply short, so nothing downstream notices. The
+    console shows the same pairing, run COMPLETED beside artifact PARTIAL.
+    """
+    return (item.get("data", {}).get("file_attributes", {})
+                .get("job_output", {}).get("status"))
+
+
+def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
+    """The run's outputs, once every one reports complete.
+
+    Needs nothing but the agent id -- unlike a content check, which has to
+    compare the output against the input and so only works for the client that
+    produced the run.
+    """
+    deadline = time.time() + wait_s
+    waited = False
+    while True:
+        items = fetch()
+        pending = [i for i in items if artifact_status(i) not in (None, "complete")]
+        if not pending:
+            if waited:
+                print("  every artifact reports complete")
+            return items
+        if time.time() > deadline:
+            print(f"  WARNING {len(pending)} artifact(s) still incomplete after "
+                  f"{wait_s // 60} min; collecting anyway")
+            return items
+        waited = True
+        print(f"  {len(items) - len(pending)} of {len(items)} artifacts ready; waiting")
+        time.sleep(15)
+
+
 def fetch_results(agent_id: str, out_path: str) -> str | None:
-    items = client().agents.instances.get_results(agent_id).get("data") or []
+    items = complete_results(
+        lambda: client().agents.instances.get_results(agent_id).get("data") or [])
     if not items:
         print("  no results (a failed run leaves none)")
         return None
