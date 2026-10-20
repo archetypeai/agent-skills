@@ -265,6 +265,21 @@ class TestTailRow(unittest.TestCase):
             header, row = tail_row_of(self._write(directory, 1))
             self.assertEqual(row[header.index("finish_timestamp")], "2000.0")
 
+    def test_reads_a_row_wider_than_a_fixed_megabyte(self):
+        """The window grows, so no row width is too wide.
+
+        A fixed window is correct only while every row fits inside it, and the
+        failure is silent — a fragment of a float still parses as a number and
+        reads as an output that stopped early. This row is deliberately wider
+        than the 1 MiB window this helper used to take.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            wide = self._write(directory, 160_000)      # ~1.8 MB per row
+            self.assertGreater(os.path.getsize(wide), 2 << 20)
+            header, row = tail_row_of(wide)
+            self.assertEqual(row[header.index("finish_timestamp")], "2000.0")
+            self.assertEqual(len(row), len(header))
+
     def test_quoted_commas_do_not_shift_the_columns(self):
         """csv.reader must treat the vector as ONE field, not hundreds."""
         with tempfile.TemporaryDirectory() as directory:
