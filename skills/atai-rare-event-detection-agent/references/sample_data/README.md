@@ -32,8 +32,10 @@ slices from the raw Kaggle data, don't skip a leakage audit: the raw data
 contains two distinct leakage mechanisms — five channels that go NaN *only*
 inside fault episodes, and several that read a saturated zero when the pump
 stops. Interpolating the first group would teach a model "sensor offline =
-fault" rather than any pump behaviour. For prepared slices or a detector
-tailored to your own data, contact support@archetypeai.dev.
+fault" rather than any pump behaviour. The
+[`atai-rare-event-detection-agent-data-prep`](../../../atai-rare-event-detection-agent-data-prep/SKILL.md)
+skill runs that audit (on the raw recording) and builds role files for Path 2, which
+fits a detector on your own data.
 
 ## Data attribution
 

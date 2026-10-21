@@ -1,20 +1,25 @@
 ---
 name: atai-rare-event-detection-agent
 description: >
-  Run Archetype AI's managed Rare Event Detection (RED) agent over the Agents
-  API — upload a sensor CSV, resolve the pre-packaged "RED Quick Start"
-  bundle by name (its nearest-prototype classifier and windowing are already
-  pinned), run it, poll status + audit events, download per-window event
-  predictions. Use when the user wants fully-managed, server-side detection
-  of a *named* rare fault recurring — equipment breakdowns, process
-  excursions — from a handful of labelled examples. Covers name-based bundle
-  resolution, the run/poll/results lifecycle, the output schema, the
-  Embeddings variant, bring-your-own-classifier via the `red` blueprint, and
-  incident-level vs window-level scoring. Do NOT use for classifying every
-  operating regime (`atai-operational-state-monitoring-agent`), for unnamed
-  anomalies with no labelled examples, for client-side embedding + KNN over
-  `/query` (`atai-newton-omega-model`), or for cleaning and windowing raw
-  CSVs (`atai-newton-omega-model-data-prep`).
+  Run Archetype AI's Rare Event Detection (RED) agent over the Agents API, on two
+  paths. Path 1 — run the maintained "RED Quick Start" bundle (a pump-breakdown
+  nearest-prototype classifier and its windowing already pinned): upload a
+  prepared CSV, resolve the bundle by exact name, run, poll, download per-window
+  event predictions. Path 2 — build a RED agent on YOUR OWN data: from role files
+  (a few labelled incidents of a named event for training, the next ones for
+  validation and test, a delivery) fit the class prototypes and choose the window
+  and distance with the Optimizations API, promote the best trial to a blueprint,
+  test it once with the Evals API, deliver it as a bundle, and score each incident
+  (detected, how soon) and the false alarms. Use when the user wants server-side
+  detection of a *named* rare event recurring — equipment breakdowns, process
+  excursions — from a handful of labelled examples. Covers the output schema,
+  the Embeddings variant, what the `red` blueprint exposes since its 2026-10-12
+  re-seed, bringing your own classifier, and incident-level vs window-level
+  scoring. Do NOT use for classifying every operating regime
+  (`atai-operational-state-monitoring-agent`), for unnamed anomalies with no
+  labelled examples (`atai-anomaly-discovery-agent`), for client-side embedding
+  + KNN over `/query` (`atai-newton-omega-model`), or for preparing a labelled
+  recording (`atai-rare-event-detection-agent-data-prep`).
 ---
 
 # RED Agent — Managed Rare Event Detection via the Agents API
@@ -40,46 +45,63 @@ source → interpolate → window → windowInterpolate → samplingRate
        → limitValues → encoder (omega:1.5) → classifier → sink
 ```
 
-You don't have to fit or host anything: the platform ships **canonical "RED
-Quick Start" bundles** with a pump-breakdown classifier and its windowing
-(`window_size=64, step_size=1`) already pinned. One run = one agent instance =
-one input file. You upload the CSV, **resolve the pre-packaged bundle by
-name**, run it, poll until terminal, and download one output CSV of per-window
-predictions. (Detecting *your own* fault catalog means a classifier fitted
-for your data — Archetype AI does that with you; see "Bring your own
-classifier" below.)
+There are two ways in. **Path 1** runs the canonical "RED Quick Start" bundles,
+whose pump-breakdown classifier and windowing (`window_size=64, step_size=1`) are
+already pinned: nothing to fit or host. **Path 2** builds a RED agent on your own
+data with the Optimizations and Evals APIs: the platform fits the prototypes on
+your labelled incidents, you promote the best setting to a blueprint, test it once
+and deliver it. Either way, one run = one agent instance = one input file, and the
+output is one CSV of per-window predictions.
 
 ## When to Apply
 
 - Run managed rare-event detection **without fitting anything** — the
   pre-packaged Quick Start bundle pins a classifier and its windowing; upload
-  a prepared CSV and run
+  a prepared CSV and run (Path 1)
 - Detect a **named** fault of your own recurring, given only one or two
-  labelled incidents of it plus normal-operation data (bring your own
-  classifier, below)
+  labelled incidents of it plus normal-operation data (Path 2)
 - Deploy a detector as a repeatable batch job with **no client-side ML** — the
   platform embeds and classifies every window
 - Score a few-shot detector honestly, where standard accuracy is meaningless
   because the positive class is under 1% of windows
 
-> **Your own data?** As of today, this skill runs the **pre-packaged RED
-> Quick Start bundles**, whose classifier is fit to the Kaggle pump-breakdown
-> data. To detect faults in your own data, contact
-> **support@archetypeai.dev** — Archetype AI will work with you to create
-> agent bundles tailored to your data and fault catalog. (The "Bring your own
-> classifier" section below documents the underlying mechanics.)
 
 **Do not use this skill when:**
 - The user has a full labelled library across all regimes and wants "which state
   is the asset in?" — use
   [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md)
 - The faults are unnamed or uncharacterized and only normal data exists — RED
-  needs a named catalog; flagging everything unusual is a different problem
+  needs a named catalog; flagging everything unusual is
+  [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md)
 - You want per-window embeddings to do ML client-side — use
   [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
-- The raw CSV still needs cleaning, gap-aware segmentation or normalization —
-  see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
+- Your recording still needs gridding, a label mapping, channel triage or role
+  files — use [`atai-rare-event-detection-agent-data-prep`](../atai-rare-event-detection-agent-data-prep/SKILL.md)
+  first; for generic cleaning of messy raw data,
+  [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
   RED assumes prepared, z-scored input with a regular sampling rate
+
+## Choose a path
+
+| | **Path 1 — run a maintained bundle** | **Path 2 — build a RED agent on your data** |
+|---|---|---|
+| you have | a prepared CSV (the pump sample, or data like it) | a labelled recording of **your** asset with a few incidents of a named event |
+| you get | per-window predictions from a classifier fitted on **two pump breakdowns** | your own blueprint and bundle: prototypes fitted on your incidents, window and distance chosen on the next ones, a test score and a delivery score |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
+| scripts | [`references/run_red_agent.py`](references/run_red_agent.py), on the official `archetypeai` client | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
+| time | ~1.5 min on a clear queue | ~6 min on the sample; longer with load |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (RED became optimizable there on 2026-10-12) |
+
+The Quick Start classifier holds one pump's two breakdowns, so running your own asset
+through it is a transfer test, not a deployment: for your own asset, take Path 2. Path
+2's last step *is* Path 1 run on your own bundle, so the output schema, polling and
+scoring below apply to both. Worked example:
+[rare-event-detection-agent-example-pump-quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
+(the pump, about 10 minutes end to end).
+
+---
+
+# Path 1 — Run a maintained bundle
 
 ## Endpoints
 
@@ -159,7 +181,10 @@ expected 381 KB. Two bundles are published:
 
 Both pin the classifier artifact (`red-classifier` slot) and its windowing
 (`window_size=64, step_size=1`), so there is **nothing to create and no
-classifier URI to supply**. (For reference, these currently resolve to
+classifier URI to supply**. They are pinned to the `red` blueprint version they were
+created on (July 2026), which reads its window, metric and columns from the classifier;
+the 2026-10-12 re-seed made a new active version and left theirs in place, so they run
+exactly as before (re-verified on dev 2026-10-13: byte-identical output). (For reference, these currently resolve to
 `bnd_0ykawrhhd795kv20cvr18ak618` and `bnd_7xye786cph98xb8ch2yn2q56ey` in
 production; the ids are deployment-specific, which is why you resolve by
 name — pin ids only as a last resort.)
@@ -237,40 +262,44 @@ drift monitoring, projections, or downstream ML per
 [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)'s patterns —
 without paying one `/query` call per window.
 
-## Bring your own classifier (advanced)
+## Bring your own classifier (legacy route)
 
-The pre-packaged bundles run Archetype AI's pump-breakdown classifier. To
-detect **your own** fault catalog you need a classifier fitted on your data.
-The fitting pipeline is not accessible to external users yet — contact
-support@archetypeai.dev and Archetype AI will fit one with you and hand back
-the classifier artifact. With that artifact you create your own bundle from
-the canonical `red` blueprint, then run it as in Step 3:
+**Prefer Path 2,** which fits the classifier on the platform and promotes it to a
+blueprint that needs no artifact path. This route is for a classifier you already hold as
+an `s3://` safetensors file (from the pre-Optimize `red-fitting` pipeline, or one Archetype
+AI fitted with you). On the current `red` blueprint (since the 2026-10-12 re-seed) the
+bundle has to fill the head's slot and pin everything the classifier was fitted with:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/agents/bundles" -d '{
     "blueprint": "red",
     "name": "my fault detector",
-    "values": {"step_size": 1},
+    "values": {"step_size": 1, "window_size": 64, "metric": "l2",
+               "events": ["normal", "pump_breakdown"], "background": "normal",
+               "timestamp_column": "timestamp", "data_columns": ["sensor_02", "...", "sensor_42"]},
+    "models": {"classification_head": "red-classifier"},
     "artifacts": {"red-classifier": "s3://bucket/path/fit-classifier.safetensors"}
   }'
 ```
 
-**The artifact key is `red-classifier`.** That string is the model name the
-`red` blueprint declares (`models.classifier: "red-classifier"`), so it is what
-the `artifacts` map must be keyed by.
+- **`models.classification_head`** — the head's model slot is empty on the current
+  blueprint (an optimization fills it). Pointing it at a key of the bundle's `artifacts`
+  binds your file. Without it, the run is
+  `400 models.classification_head: this blueprint has no model for classification_head yet`.
+- **`window_size`, `metric`, the columns** — what the classifier was fitted with. The
+  current blueprint reads nothing from the classifier's metadata and falls back to window
+  1,024 and `l1`, which would silently change every prediction. `events` and
+  `background` are required.
+- Verified on dev 2026-10-13: the Quick Start's own classifier, through this body on the
+  current blueprint, gives an output **byte-identical** to the Quick Start bundle's on the
+  sample slice (`references/red-output.csv`).
 
-> ⚠️ Until **2026-07-28** this key was `rad-classifier`, a typo since fixed. The
-> old key still returns **HTTP 201 `status: ready`** at bundle creation and only
-> fails ~30 s into the run with `repeated failures polling JOS job` — with no
-> mention of the artifact. Bundles created before the fix must be recreated.
-
-`step_size` is normally the only value worth setting. Everything else —
-`window_size`, `data_columns`, `timestamp_column`, `encoder_model` — is
-inherited from the classifier's own `parameters` metadata via
-`${models.classifier.parameters.window_size:1024}`, which is why the payload is
-so small. Omit `step_size` and you inherit the stride the classifier was fit
-with.
+On the July blueprint version (the Quick Start bundles' own), `"artifacts":
+{"red-classifier": …}` and `step_size` were enough: window, columns and encoder came from
+the classifier's `parameters` metadata. The artifact key was `rad-classifier` until a
+typo fix on 2026-07-28; the old key still returns HTTP 201 at bundle creation and fails
+~30 s into the run with `repeated failures polling JOS job`.
 
 ## Scoring: window-level accuracy is misleading here
 
@@ -294,10 +323,15 @@ three views in action: accuracy **0.9883**, `pump_breakdown` precision 0.8602
 **DETECTED 21 samples after onset** — one run, three different-looking
 numbers, each answering a different operational question.
 
-Why all three: a slice can score **0.9941 accuracy while missing its incident
+Why all three: a slice can score **0.9947 accuracy while missing its incident
 entirely**. With 42 fault rows against 8,192 normal ones, predicting `normal`
 everywhere is 99.4% correct and 100% useless. Nothing in the window-level table
 catches that.
+
+**The platform's own score labels windows differently.** Optimize and Evals score each
+row once: a window answers only for the rows since the previous window ended, so at step
+1 its label is its last row's. Path 2's scripts report both; on the pump the two event F1s
+differ by about 0.005.
 
 Two structural facts follow from majority labelling:
 
@@ -329,6 +363,10 @@ Two structural facts follow from majority labelling:
   outages.
 - **Output timestamps are floats.** The platform emits `1530962520.0` where the
   input carried integer seconds — join on the numeric value, not the string.
+- **Canonical blueprints are versioned, and a bundle keeps its version.** A re-seed makes
+  a new active version (`red`: 2026-10-12) and leaves the old one inactive; bundles created
+  before it keep running on the old one, and `"blueprint": "red"` in a new request means
+  the active one.
 - **Runs are reproducible.** The same input through the same-named bundle
   produces a **byte-identical output** run to run and across deployments
   (`cmp`-verified on both the 381 KB base output and the 740 MB embeddings
@@ -354,7 +392,7 @@ Two structural facts follow from majority labelling:
 - **Cancel with `POST /agents/instances/{id}/cancel`.** Killing a local client
   does not stop the job — `DELETE` returns 409 while running.
 
-## Local Setup
+## Local Setup (Path 1)
 
 ```bash
 cd skills/atai-rare-event-detection-agent/references
@@ -394,11 +432,232 @@ calls and reports a bodyless `ApiError: {}`. The model skills in this repo ship
   ground-truth sidecar for running and scoring. See its README for full data
   attribution.
 
-The full seven-stage build behind the pre-packaged classifier (raw CSV →
-preflight → prep → grid search → fit → run → evaluate, including the
-channel-leakage audits this data requires) is Archetype AI-internal — for a
-detector fitted and packaged for your own data, contact
-support@archetypeai.dev.
+For a classifier fitted on your own data, take Path 2 below; the
+[pump quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
+runs the whole build, including the channel-leakage audits this data requires.
+
+---
+
+# Path 2 — Build a RED agent on your own data
+
+> **Status: verified end to end on dev (2026-10-13)**, where the `red` blueprint became
+> optimizable on 2026-10-12; check another deployment before relying on it there. Built
+> on the Kaggle pump:
+> [rare-event-detection-agent-example-pump-quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
+> (the whole lifecycle in about 10 minutes, reproduced byte for byte by a second run from
+> scratch). The scripts use a small stdlib HTTP helper
+> ([`atai_http.py`](references/red_lifecycle/atai_http.py), shared with the OSM and AD
+> skills' Path 2) because the official client doesn't cover these APIs yet.
+
+```
+role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
+  (prep skill)   prototypes from   best trial    one-shot, with           a prediction per row        incidents caught,
+                 training, scored  → blueprint   predictions checked                                  delay, false alarms
+                 on validation
+```
+
+Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
+
+## Step 0 — Role files
+
+Path 2 starts from **role files**, built and checked by
+[`atai-rare-event-detection-agent-data-prep`](../atai-rare-event-detection-agent-data-prep/SKILL.md)
+to its contract, [`role-files.md`](../atai-rare-event-detection-agent-data-prep/references/role-files.md):
+
+| role | what | used in |
+|---|---|---|
+| `training/` | normal operation, and one file per training incident: each one class, no label column | every trial: one prototype per class |
+| `validation/` | one file per incident with normal context, `label` column | scoring each trial |
+| `test/` | the same, later incidents | scored **once**, after promotion |
+| `delivery/` + `labels/` | test incidents again, or new operation after them, **without** `label`; labels held back | the deployed run, scored afterwards |
+
+plus `manifest.json` (classes, channels, z-score statistics, every file). Build the prep
+skill's sample (the pump's first four breakdowns) in about 2 s:
+
+```sh
+cd skills/atai-rare-event-detection-agent-data-prep/references
+pip install -r requirements.txt
+python prepare.py --input sample_data/pump_sample.parquet --label-col machine_status \
+    --classes normal=NORMAL pump_breakdown=BROKEN,RECOVERING --out prepared
+python check_events.py --prepared prepared --training 1,2 --validation 3 --test 4
+python build_roles.py --prepared prepared --out roles --training 1,2 --validation 3 --test 4 --delivery 4
+python preflight_roles.py --roles roles          # all checks pass
+```
+
+## Step 1 — Optimize: prototypes from training, scored on validation
+
+```sh
+cd skills/atai-rare-event-detection-agent/references/red_lifecycle
+pip install -r requirements.txt
+# ATAI_API_KEY + ATAI_API_ENDPOINT: the nearest .env from here upwards is used
+R=../../../atai-rare-event-detection-agent-data-prep/references/roles
+python optimize.py --roles $R --dry-run                                     # the plan: no uploads, no jobs
+python optimize.py --roles $R --out out --name red-sample --background      # tail -f out/optimize.log
+```
+
+`POST /agents/optimizations` with the `red` blueprint's id, each training file as a
+training example labelled by its class (`{"from": {"constant": "pump_breakdown"}}`), the
+validation files as validation examples (`{"from": {"column": "label"}}`),
+`"primary": "event.foreground_macro_f1"`, a `budget.max_trials`, `overrides.values` with
+the columns, `events` (`["normal", "pump_breakdown"]`), `background` (`"normal"`) and
+every single-valued option, and a search space:
+
+```json
+{"parameters": {"metric": {"kind": "value", "spec": {"type": "categorical", "values": ["cosine", "l1", "l2", "dot"]}}}}
+```
+
+with `window_size` 64 and `step_size` 1 pinned.
+
+- **`metric` is the classifier's only fit setting** (the distance to the prototypes; the
+  blueprint defaults to `l1`). There is no `k` and no threshold: one prototype per class,
+  the mean of its training windows.
+- **Pin the window and step.** The blueprint's defaults are 1,024 and 256. Choose the
+  window so the shortest event you must catch fills at least half of it (the prep skill's
+  `check_events.py` shows which incidents can, per window).
+- **`events` and `background` are required,** and every training class must be in `events`.
+- **Search more:** `--windows 16 32 64` (a list) or `--windows 16:84` (a range),
+  `--steps`, `--metrics`. Trials that share window and step share one encoder pass, so
+  metrics are nearly free and each window costs a pass. A grid of up to 12 points runs in
+  full; a bigger one or a range gets a 12-trial random search (`--max-trials` to change).
+  On the pump, a 24-trial random search over windows 16–84 took six times as long as the
+  12-point grid and did not beat it.
+
+**Expect, on the sample** (4 trials, 2.5 min on dev):
+
+```
+otr_…  completed {"metric": "dot"}     event F1 0.8677  macro-F1 0.9215  recall 0.924  precision 0.818  windows 8,925
+otr_…  completed {"metric": "cosine"}  event F1 0.8653  macro-F1 0.9201  recall 0.925  precision 0.813  windows 8,925
+otr_…  completed {"metric": "l2"}      event F1 0.8625  macro-F1 0.9184  recall 0.925  precision 0.808  windows 8,925
+otr_…  completed {"metric": "l1"}      event F1 0.8539  macro-F1 0.9131  recall 0.924  precision 0.794  windows 8,925
+```
+
+`dot` wins on validation (breakdown #3), as on the full pump data; `l1`, the blueprint's
+default, is last.
+
+## Step 2 — Promote, then test once
+
+```sh
+python promote_and_test.py --roles $R --out out --name red-sample
+```
+
+1. **Promote** the best trial across `optimize.py`'s runs (a tie goes to the optimization
+   that tried more points; `--trial otr_…` picks one): the blueprint pins the trial's
+   values, `events` and `background`, and carries the prototypes as a registry artifact
+   (`aar_…`).
+2. **Test once** with the Evals API on every test file, with predictions. An eval takes no
+   value overrides: it runs at the trial's window and step.
+3. **Check** every prediction's gold label against the file's `label` column (the
+   platform's rule: each row scored once, so at step 1 a window's last row) and the
+   offline confusion matrix against the platform's, then score each incident as the
+   design does: each window by the majority of its rows, detected or missed, how soon,
+   and false alarms on windows with no event row.
+
+**Expect, on the sample** (2 min on dev):
+
+```
+test, 1 files (window 64, step 1, dot; 0 abstained)
+  platform (each row once): event F1 0.9493  macro-F1 0.9726  recall 0.9736  precision 0.9262
+  design rule (each window by majority): event F1 0.9727  precision 0.9498  recall 0.9967
+  false alarms 10 / 7,550 windows with no event row (0.13%)
+    inc04.csv      pump_breakdown    606 rows  +16 rows     false alarms   10 / 7,550
+```
+
+Breakdown #4, never seen, caught 16 minutes after onset, from two labelled breakdowns.
+
+Once you have seen the test number, the setting is frozen: tuning it further would make
+the test number optimistic.
+
+## Step 3 — Deliver
+
+```sh
+python deliver.py --roles $R --out out --name red-sample
+```
+
+A bundle on the promoted blueprint adding only `step_size: 1` (one prediction per row;
+the prototypes, window, metric, `events` and `background` come with the blueprint), then
+one agent run per delivery file, `--parallel 3` at a time. Each output is downloaded again
+until its last window reaches the input's end (a run can report `completed` while its
+output is still being written).
+
+## Step 4 — Score the delivery
+
+```sh
+python score.py --roles $R --out out
+```
+
+Offline, against `labels/`: per file, event precision and recall (each window by the
+majority of its rows), each incident detected or missed and the delay in rows, false
+alarms on windows with no event row (and, on a tail file of new operation, per day); then
+pooled. **Expect, on the sample** (1 min of agent run on dev):
+
+```
+delivery/inc04.csv: 2,591 windows scored (0 invalid)
+  event  precision 0.9498  recall 0.9967  F1 0.9727   tp 605 fp 32 fn 2 tn 1952
+  false alarms 10 / 1,922 = 0.0052
+  pump_breakdown incident, 606 rows: detected, +16 rows after onset
+```
+
+The agent run and the eval agree: the same detection minute and the same 10 false
+alarms, all within 1,024 rows of the breakdown.
+
+## Path 2 pitfalls
+
+- **A window of 1,024.** The `red` blueprint's default; an incident shorter than half a
+  window is all but undetectable, and a 945-row training incident yields no window. Pin it.
+- **The platform's F1 and the design rule's F1 differ:** each row once (at step 1, a
+  window's last row) against each window by the majority of its rows. Report which.
+- **The agent recognises the event's state.** On the pump, `RECOVERING` rows make up the
+  class: it detects "the pump is down", not the failure. Choose the label mapping in prep
+  for what an operator needs.
+- **Short incidents get missed with no false alarm to show for it:** on the pump, a
+  42-minute breakdown at window 64 was missed by every configuration tried. Score incidents,
+  not just windows.
+- **Don't trust `completed` for the output, or `failed` for the run**: `deliver.py`
+  downloads until the output reaches the input's end, and a run reported failed can still
+  have one.
+- **A key exported in your shell beats `.env`**; keys are per deployment. The helper checks
+  the key with one GET first and says where it came from (showing only its last 4
+  characters).
+
+## Cleanup (both paths)
+
+The pre-packaged Quick Start bundles are canonical and shared — **do not delete them**.
+Delete your own agent instances, and any bundle you created:
+
+| object | delete | notes |
+|---|---|---|
+| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel`) |
+| your bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete the instances first |
+| promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
+| optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
+
+## File Layout
+
+```
+skills/atai-rare-event-detection-agent/
+├── SKILL.md                  ← this file
+├── references/
+│   ├── run_red_agent.py      ← Path 1: the managed flow on the official client (upload → resolve → run → poll → download → score)
+│   ├── requirements.txt      ← Path 1: archetypeai
+│   ├── .env.example          ← copy to .env and fill in (both paths)
+│   ├── red-output.csv        ← Path 1: the Quick Start bundle's output on the sample slice
+│   ├── sample_data/          ← Path 1: a prepared, held-out pump slice, its labels sidecar, attribution
+│   ├── platform-notes.md     ← Path 2: measured platform behaviour
+│   └── red_lifecycle/        ← Path 2 (stdlib HTTP until the client covers these APIs)
+│       ├── atai_http.py        requests with retries, uploads with a content-keyed cache, paging, polling
+│       ├── common.py           the role-file manifest, examples, pinned values
+│       ├── background.py       --background: nohup (+ caffeinate on macOS), output to a log
+│       ├── optimize.py         Step 1: search space → Optimizations API → trials
+│       ├── promote_and_test.py Step 2: best trial → blueprint → one eval, predictions checked
+│       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
+│       ├── score.py            Step 4: incidents, delay, false alarms (and the shared scorer)
+│       └── requirements.txt    numpy, pandas
+└── tests/
+    ├── test_references.py    ← Path 1: network-free unit tests
+    └── test_lifecycle.py     ← Path 2: network-free unit tests
+```
+
+Run both: `python -m pytest skills/atai-rare-event-detection-agent/tests`.
 
 ## Data attribution
 
