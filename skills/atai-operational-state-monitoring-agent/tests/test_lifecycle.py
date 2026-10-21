@@ -14,6 +14,11 @@ network. They lock in the invariants verified on the dev deployment (2026-09-30)
     matched to delivery files by time range.
   * Uploads retry through a DNS failure; POSTs never retry once delivered.
   * The endpoint loses any /vX.Y suffix before /agents.
+  * Serving (dev, 2026-10-16): the served copy swaps only the connectors, a query holds
+    one list per channel, consecutive windows group up to --windows-per-query, and
+    batch windows map back to their delivery rows.
+  * Cleanup deletes every agent before its bundle, from every script's state file.
+  * The library view's discriminant axes find states that differ along weak directions.
 
 Run:
     python -m unittest discover -s skills/atai-operational-state-monitoring-agent/tests
@@ -35,6 +40,7 @@ LIFE = Path(__file__).resolve().parent.parent / "references" / "osm_lifecycle"
 sys.path.insert(0, str(LIFE))
 
 import atai_http  # noqa: E402
+import cleanup  # noqa: E402
 import deliver  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
@@ -44,6 +50,12 @@ try:
     import score  # noqa: E402
 except ImportError:          # score.py needs pandas / numpy (osm_lifecycle/requirements.txt)
     pd = score = None
+try:
+    import numpy as np  # noqa: E402
+    import library_embeddings  # noqa: E402
+    import serve  # noqa: E402
+except ImportError:
+    np = library_embeddings = serve = None
 
 
 def trial(tid, value, status="completed", w=512, st=512, k=5, metric="cosine", weights="uniform"):
@@ -182,6 +194,70 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(r["f1"]["wash"], 1.0)
         self.assertEqual(r["f1"]["drain"], 0.0)
         self.assertEqual(r["macro_f1"], 0.5)          # two perfect states of four
+
+
+@unittest.skipIf(serve is None or pd is None, "pandas / numpy not installed")
+class TestServing(unittest.TestCase):
+    def test_served_document_swaps_only_the_connectors(self):
+        src = {"name": "m", "document": {"blueprint_id": "blp_1", "values": {"window_size": 512, "step_size": 512},
+                                         "connectors": {"source": {"key": "CsvSource"}}}}
+        doc = serve.served_document(src, ["a", "b"])
+        self.assertNotIn("blueprint_id", doc)
+        self.assertEqual(doc["values"], src["document"]["values"])
+        cfg = doc["connectors"]["source"]["config"]
+        self.assertEqual((cfg["protocols"], cfg["models"], cfg["data_columns"][0]["names"]),
+                         (["atai-records"], ["osm"], ["a", "b"]))
+        self.assertEqual(doc["connectors"]["sink"]["config"]["format"], "serving")
+        self.assertEqual(src["document"]["connectors"]["source"], {"key": "CsvSource"})   # not mutated
+
+    def test_query_holds_one_list_per_channel(self):
+        body = serve.query_body(np.arange(6, dtype=np.float32).reshape(3, 2))
+        self.assertEqual(body["events"][0]["event_data"]["contents"], [[0, 2, 4], [1, 3, 5]])
+
+    def test_chunks_group_consecutive_windows_only(self):
+        firsts = np.array([0, 4, 8, 16, 20])           # window 4; the window at 12 was invalid
+        self.assertEqual(serve.chunks(firsts, 4, 8), [(0, 3), (3, 2)])
+        self.assertEqual(serve.chunks(firsts, 4, 2), [(0, 2), (2, 1), (3, 2)])
+
+    def test_windows_map_back_to_rows(self):
+        ts = np.arange(10, dtype=np.int64) * 5 + 1000          # 200 Hz, ms
+        batch = pd.DataFrame({"start_timestamp": ["1.000", "1.020"], "finish_timestamp": ["1.015", "1.035"]})
+        self.assertEqual(list(serve.windows_of(batch, ts, 4)), [0, 4])
+
+
+class TestCleanup(unittest.TestCase):
+    def test_agents_before_their_bundle_from_every_state_file(self):
+        found = {"app": {"bundle": "bA", "agents": ["a1", "a2"]},
+                 "library": {"bundle": "bL", "runs": {"fill": "l1"}},
+                 "serving": {"bundle": "bS", "agent": "s1"},
+                 "delivery": {"bundle": "bD", "runs": [{"agent": "d1"}]}}
+        out = cleanup.targets(found, lambda b: {"d0"} if b == "bD" else set())
+        ids = [t[2] for t in out]
+        self.assertEqual(ids, ["a1", "a2", "bA", "l1", "bL", "s1", "bS", "d0", "d1", "bD"])
+        self.assertEqual({t[1] for t in out if t[2].startswith("b")}, {"bundles"})
+
+    def test_nothing_without_a_bundle(self):
+        self.assertEqual(cleanup.targets({"serving": {}, "delivery": {"runs": []}}, lambda b: set()), [])
+
+
+@unittest.skipIf(library_embeddings is None, "numpy not installed")
+class TestLibraryView(unittest.TestCase):
+    def test_discriminant_axes_find_weak_state_directions(self):
+        # 4 states apart along two weak directions, buried under two strong shared ones
+        rng = np.random.default_rng(0)
+        n, dim = 200, 60
+        codes = np.repeat(np.arange(4), n)
+        X = rng.normal(0, 0.05, (4 * n, dim)) + 5 * np.eye(dim)[0]
+        X[:, 1:3] += rng.normal(0, 3, (4 * n, 2))
+        X[:, 3] += 0.4 * (codes % 2)
+        X[:, 4] += 0.4 * (codes // 2)
+        mean, rows, ref, separated = library_embeddings.project(X, codes, k=20)
+        self.assertEqual((mean.shape, rows.shape, ref.shape), ((dim,), (2, dim), (4 * n, 2)))
+        self.assertGreater(separated, 0.95)
+        np.testing.assert_allclose(ref.std(axis=0), 1, rtol=1e-6)
+        # a window projects to its own point: ((x / |x|) - mean) . row
+        x = X[7] / np.linalg.norm(X[7])
+        np.testing.assert_allclose((x - mean) @ rows.T, ref[7], atol=1e-9)
 
 
 class TestHttp(unittest.TestCase):
