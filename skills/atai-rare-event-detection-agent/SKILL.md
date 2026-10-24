@@ -11,7 +11,7 @@ description: >
   and distance with the Optimizations API, promote the best trial to a blueprint,
   test it once with the Evals API, deliver it as a bundle, score each incident
   (detected, how soon) and the false alarms, then serve it a window at a time
-  over `/query` (agent serving, Dev only) and check it against the delivery. Use when the user wants server-side
+  over `/query` (agent serving, Dev and Staging only) and check it against the delivery. Use when the user wants server-side
   detection of a *named* rare event recurring — equipment breakdowns, process
   excursions — from a handful of labelled examples. Covers the output schema,
   the Embeddings variant, what the `red` blueprint exposes since its 2026-10-12
@@ -88,10 +88,10 @@ output is one CSV of per-window predictions.
 |---|---|---|
 | you have | a prepared CSV (the pump sample, or data like it) | a labelled recording of **your** asset with a few incidents of a named event |
 | you get | per-window predictions from a classifier fitted on **two pump breakdowns** | your own blueprint and bundle: prototypes fitted on your incidents, window and distance chosen on the next ones, a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), on the official `archetypeai` client | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1.5 min on a clear queue | ~6 min on the sample; longer with load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (RED became optimizable there on 2026-10-12); serving, 2026-10-16 |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (RED became optimizable there on 2026-10-12); serving, 2026-10-16; all of it on Staging 2026-10-23; not yet on production |
 
 The Quick Start classifier holds one pump's two breakdowns, so running your own asset
 through it is a transfer test, not a deployment: for your own asset, take Path 2. Path
@@ -442,7 +442,8 @@ runs the whole build, including the channel-leakage audits this data requires.
 # Path 2 — Build a RED agent on your own data
 
 > **Status: verified end to end on dev (2026-10-13)**, where the `red` blueprint became
-> optimizable on 2026-10-12; check another deployment before relying on it there. Built
+> optimizable on 2026-10-12, and on Staging (2026-10-23). Production's `red` blueprint is
+> not optimizable yet (it carries no `metrics`); check a deployment before relying on it there. Built
 > on the Kaggle pump:
 > [rare-event-detection-agent-example-pump-quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
 > (the whole lifecycle in about 10 minutes, reproduced byte for byte by a second run from
@@ -616,7 +617,7 @@ delivery/inc04.csv: 2,591 windows scored (0 invalid)
 The agent run and the eval agree: the same detection minute and the same 10 false
 alarms, all within 1,024 rows of the breakdown.
 
-## Step 5 — Serve it (Dev only)
+## Step 5 — Serve it (Dev and Staging only)
 
 ```sh
 python serve.py --roles $R --out out                          # the windows within 120 rows of each incident (~8 min)
@@ -626,22 +627,16 @@ python serve.py --roles $R --out out --windows-per-query 16   # 16 consecutive w
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a pump's historian would ask
-every minute about the latest `window_size` readings. It is on Dev only for first tests,
-with 3 serving workers shared by everyone.
+every minute about the latest `window_size` readings. It is on Dev and Staging only for
+first tests, with a few serving workers shared by everyone.
 
-1. **A served copy of the promoted blueprint**, made once (`<key>-served-records`): the same
-   document (prototypes, encoder, values) at `step_size` 1, with the CSV source and sink
-   swapped for an `atai-records` serving endpoint:
-
-   ```json
-   {"source": {"key": "RecordsSource", "config": {"format": "serving", "kind": "http",
-      "protocols": ["atai-records"], "models": ["red"], "timestamp_column": "timestamp",
-      "data_columns": [{"dtype": "f32", "names": ["sensor_02", "…"]}]}},
-    "sink": {"key": "RecordsSink", "config": {"format": "serving", "kind": "http", "protocols": ["atai-records"]}}}
-   ```
-
-   `POST /agents/blueprints` with `blueprint_key`, `name` and `document`.
-2. **A bundle of it, run in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
+1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
+   a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
+   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
+   supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
+   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
+   admin role on Staging.)
+2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per row:** `POST /agents/instances/{agt}/query` with the latest `window_size`
    rows, a list per channel:
@@ -724,7 +719,7 @@ Delete your own agent instances, and any bundle you created:
 |---|---|---|
 | agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel` with `{}`); a running serving agent holds a shared worker |
 | your delivery and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete its agents first: a bundle that still has any, even a cancelled one, answers **409** |
-| promoted blueprints and their served copies (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
+| promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
 | optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
 
 For Path 2, `cleanup.py` does it from the ids in `out/`: dry run by default, `--yes` to
@@ -768,7 +763,7 @@ skills/atai-rare-event-detection-agent/
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval, predictions checked
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: incidents, delay, false alarms (and the shared scorer)
-│       ├── serve.py            Step 5: served blueprint → serving agent → a query per row, against step 3
+│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per row, against step 3
 │       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
 │       └── requirements.txt    numpy, pandas
 └── tests/

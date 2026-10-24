@@ -91,15 +91,18 @@ on it there.
   32.5% and 4.0% of the variance and the class means sit where a local encoder's
   prototypes do (to within 0.1 on PC 1).
 
-## Agent serving (Dev only, 2026-10-15 and 16)
+## Agent serving (Dev 2026-10-15 and 16; Staging 2026-10-23)
 
 - **Dev has 3 serving workers, shared by everyone.** A running serving agent holds one until
   it is cancelled, or released after 20 minutes without a query; a query to a released agent
   answers 409.
-- **A served blueprint is a copy with other connectors.** The promoted blueprint reads and
-  writes CSV; its served copy swaps both for an `atai-records` serving endpoint (source with
-  `models`, `data_columns`, `timestamp_column`) and keeps the prototypes, encoder and values.
-  Like the promoted blueprint, a regular key can't delete it.
+- **The promoted blueprint is served as it is.** It reads and writes CSV; run in serving mode,
+  the platform supplies an `atai-records` serving source and sink in their place (atai_core
+  #7286), so a bundle of it with `step_size` 1 is all serving needs. Earlier versions of
+  serve.py made a `<key>-served-records` copy with those connectors; creating a blueprint now
+  takes the admin role on Staging, and a copy made before the connector change is refused.
+- **Staging (2026-10-23):** the pump examples' replays matched batch on every window (316 /
+  316 in the quickstart, 1,162 / 1,162 in the full example) at ~0.95 s median per query.
 - **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
   the rows 0, 1, 2… itself and answers with row indices for `start_timestamp` and
   `finish_timestamp`.

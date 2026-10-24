@@ -148,21 +148,6 @@ class TestEndpoints(unittest.TestCase):
 
 
 class Serving(unittest.TestCase):
-    SRC = {"name": "red-sample", "document": {
-        "blueprint_id": "blp_x", "values": {"window_size": 64, "step_size": 1, "metric": "dot"},
-        "connectors": {"source": {"key": "CsvSource"}, "sink": {"key": "CsvSink"}}}}
-
-    def test_served_document(self):
-        doc = serve.served_document(self.SRC, ["a", "b"], "timestamp")
-        self.assertNotIn("blueprint_id", doc)
-        self.assertEqual(doc["values"], {"window_size": 64, "step_size": 1, "metric": "dot"})
-        src = doc["connectors"]["source"]
-        self.assertEqual(src["key"], "RecordsSource")
-        self.assertEqual(src["config"]["protocols"], ["atai-records"])
-        self.assertEqual(src["config"]["data_columns"], [{"dtype": "f32", "names": ["a", "b"]}])
-        self.assertEqual(doc["connectors"]["sink"]["key"], "RecordsSink")
-        self.assertEqual(self.SRC["document"]["connectors"]["source"]["key"], "CsvSource")   # a copy
-
     def test_query_body_is_a_list_per_channel(self):
         chunk = np.arange(12, dtype=float).reshape(6, 2)                  # 6 rows, 2 channels
         contents = serve.query_body(chunk)["events"][0]["event_data"]["contents"]
