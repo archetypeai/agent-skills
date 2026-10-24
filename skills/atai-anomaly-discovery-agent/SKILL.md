@@ -81,16 +81,19 @@ inputs abort and why only one feature mode is reachable.
 ## Endpoints
 
 ```
-Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
-            GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
-Agents API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Files API   POST {ATAI_API_ENDPOINT}/api/files                  (multipart upload)
+            GET  {ATAI_API_ENDPOINT}/api/files/download/{name}  (download)
+Agents API       {ATAI_API_ENDPOINT}/api/agents/...
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agents API is **versionless** — `/agents`, not `/v0.5/agents`. If
-`ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending
-`/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
-default endpoint.
+Every surface lives under one versionless **`/api`** prefix. Set
+`ATAI_API_ENDPOINT` to the deployment root (`https://platform.u1.archetypeai.app`);
+if it carries an `/api` or `/vX.Y` suffix, strip it before appending `/api`. The
+old mounts (`/agents`, `/v0.5/files`) return 404 on that host. Paths below are
+written relative to the prefix: `/agents/bundles` means
+`{ATAI_API_ENDPOINT}/api/agents/bundles`. Both `ATAI_API_KEY` and
+`ATAI_API_ENDPOINT` are required; there is no default endpoint.
 
 > **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
 > `GET /agents/bundles`, `GET /agents/bundles/{id}`, `POST /agents/bundles`,
@@ -122,7 +125,7 @@ default endpoint.
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
   -F "file=@bearing_eval.csv;type=text/csv" \
-  "$ATAI_API_ENDPOINT/v0.5/files"
+  "$ATAI_API_ENDPOINT/api/files"
 ```
 
 The response carries a `file_id`, which the platform sets to the **filename**.
@@ -151,7 +154,7 @@ needs (`validate_monotonic_timestamps: false`,
 
 ```sh
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/bundles?query=AD%20Quick%20Start&limit=100"
+  "$ATAI_API_ENDPOINT/api/agents/bundles?query=AD%20Quick%20Start&limit=100"
 ```
 
 `?query=` is a case-insensitive **substring** search over name *and* id
@@ -167,7 +170,7 @@ paren returns **1**. Taking `data[0]` on a prefix runs the Embeddings bundle.
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
   -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID/run" -d '{
+  "$ATAI_API_ENDPOINT/api/agents/bundles/$BUNDLE_ID/run" -d '{
     "connectors": {"source": [{"type": "file", "id": "bearing_eval.csv"}]}
   }'
 ```
@@ -180,9 +183,9 @@ input of the same asset; the detector does not change between files.
 
 ```sh
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"
+  "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID"
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/logs"
+  "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID/logs"
 ```
 
 > **⚠️ `status` is not a reliable terminal signal — `/logs` is.** Pods have
@@ -195,7 +198,7 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" \
 
 ```sh
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
+  "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID/results"
 ```
 
 **A `completed` run can still be writing its output** (a known platform issue): a download
@@ -292,7 +295,7 @@ the canonical `ad` blueprint, then run it as in step 3:
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
   -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
+  "$ATAI_API_ENDPOINT/api/agents/bundles" -d '{
     "blueprint": "ad",
     "name": "AD bearing outer race",
     "values": {"threshold": 1.762,
@@ -452,7 +455,7 @@ pip install -r requirements.txt
 
 # Create the .env IN THIS DIRECTORY — the runner reads ./.env from where it
 # runs (the file is gitignored). BOTH variables required, no default endpoint;
-# note: NO /v0.5 suffix — the runner mounts /agents and /v0.5/files itself:
+# the bare deployment root; the runner appends /api itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
 ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
