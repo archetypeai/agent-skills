@@ -211,18 +211,6 @@ class TestScoring(unittest.TestCase):
 
 @unittest.skipIf(serve is None or pd is None, "pandas / numpy not installed")
 class TestServing(unittest.TestCase):
-    def test_served_document_swaps_only_the_connectors(self):
-        src = {"name": "m", "document": {"blueprint_id": "blp_1", "values": {"window_size": 512, "step_size": 512},
-                                         "connectors": {"source": {"key": "CsvSource"}}}}
-        doc = serve.served_document(src, ["a", "b"])
-        self.assertNotIn("blueprint_id", doc)
-        self.assertEqual(doc["values"], src["document"]["values"])
-        cfg = doc["connectors"]["source"]["config"]
-        self.assertEqual((cfg["protocols"], cfg["models"], cfg["data_columns"][0]["names"]),
-                         (["atai-records"], ["osm"], ["a", "b"]))
-        self.assertEqual(doc["connectors"]["sink"]["config"]["format"], "serving")
-        self.assertEqual(src["document"]["connectors"]["source"], {"key": "CsvSource"})   # not mutated
-
     def test_query_holds_one_list_per_channel(self):
         body = serve.query_body(np.arange(6, dtype=np.float32).reshape(3, 2))
         self.assertEqual(body["events"][0]["event_data"]["contents"], [[0, 2, 4], [1, 3, 5]])

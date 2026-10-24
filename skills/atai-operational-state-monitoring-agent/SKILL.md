@@ -10,7 +10,7 @@ description: >
   (library / validation / test / delivery) fit and score settings with the
   Optimizations API, promote the best trial to a blueprint, test it once with the
   Evals API, then deliver it as a bundle over new recordings and score the delivery,
-  serve it a window per query over `/query` (agent serving, Dev only) checked against
+  serve it a window per query over `/query` (agent serving, Dev and Staging only) checked against
   the delivery, and draw the library's embeddings for a live app.
   Covers the search space, promote, Evals, batch runs, the output CSV schema
   (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
@@ -41,7 +41,7 @@ either.
 |---|---|---|
 | you have | a prepared CSV (the Volve sample, or data like it) | labelled recordings of **your** machine |
 | you get | per-window predictions from Archetype AI's six-state Volve classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1–2 min on a clear queue | minutes to hours, with the dataset's size and the platform's load |
 | status | verified on production | **verified on production, staging (2026-10-01) and dev (2026-09-30), identical results** |
@@ -257,8 +257,8 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
-> Steps 5–6 (agent serving and the library view) are on Dev only, built and checked on both
-> LARCO examples (2026-10-16 to 10-18).
+> Steps 5–6 (agent serving and the library view) are on Dev and Staging only, built and
+> checked on both LARCO examples (Dev 2026-10-16 to 10-18; Staging 2026-10-24).
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -446,7 +446,7 @@ next to the test: macro-F1 0.8463
 The second machine scores lower than the test, as in the LARCO examples (quickstart: delivery
 0.7707 against test 0.8617 over 5 and 3 cycles).
 
-## Step 5 — Serve it (Dev only)
+## Step 5 — Serve it (Dev and Staging only)
 
 ```sh
 python serve.py --roles $R --out out                          # every delivery file, one window a query
@@ -455,22 +455,23 @@ python serve.py --roles $R --out out --files seg0 --max-windows 50 --windows-per
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a machine's controller would
-ask about its latest `window_size` readings. It is on Dev only for first tests, with **3
-serving workers shared by everyone**.
+ask about its latest `window_size` readings. It is on Dev and Staging only for first tests,
+with **a few serving workers shared by everyone**.
 
-1. **A served copy of the promoted blueprint**, made once (`<key>-served-records`): the same
-   document (classifier, encoder, values), with the CSV source and sink swapped for an
-   `atai-records` serving endpoint:
+1. **A bundle of the promoted blueprint, as it is,** with the columns to read:
 
    ```json
-   {"source": {"key": "RecordsSource", "config": {"format": "serving", "kind": "http",
-      "protocols": ["atai-records"], "models": ["osm"], "timestamp_column": "timestamp",
-      "data_columns": [{"dtype": "f32", "names": ["back.x", "…"]}]}},
-    "sink": {"key": "RecordsSink", "config": {"format": "serving", "kind": "http", "protocols": ["atai-records"]}}}
+   {"blueprint": "<key>", "name": "…",
+    "values": {"data_columns": ["back.x", "…"], "timestamp_column": "timestamp"}}
    ```
 
-   `POST /agents/blueprints` with `blueprint_key`, `name` and `document`.
-2. **A bundle of it, run in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
+   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
+   supplies the `atai-records` serving source and sink itself, in place of the CSV ones. The
+   osm blueprint's source takes `data_columns` and `timestamp_column` from values, which batch
+   reads from the CSV header but a served query doesn't carry, so the bundle sets them.
+   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
+   admin role on Staging.)
+2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
 
@@ -559,7 +560,7 @@ What the LARCO apps (`app-serving/` in both examples: a browser, a local MQTT br
 replayer and a bridge) taught, for any app that streams a machine's windows to a serving agent:
 
 - **One bridge holds the key.** The browser never sees `ATAI_API_KEY`: a local process makes
-  the served blueprint and a bundle (with `output_embeddings: true`, to draw each answer),
+  a bundle of the promoted blueprint (with `output_embeddings: true`, to draw each answer),
   runs the serving agent, queries it, and publishes the answers. Read the key from the same
   `.env` the scripts use; ignore any key in the app's own.
 - **Publish the agent's phase on a retained topic,** with a broker will (last-will message)
@@ -631,7 +632,7 @@ with a regular user key):
 |---|---|---|
 | agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` → 204 | one per delivery or library run, one per serving session; a running serving agent holds a shared worker |
 | your delivery, library and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` → 204 | delete its agents first: a bundle that still has one answers **409**, even when they're cancelled |
-| promoted blueprints and their served copies (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
+| promoted blueprints (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
 | optimizations (`opt_…`), evals (`evl_…`) | not attempted | records of what was fitted and scored, small; keep them if your docs cite them |
 | uploaded files | — | uploaded once per `--out` folder and reused through its `uploads.json` |
 
@@ -682,7 +683,7 @@ skills/atai-operational-state-monitoring-agent/
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval
 │       ├── deliver.py          Step 3: bundle from the blueprint → runs → outputs matched by time
 │       ├── score.py            Step 4: last-record pairing against the held-back labels
-│       ├── serve.py            Step 5: served blueprint → serving agent → a query per window, against step 3
+│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
 │       ├── library_embeddings.py Step 6: the library's embeddings in batch → a 2-D discriminant view
 │       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6 (and a serving app's), from the ids in out/
 │       └── requirements.txt    numpy, pandas, pyarrow (score.py, serve.py, library_embeddings.py)

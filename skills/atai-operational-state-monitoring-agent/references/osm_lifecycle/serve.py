@@ -6,10 +6,12 @@ Agent serving keeps an agent loaded and answers a window in one round trip, as a
 controller would ask it about its latest `window_size` readings. This replays the delivery
 files that way and checks every answer against deliver.py's batch output for the same window:
 
-  1. the served copy of the promoted blueprint, made once and reused
-     (`<key>-served-records`): the same classifier, encoder and values, with the CSV
-     source and sink swapped for an `atai-records` serving endpoint;
-  2. a bundle of it, run with {"mode": "serving"};
+  1. a bundle of the promoted blueprint, as it is: the platform supplies the serving
+     connectors when it runs a bundle in serving mode, so no served copy of the blueprint
+     is made (creating a blueprint takes the admin role on Staging). The bundle passes
+     `data_columns` and `timestamp_column`, which the osm blueprint's source templates
+     from values and batch reads from the CSV header;
+  2. that bundle run with {"mode": "serving"};
   3. each file replayed a window at a time: every query holds one window's rows of every
      channel, one list per channel (--windows-per-query N sends N consecutive windows).
      A served agent keeps nothing between queries, so a query carries the whole window;
@@ -20,14 +22,13 @@ files that way and checks every answer against deliver.py's batch output for the
      SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
      cleanup.py finds them after a kill -9.
 
-Dev only for now. Needs deliver.py's outputs in <out>/delivery/. Writes
+Dev and Staging only for now. Needs deliver.py's outputs in <out>/delivery/. Writes
 <out>/serving/serve_<N>files[_first<M>]_wpq<W>.csv (a row per window) and .json (the summary).
 
     python serve.py --roles roles --out out
     python serve.py --roles roles --out out --files warm_fast --max-windows 50 --windows-per-query 8
 """
 import argparse
-import copy
 import json
 import os
 import signal
@@ -39,44 +40,12 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, load_dotenv, request, root  # noqa: E402
+from atai_http import agents, check_auth, load_dotenv, request, root, same_deployment  # noqa: E402
 from common import load_manifest, log  # noqa: E402
 from score import scores  # noqa: E402
 
-MODEL = "osm"         # the name a query gives in `model`, for a served copy made here
+MODEL = "osm"         # the name a query gives in `model` (a served agent does not check it)
 MAX_WPQ = 16
-
-
-def served_document(src, channels, timestamp_column="timestamp", model=MODEL):
-    """The promoted blueprint's document with an atai-records serving source and sink."""
-    doc = copy.deepcopy(src["document"])
-    doc.pop("blueprint_id", None)
-    endpoint = {"format": "serving", "kind": "http", "protocols": ["atai-records"]}
-    doc["connectors"] = {
-        "source": {"key": "RecordsSource", "config": {
-            **endpoint, "models": [model],
-            "data_columns": [{"dtype": "f32", "names": channels}], "timestamp_column": timestamp_column}},
-        "sink": {"key": "RecordsSink", "config": dict(endpoint)},
-    }
-    doc["name"] = f"{src['name']} (served, records)"
-    return doc
-
-
-def served_blueprint(promoted, channels):
-    """The served copy's key, created once, and the model name it answers to."""
-    key = f"{promoted}-served-records"
-    try:
-        doc = request("GET", f"{agents()}/blueprints/{key}")["document"]
-        return key, doc["connectors"]["source"]["config"]["models"][0]
-    except RuntimeError as e:
-        if "(404)" not in str(e):
-            raise
-    doc = served_document(request("GET", f"{agents()}/blueprints/{promoted}"), channels)
-    bp = request("POST", f"{agents()}/blueprints", {
-        "blueprint_key": key, "name": doc["name"], "document": doc,
-        "description": f"{promoted} served with atai-records."})
-    log(f"created served blueprint {key} ({bp['id']})")
-    return key, MODEL
 
 
 def query_body(chunk, model=MODEL):
@@ -141,14 +110,19 @@ def main(argv=None):
     args = ap.parse_args(argv)
     load_dotenv()
     check_auth(log)
-    if "api.dev." not in root():
-        sys.exit("agent serving is on dev only for now (https://api.dev.u1.archetypeai.app)")
+    # match the deployment, not one host: dev is api.dev.* and platform.dev.*, staging platform.stage.*
+    if not any(d in root() for d in (".dev.", ".stage.")):
+        sys.exit("agent serving is on dev and staging only for now "
+                 "(e.g. https://platform.dev.u1.archetypeai.app, https://platform.stage.u1.archetypeai.app)")
     manifest = load_manifest(args.roles)
     states = manifest["states"]
     ts_path = os.path.join(args.out, "test_state.json")
     if not os.path.exists(ts_path):
         sys.exit(f"no {ts_path}: run promote_and_test.py first")
-    promoted = json.load(open(ts_path))["blueprint"]["key"]
+    test = json.load(open(ts_path))
+    if not same_deployment(test):
+        sys.exit(f"the blueprint in {ts_path} is on {test['endpoint']}, a different deployment from {root()}")
+    promoted = test["blueprint"]["key"]
     window = request("GET", f"{agents()}/blueprints/{promoted}")["document"]["values"]["window_size"]
     files = manifest["delivery"]["files"]
     if args.files:
@@ -174,12 +148,13 @@ def main(argv=None):
     log(f"{len(plan)} file(s), {sum(len(p[3]) for p in plan):,} windows of {window} rows, {wpq} per query; "
         f"model {promoted}")
 
-    key, model = served_blueprint(promoted, channels)
     sf = os.path.join(args.out, "serve_state.json")
     if os.path.exists(sf):
         sys.exit(f"{sf} exists: an earlier serve.py's agent may still be up; run cleanup.py --yes first")
-    ex = {"endpoint": root(), "agent": None,
-          "bundle": request("POST", f"{agents()}/bundles", {"blueprint": key, "name": f"{args.name} serve"})["id"]}
+    bundle = request("POST", f"{agents()}/bundles", {
+        "blueprint": promoted, "name": f"{args.name} serve",
+        "values": {"data_columns": channels, "timestamp_column": "timestamp"}})
+    ex = {"endpoint": root(), "agent": None, "bundle": bundle["id"]}
     json.dump(ex, open(sf, "w"), indent=1)
     served, latency = {}, []
     t0 = time.time()
@@ -196,7 +171,7 @@ def main(argv=None):
             for k, count in chunks(firsts, window, wpq):
                 t = time.time()
                 answer = request("POST", f"{agents()}/instances/{ex['agent']}/query",
-                                 query_body(X[firsts[k]:firsts[k] + count * window], model))
+                                 query_body(X[firsts[k]:firsts[k] + count * window]))
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:
@@ -226,7 +201,7 @@ def main(argv=None):
     stem = os.path.join(sdir, f"serve_{len(plan)}files{f'_first{args.max_windows}' if args.max_windows else ''}_wpq{wpq}")
     df.to_csv(stem + ".csv", index=False)
     ms = sorted(x * 1000 for x in latency)
-    summary = {"blueprint": promoted, "served_blueprint": key, "files": [p[0] for p in plan], "windows": len(df),
+    summary = {"blueprint": promoted, "files": [p[0] for p in plan], "windows": len(df),
                "windows_per_query": wpq, "queries": len(latency),
                "same_state": int(df.same_state.sum()), "same_p": int(df.same_p.sum()),
                "max_p_diff": float(df.max_p_diff.max()), "invalid": int(df.served_invalid.sum()),

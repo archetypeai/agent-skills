@@ -33,7 +33,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, upload_all  # noqa: E402
+from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
 from common import cache_path, load_manifest, log  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
 
@@ -208,8 +208,9 @@ def main(argv=None):
 
     sp = os.path.join(args.out, "library_state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
-    if state and state.get("endpoint") != root():
-        sys.exit(f"{sp} is from {state.get('endpoint')}: move it aside, or set .env to that deployment")
+    if not same_deployment(state):
+        sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside, or set .env to that deployment")
     save = lambda: json.dump(state, open(sp, "w"), indent=1)  # noqa: E731
 
     def ensure_bundle():

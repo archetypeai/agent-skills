@@ -129,11 +129,18 @@ Why they exist:
   promoted kNN has no download route. Running the library files through the promoted
   blueprint recomputes the fit's reference windows (the same encoder and windows).
 
-## Agent serving (Dev, 2026-10-16 to 10-18)
+## Agent serving (Dev 2026-10-16 to 10-18; Staging 2026-10-24)
 
-- **Dev only, 3 serving workers shared by everyone.** A served copy of the promoted
-  blueprint swaps the CSV source and sink for an `atai-records` endpoint; its bundle runs
-  with `{"mode": "serving"}` and answers `POST /agents/instances/{id}/query`.
+- **Dev and Staging only, a few serving workers shared by everyone.** A bundle of the
+  promoted blueprint runs with `{"mode": "serving"}` and answers
+  `POST /agents/instances/{id}/query`; the platform supplies the `atai-records` serving
+  source and sink in place of the CSV ones (atai_core #7286). The bundle must set
+  `data_columns` and `timestamp_column`, which the osm source templates from values. Earlier
+  versions made a `<key>-served-records` copy; creating a blueprint now takes the admin role
+  on Staging, and a copy made before the connector change is refused.
+- **Staging (2026-10-24):** both LARCO examples served 500 windows (the first 100 of each
+  quickstart cycle) with every state as batch's, ~0.9 s median per query; with k 31 one
+  window's probabilities were a neighbour's vote (1/31) off.
 - **Served answers are batch's, but for a neighbour now and then:** LARCO's 5 quickstart
   cycles (3,178 windows) matched step 3 on every state and probability but 7 windows a
   neighbour's vote off with k 31 (2 changed state at a near-tie), and on all 3,178 with k 5.
