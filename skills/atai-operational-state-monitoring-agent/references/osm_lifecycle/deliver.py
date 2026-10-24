@@ -30,9 +30,12 @@ from atai_http import TERMINAL, agents, check_auth, files_url, list_all, load_do
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, load_manifest, log, stamp  # noqa: E402
 
-# The platform can report a run completed while its last output file is still being
-# written (a known issue), so a run counts as completed here only once every file's
-# predictions reach that file's end.
+# The platform reports a run completed while an output is still being written. Each
+# output carries its own status at data.file_attributes.job_output.status (`partial`
+# -> `complete`), which is what the console renders; that is the primary gate. The
+# timestamp check stays as a second opinion: a run counts as completed here only once
+# every file's predictions reach that file's end, which also catches an output that is
+# complete but does not cover its input.
 END_SLACK_MS = 60_000          # a file's last prediction lands within a window of its end
 OUTPUT_WAIT_S = 600            # how long to wait for outputs after the platform says completed
 
@@ -101,11 +104,23 @@ def start(args, manifest, state_path, test_state):
     return state
 
 
+def artifact_status(item):
+    """An output's own completion status, or None if the platform does not report one."""
+    return (item.get("data", {}).get("file_attributes", {})
+                .get("job_output", {}).get("status"))
+
+
 def download(runs, ranges):
-    """The runs' output rows, matched to delivery files: ({file: [rows]}, header, unmatched)."""
+    """The runs' output rows, matched to delivery files: ({file: [rows]}, header, unmatched).
+
+    Outputs the platform has not finished writing are skipped, not parsed: their rows
+    would be a prefix, and a prefix is indistinguishable from a complete file once parsed."""
     per_file, header, unmatched = {}, None, 0
     for r in runs:
         for item in list_all(f"{agents()}/instances/{r['agent']}/results"):
+            status = artifact_status(item)
+            if status is not None and status != "complete":
+                continue
             body = list(csv.reader(io.StringIO(fetch(item["data"]["filename"]))))
             if not body:
                 continue

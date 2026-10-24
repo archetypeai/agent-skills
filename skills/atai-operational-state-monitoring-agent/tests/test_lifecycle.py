@@ -162,6 +162,19 @@ class TestTimestamps(unittest.TestCase):
         self.assertEqual((state["runs"][0]["status"], state["runs"][0]["error"]), ("completed", None))
         self.assertEqual(calls["results"], 4)     # 3 checks, then the final collection
 
+    def test_partial_outputs_are_skipped(self):
+        def item(name, status):
+            attrs = {"job_output": {"status": status}} if status else {}
+            return {"data": {"filename": name, "file_attributes": attrs}}
+        items = [item("done", "complete"), item("writing", "partial"), item("old", None)]
+        body = "finish_timestamp,predicted_state\n150.0,y\n"
+        fetched = []
+        with mock.patch.multiple(deliver, list_all=lambda url: items, agents=lambda: "x",
+                                 fetch=lambda name: fetched.append(name) or body):
+            per_file, _, _ = deliver.download([{"agent": "agt_x"}], [(100_000, 200_000, "b.csv")])
+        self.assertEqual(fetched, ["done", "old"])     # a platform reporting no status is read as before
+        self.assertEqual(len(per_file["b.csv"]), 2)
+
 @unittest.skipIf(score is None, "pandas / numpy not installed")
 class TestScoring(unittest.TestCase):
     STATES = ["drain", "fill", "spin", "wash"]
