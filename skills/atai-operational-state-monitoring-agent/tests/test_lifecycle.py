@@ -215,6 +215,19 @@ class TestHttp(unittest.TestCase):
                 self.assertEqual(atai_http.agents(), "https://x.test/api/agents")
                 self.assertEqual(atai_http.files_url(), "https://x.test/api/files")
 
+    def test_deployment_ignores_the_host_generation(self):
+        same = ["https://api.u1.archetypeai.app", "https://platform.u1.archetypeai.app/api",
+                "https://api.u1.archetypeai.app/v0.5"]
+        self.assertEqual({atai_http.deployment(e) for e in same}, {"u1.archetypeai.app"})
+        self.assertNotEqual(atai_http.deployment("https://platform.stage.u1.archetypeai.app"),
+                            atai_http.deployment("https://platform.u1.archetypeai.app"))
+
+    def test_same_deployment(self):
+        with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "https://platform.u1.archetypeai.app/api"}):
+            self.assertTrue(atai_http.same_deployment({"endpoint": "https://api.u1.archetypeai.app"}))
+            self.assertFalse(atai_http.same_deployment({"endpoint": "https://api.dev.u1.archetypeai.app"}))
+            self.assertTrue(atai_http.same_deployment({}))       # saved before endpoints were recorded
+
     def test_upload_retries_through_dns_failure(self):
         ok = mock.MagicMock()
         ok.__enter__.return_value.read.return_value = json.dumps({"file_id": "f.csv"}).encode()

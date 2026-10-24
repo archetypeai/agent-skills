@@ -24,7 +24,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, root, same_deployment, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
@@ -78,6 +78,10 @@ def main():
     states = manifest["states"]
     state_path = os.path.join(args.out, "test_state.json")
     state = json.load(open(state_path)) if os.path.exists(state_path) else {}
+    if not same_deployment(state):
+        sys.exit(f"{state_path} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside to promote and test here, or set .env to that deployment")
+    state["endpoint"] = root()
 
     def save():
         os.makedirs(args.out, exist_ok=True)
@@ -88,6 +92,7 @@ def main():
         trial = next(t for t in list_trials(opt) if t["id"] == state["model"]["trial"])
     else:
         runs = [json.load(open(p)) for p in sorted(glob.glob(os.path.join(args.out, "optimize_opt_*.json")))]
+        runs = [r for r in runs if same_deployment(r)]         # another deployment's trials can't be promoted here
         found = best_trial(runs, args.trial)
         if not found:
             sys.exit(f"no completed trial in {args.out}/optimize_*.json: run optimize.py first")

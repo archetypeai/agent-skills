@@ -100,6 +100,23 @@ def api():
     return f"{root()}/api"
 
 
+def deployment(endpoint):
+    """What deployment an endpoint addresses, whatever hostname it arrives under.
+
+    api.u1.archetypeai.app and platform.u1.archetypeai.app are one deployment under two
+    names: an id made through either is visible through the other. So the generation
+    (api, platform) left of the first dot is dropped; the rest still separates dev.u1
+    from stage.u1 from u1."""
+    host = re.sub(r"^[a-z]+://", "", endpoint.strip()).split("/")[0].split(":")[0]
+    return re.sub(r"^(api|platform)\.", "", host).lower()
+
+
+def same_deployment(saved):
+    """False if a saved file (results, state) records an endpoint on another deployment, whose
+    ids don't exist on this one. A file from before endpoints were recorded passes."""
+    return not saved.get("endpoint") or deployment(saved["endpoint"]) == deployment(root())
+
+
 def agents():
     return f"{api()}/agents"
 
@@ -178,8 +195,9 @@ def upload_file(path, name=None):
 
 
 def cache_key(path, base):
+    """Keyed by deployment too: file ids from one deployment don't exist on another."""
     st = os.stat(path)
-    return f"{os.path.relpath(path, base)}|{st.st_size}|{int(st.st_mtime)}"
+    return f"{deployment(root())}|{os.path.relpath(path, base)}|{st.st_size}|{int(st.st_mtime)}"
 
 
 def upload_all(paths, base, cache_path, prefix="osm", jobs=3, log=print):

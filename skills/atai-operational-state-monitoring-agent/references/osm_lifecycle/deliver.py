@@ -26,7 +26,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, files_url, list_all, load_dotenv, request, upload_all  # noqa: E402
+from atai_http import TERMINAL, agents, check_auth, files_url, list_all, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, load_manifest, log, stamp  # noqa: E402
 
@@ -92,7 +92,7 @@ def start(args, manifest, state_path, test_state):
         "description": "the tested model, run over the delivery recordings"})
     log(f"bundle {bundle['id']} from {key}")
     per = args.files_per_run or len(files)
-    state = {"bundle": bundle["id"], "blueprint": key, "runs": [],
+    state = {"endpoint": root(), "bundle": bundle["id"], "blueprint": key, "runs": [],
              "files": {f: dict(zip(("first_ms", "last_ms"), time_range(p))) for f, p in zip(files, paths)}}
     for i in range(0, len(files), per):
         batch = files[i:i + per]
@@ -225,11 +225,18 @@ def main():
         if not args.resume:
             log(f"{state_path} exists: collecting those runs (move it aside to deliver again)")
         state = json.load(open(state_path))
+        if not same_deployment(state):
+            sys.exit(f"{state_path} is from {state['endpoint']}, a different deployment from {root()}: "
+                     f"move {os.path.dirname(state_path)}/ aside to deliver here, or set .env to that deployment")
     else:
         test_state = os.path.join(args.out, "test_state.json")
         if not os.path.exists(test_state):
             sys.exit("no promoted blueprint yet: run promote_and_test.py first")
-        state = start(args, manifest, state_path, json.load(open(test_state)))
+        test_state = json.load(open(test_state))
+        if not same_deployment(test_state):
+            sys.exit(f"the blueprint in {args.out}/test_state.json is on {test_state['endpoint']}, "
+                     f"a different deployment from {root()}: run promote_and_test.py here first")
+        state = start(args, manifest, state_path, test_state)
     collect(args, state, state_path)
     log(f"next: python score.py --roles {args.roles} --out {args.out}")
 
