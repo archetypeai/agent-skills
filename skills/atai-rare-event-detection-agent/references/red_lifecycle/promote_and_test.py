@@ -31,7 +31,7 @@ import urllib.request
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_event, request, root, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, files_url, list_trials, load_dotenv, report_event, request, root, same_deployment, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from score import prf, score_windows  # noqa: E402
@@ -118,8 +118,16 @@ def main(argv=None):
     m = load_manifest(a.roles)
     sf = os.path.join(a.out, "test_state.json")
     state = json.load(open(sf)) if os.path.exists(sf) else {}
+    if not same_deployment(state):
+        sys.exit(f"{sf} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside to promote and test here, or set .env to that deployment")
+    state["endpoint"] = root()
     if "blueprint" not in state:
-        runs = json.load(open(os.path.join(a.out, "optimize_state.json")))["runs"]
+        saved = json.load(open(os.path.join(a.out, "optimize_state.json")))
+        if not same_deployment(saved):
+            sys.exit(f"{a.out}/optimize_state.json is from {saved['endpoint']}, a different deployment from {root()}: "
+                     f"run optimize.py here first, or set .env to that deployment")
+        runs = saved["runs"]
         run, trial = best(runs)
         if a.trial:
             run, trial = next((r, t) for r in runs for t in list_trials(r["optimization"]) if t["id"] == a.trial)
@@ -140,7 +148,7 @@ def main(argv=None):
     if ev["status"] != "completed" or not ev.get("metrics_report"):
         sys.exit(f"eval {state['eval']} ended {ev['status']}: {ev.get('error')}")
     pred = next(x["id"] for x in ev["output_artifacts"] if x.get("metadata", {}).get("kind") == "predictions")
-    raw = request_raw(f"{root()}/v0.5/files/download/{pred}")
+    raw = request_raw(f"{files_url()}/download/{pred}")
     with open(os.path.join(a.out, "test-predictions.ndjson"), "wb") as fh:
         fh.write(raw)
     preds = [json.loads(x) for x in raw.decode().splitlines() if x.strip()]
