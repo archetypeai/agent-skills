@@ -10,7 +10,7 @@ description: >
   fit and score settings with the Optimizations API, promote the best trial to a
   blueprint, test it once with the Evals API, deliver it as a bundle and score
   detection, delay and false alarms, then serve it a window at a time over
-  `/query` (agent serving, Dev only) and check it against the delivery. Use when the user wants to flag "this no
+  `/query` (agent serving, Dev and Staging only) and check it against the delivery. Use when the user wants to flag "this no
   longer looks like normal operation" from **normal-only reference data** — no
   fault library, no labelled examples of the thing being detected. Covers the
   output schema, the validation settings that silently invalidate every window
@@ -82,10 +82,10 @@ inputs abort and why only one feature mode is reachable.
 |---|---|---|
 | you have | a prepared CSV (the bearing sample, or data like it) | normal-operation recordings of **your** asset, and a few labelled incidents |
 | you get | per-window scores from a detector fitted on **one bearing's** healthy baseline | your own blueprint and bundle, fitted on your normal data and chosen on your incidents, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), on the official `archetypeai` client | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (AD support in these APIs landed there on 2026-10-12) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (AD support in these APIs landed there on 2026-10-12), and on Staging 2026-10-23; not yet on production |
 
 The Quick Start detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -513,8 +513,9 @@ and self-scores against the `_labels.csv` sidecar at the end.
 # Path 2 — Build an AD agent on your own data
 
 > **Status: verified end to end on dev (2026-10-13)**, where AD support in the
-> Optimizations and Evals APIs landed on 2026-10-12; check another deployment before relying
-> on it there. Built on the Tennessee Eastman Process:
+> Optimizations and Evals APIs landed on 2026-10-12, and on Staging (2026-10-23). Production's
+> `ad` blueprint doesn't report the metrics these steps read yet; check a deployment before
+> relying on it there. Built on the Tennessee Eastman Process:
 > [anomaly-discovery-agent-example-tep-quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 > (the whole lifecycle in about 30 minutes, reproduced exactly by a second run from
 > scratch). The scripts use a small stdlib HTTP helper
@@ -696,7 +697,7 @@ calibration: 4,565 known-normal windows; 1.51% over the trial's threshold; thres
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
 
-## Step 5 — Serve it (Dev only)
+## Step 5 — Serve it (Dev and Staging only)
 
 ```sh
 python serve.py --roles $R --out out --recordings normal_48h_run43 idv05_run3   # ~25 min
@@ -705,22 +706,16 @@ python serve.py --roles $R --out out --windows-per-query 16                     
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a live system would ask about
-the latest `window_size` samples. It is on Dev only for first tests, with a few serving
-workers shared by everyone.
+the latest `window_size` samples. It is on Dev and Staging only for first tests, with a few
+serving workers shared by everyone.
 
-1. **A served copy of the promoted blueprint**, made once (`<key>-served-records`): the same
-   document (detector, encoder, values) at `step_size` 1, with the CSV source and sink swapped
-   for an `atai-records` serving endpoint:
-
-   ```json
-   {"source": {"key": "RecordsSource", "config": {"format": "serving", "kind": "http",
-      "protocols": ["atai-records"], "models": ["ad"], "timestamp_column": "timestamp",
-      "data_columns": [{"dtype": "f32", "names": ["xmeas_1", "…"]}]}},
-    "sink": {"key": "RecordsSink", "config": {"format": "serving", "kind": "http", "protocols": ["atai-records"]}}}
-   ```
-
-   `POST /agents/blueprints` with `blueprint_key`, `name` and `document`.
-2. **A bundle of it, run in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
+1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
+   a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
+   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
+   supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
+   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
+   admin role on Staging.)
+2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
 
@@ -795,7 +790,7 @@ your own agent instances, and any bundle you created:
 |---|---|---|
 | agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel` with `{}`); a running serving agent holds a shared worker |
 | your delivery and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete its agents first: a bundle that still has one answers **409** |
-| promoted blueprints and their served copies (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
+| promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
 | optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
 
 For Path 2, `cleanup.py` does it from the ids in `out/`: dry run by default, `--yes` to
@@ -834,7 +829,7 @@ skills/atai-anomaly-discovery-agent/
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval, predictions checked
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: detection, delay, AUROC, false alarms, at two thresholds
-│       ├── serve.py            Step 5: served blueprint → serving agent → a query per window, against step 3
+│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
 │       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
 │       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py)
 └── tests/

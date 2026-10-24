@@ -140,21 +140,6 @@ class TestEndpoints(unittest.TestCase):
 
 
 class Serving(unittest.TestCase):
-    SRC = {"name": "ad-sample", "document": {"blueprint_id": "blp_x", "values": {
-        "step_size": 8, "window_size": 48},
-        "connectors": {"source": {"key": "CsvSource"}, "sink": {"key": "CsvSink"}}}}
-
-    def test_served_document(self):
-        doc = serve.served_document(self.SRC, ["a", "b"], "timestamp")
-        self.assertEqual(doc["values"]["step_size"], 1)
-        self.assertNotIn("blueprint_id", doc)
-        src = doc["connectors"]["source"]["config"]
-        self.assertEqual(src["protocols"], ["atai-records"])
-        self.assertEqual(src["models"], ["ad"])
-        self.assertEqual(src["data_columns"], [{"dtype": "f32", "names": ["a", "b"]}])
-        self.assertEqual(doc["connectors"]["sink"]["config"]["format"], "serving")
-        self.assertEqual(self.SRC["document"]["values"]["step_size"], 8)     # the source is left alone
-
     def test_query_body(self):
         chunk = np.arange(6.0).reshape(3, 2)                                  # 3 rows, 2 channels
         ev = serve.query_body(chunk)["events"][0]
