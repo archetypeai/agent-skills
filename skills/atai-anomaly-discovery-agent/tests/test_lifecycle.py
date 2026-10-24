@@ -8,11 +8,14 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references", "ad_lifecycle"))
+import atai_http  # noqa: E402
+import deliver  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
 import score  # noqa: E402
@@ -103,6 +106,27 @@ class PredictionCheck(unittest.TestCase):
     def test_confusion_mismatch_is_caught(self):
         with self.assertRaises(SystemExit):
             promote_and_test.check(self.dir, self.m, self.ev(2, 0, 0, 1), self.preds, 4, 4)
+
+
+class TestEndpoints(unittest.TestCase):
+    def test_api_prefix(self):
+        for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
+                         "https://x.test/api", "https://x.test/api/"):
+            with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": endpoint}):
+                self.assertEqual(atai_http.agents(), "https://x.test/api/agents")
+                self.assertEqual(atai_http.files_url(), "https://x.test/api/files")
+
+    def test_same_deployment(self):
+        env = {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": "https://platform.u1.archetypeai.app/api"}
+        with mock.patch.dict(os.environ, env):
+            self.assertTrue(atai_http.same_deployment({"endpoint": "https://api.u1.archetypeai.app"}))
+            self.assertFalse(atai_http.same_deployment({"endpoint": "https://platform.stage.u1.archetypeai.app"}))
+            self.assertTrue(atai_http.same_deployment({}))       # saved before endpoints were recorded
+
+    def test_artifact_status(self):
+        item = {"data": {"filename": "o.csv", "file_attributes": {"job_output": {"status": "partial"}}}}
+        self.assertEqual(deliver.artifact_status(item), "partial")
+        self.assertIsNone(deliver.artifact_status({"data": {"filename": "o.csv"}}))
 
 
 if __name__ == "__main__":

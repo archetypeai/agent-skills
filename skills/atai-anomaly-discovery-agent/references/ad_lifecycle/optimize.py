@@ -32,7 +32,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_anomaly, request, trial_values, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, list_trials, load_dotenv, report_anomaly, request, root, same_deployment, trial_values, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
@@ -95,6 +95,10 @@ def main(argv=None):
     os.makedirs(a.out, exist_ok=True)
     state_file = os.path.join(a.out, "optimize_state.json")
     state = json.load(open(state_file)) if os.path.exists(state_file) else {"runs": []}
+    if not same_deployment(state):
+        sys.exit(f"{state_file} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside to optimize here, or set .env to that deployment")
+    state["endpoint"] = root()
 
     if a.resume:
         opt_id = a.resume

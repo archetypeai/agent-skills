@@ -26,7 +26,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, upload_file  # noqa: E402
+from atai_http import TERMINAL, agents, check_auth, files_url, load_dotenv, request, root, same_deployment, upload_file  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 
@@ -72,15 +72,25 @@ def poll(agent_id, timeout_s=3 * 3600):
     return "timeout"
 
 
+def artifact_status(item):
+    """An output's own completion status, or None if the platform does not report one."""
+    return (item.get("data", {}).get("file_attributes", {})
+                .get("job_output", {}).get("status"))
+
+
 def download(agent_id, dst, source, ts_col):
-    """The run's output, once it covers the input; None after 10 min of short downloads."""
+    """The run's output, once it covers the input; None after 10 min of short downloads.
+
+    The platform reports a run completed while its output is still being written; the
+    output's own status (`partial` -> `complete`) is the primary gate, the coverage
+    check a second opinion."""
     end = last_ts(source, ts_col)
     for _ in range(40):
         res = request("GET", f"{agents()}/instances/{agent_id}/results").get("data", [])
-        if res:
+        if res and artifact_status(res[0]) in (None, "complete"):
             name = res[0]["data"]["filename"]
             import urllib.request
-            req = urllib.request.Request(f"{root()}/v0.5/files/download/{name}")
+            req = urllib.request.Request(f"{files_url()}/download/{name}")
             req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
             with urllib.request.urlopen(req, timeout=300) as resp, open(dst + ".part", "wb") as fh:
                 fh.write(resp.read())
@@ -106,11 +116,18 @@ def main(argv=None):
     check_auth(log)
     m = load_manifest(a.roles)
     test = json.load(open(os.path.join(a.out, "test_state.json")))
+    if not same_deployment(test):
+        sys.exit(f"the blueprint in {a.out}/test_state.json is on {test['endpoint']}, "
+                 f"a different deployment from {root()}: run promote_and_test.py here first")
     key = test["blueprint"]["key"]
     sf = os.path.join(a.out, "deliver_state.json")
     state = json.load(open(sf)) if os.path.exists(sf) else {}
     if state.get("blueprint", key) != key:
         sys.exit(f"{sf} is for {state['blueprint']}: move it aside to deliver {key}")
+    if not same_deployment(state):
+        sys.exit(f"{sf} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside to deliver here, or set .env to that deployment")
+    state["endpoint"] = root()
     state["blueprint"] = key
 
     def save():

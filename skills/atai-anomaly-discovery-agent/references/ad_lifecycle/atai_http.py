@@ -10,8 +10,9 @@ once it does; the rest of Path 2 only uses the functions below.
 Auth / endpoint come from the environment, else from the nearest .env (the current folder
 upwards, e.g. the repo root's):
     ATAI_API_KEY        required
-    ATAI_API_ENDPOINT   required, with or without a /vX.Y suffix: the Agents API is
-                        versionless (<root>/agents), the files API is <root>/v0.5/files
+    ATAI_API_ENDPOINT   required: the deployment root, with or without an /api or /vX.Y
+                        suffix. Every surface lives under one versionless /api prefix
+                        (<root>/api/agents, <root>/api/files)
 """
 import json
 import os
@@ -88,21 +89,43 @@ def check_auth(log=print):
 
 
 def root():
-    """The endpoint without any /vX.Y suffix."""
+    """The deployment root: the endpoint without any /api or /vX.Y suffix."""
     endpoint = os.environ.get("ATAI_API_ENDPOINT", "").strip().rstrip("/")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (see .env.example)")
     if not os.environ.get("ATAI_API_KEY"):
         sys.exit("ATAI_API_KEY is not set (see .env.example)")
+    endpoint = re.sub(r"/api$", "", endpoint)
     return re.sub(r"/v\d+(\.\d+)*$", "", endpoint)
 
 
+def api():
+    return f"{root()}/api"
+
+
+def deployment(endpoint):
+    """What deployment an endpoint addresses, whatever hostname it arrives under.
+
+    api.u1.archetypeai.app and platform.u1.archetypeai.app are one deployment under two
+    names: an id made through either is visible through the other. So the generation
+    (api, platform) left of the first dot is dropped; the rest still separates dev.u1
+    from stage.u1 from u1."""
+    host = re.sub(r"^[a-z]+://", "", endpoint.strip()).split("/")[0].split(":")[0]
+    return re.sub(r"^(api|platform)\.", "", host).lower()
+
+
+def same_deployment(saved):
+    """False if a saved file (results, state) records an endpoint on another deployment, whose
+    ids don't exist on this one. A file from before endpoints were recorded passes."""
+    return not saved.get("endpoint") or deployment(saved["endpoint"]) == deployment(root())
+
+
 def agents():
-    return f"{root()}/agents"
+    return f"{api()}/agents"
 
 
 def files_url():
-    return f"{root()}/v0.5/files"
+    return f"{api()}/files"
 
 
 def _unsent(e):
@@ -152,7 +175,7 @@ def request(method, url, body=None):
 
 
 def upload_file(path, name=None):
-    """POST a file to /v0.5/files (multipart); returns the platform's JSON (with file_id).
+    """POST a file to /api/files (multipart); returns the platform's JSON (with file_id).
 
     Connectors and examples reference `file_id` (the filename), not the `fil_` uid.
     A retry after a lost response can leave an unused copy on the platform; harmless."""
@@ -175,8 +198,9 @@ def upload_file(path, name=None):
 
 
 def cache_key(path, base):
+    """Keyed by deployment too: file ids from one deployment don't exist on another."""
     st = os.stat(path)
-    return f"{os.path.relpath(path, base)}|{st.st_size}|{int(st.st_mtime)}"
+    return f"{deployment(root())}|{os.path.relpath(path, base)}|{st.st_size}|{int(st.st_mtime)}"
 
 
 def upload_all(paths, base, cache_path, prefix="ad", jobs=3, log=print):
