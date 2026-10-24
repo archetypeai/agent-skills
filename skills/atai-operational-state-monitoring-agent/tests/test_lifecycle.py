@@ -195,9 +195,12 @@ class TestHttp(unittest.TestCase):
         self.env.stop()
         self.sleep.stop()
 
-    def test_versionless_agents(self):
-        self.assertEqual(atai_http.agents(), "https://x.test/agents")
-        self.assertEqual(atai_http.files_url(), "https://x.test/v0.5/files")
+    def test_api_prefix(self):
+        for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
+                         "https://x.test/v0.5/", "https://x.test/api", "https://x.test/api/"):
+            with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": endpoint}):
+                self.assertEqual(atai_http.agents(), "https://x.test/api/agents")
+                self.assertEqual(atai_http.files_url(), "https://x.test/api/files")
 
     def test_upload_retries_through_dns_failure(self):
         ok = mock.MagicMock()

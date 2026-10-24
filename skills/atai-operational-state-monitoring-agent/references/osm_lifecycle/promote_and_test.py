@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Path 2, step 2: promote the best trial to a blueprint, then test it once with the Evals API.
 
-  1. Promote: POST /agents/optimizations/{opt}/trials/{trial}/promote turns a trial into
+  1. Promote: POST /api/agents/optimizations/{opt}/trials/{trial}/promote turns a trial into
      a blueprint with its setting and fitted kNN attached: a reusable model, no S3, no
      classifier artifact to build. The best completed trial by validation macro-F1 is
      used (from <out>/optimize_*.json) unless --trial names one. The blueprint key ends
      in the trial's id, so a rerun with the same setting never reuses an older model.
-  2. Test: one eval (POST /agents/evals) over every test file, each window paired with
+  2. Test: one eval (POST /api/agents/evals) over every test file, each window paired with
      the `label` at its last row. The report is pooled over the files.
 
 Every id is saved in <out>/test_state.json as soon as it exists, so a rerun resumes

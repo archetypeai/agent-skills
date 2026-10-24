@@ -26,7 +26,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, list_all, load_dotenv, request, root, upload_all  # noqa: E402
+from atai_http import TERMINAL, agents, check_auth, files_url, list_all, load_dotenv, request, upload_all  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, load_manifest, log, stamp  # noqa: E402
 
@@ -73,7 +73,7 @@ def match_rows(rows, finish_col, ranges):
 
 
 def fetch(filename):
-    req = urllib.request.Request(f"{root()}/v0.5/files/download/{filename}")
+    req = urllib.request.Request(f"{files_url()}/download/{filename}")
     req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
     with urllib.request.urlopen(req, timeout=600) as resp:
         return resp.read().decode("utf-8", errors="replace")

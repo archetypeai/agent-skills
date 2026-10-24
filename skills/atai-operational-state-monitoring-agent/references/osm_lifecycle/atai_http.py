@@ -7,8 +7,9 @@ once it does; the rest of Path 2 only uses the functions below.
 Auth / endpoint come from the environment, else from the nearest .env (the current folder
 upwards, e.g. the repo root's):
     ATAI_API_KEY        required
-    ATAI_API_ENDPOINT   required, with or without a /vX.Y suffix: the Agents API is
-                        versionless (<root>/agents), the files API is <root>/v0.5/files
+    ATAI_API_ENDPOINT   required: the deployment root, with or without an /api or /vX.Y
+                        suffix. Every surface lives under one versionless /api prefix
+                        (<root>/api/agents, <root>/api/files)
 """
 import json
 import os
@@ -85,21 +86,26 @@ def check_auth(log=print):
 
 
 def root():
-    """The endpoint without any /vX.Y suffix."""
+    """The deployment root: the endpoint without any /api or /vX.Y suffix."""
     endpoint = os.environ.get("ATAI_API_ENDPOINT", "").strip().rstrip("/")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (see .env.example)")
     if not os.environ.get("ATAI_API_KEY"):
         sys.exit("ATAI_API_KEY is not set (see .env.example)")
+    endpoint = re.sub(r"/api$", "", endpoint)
     return re.sub(r"/v\d+(\.\d+)*$", "", endpoint)
 
 
+def api():
+    return f"{root()}/api"
+
+
 def agents():
-    return f"{root()}/agents"
+    return f"{api()}/agents"
 
 
 def files_url():
-    return f"{root()}/v0.5/files"
+    return f"{api()}/files"
 
 
 def _unsent(e):
@@ -149,7 +155,7 @@ def request(method, url, body=None):
 
 
 def upload_file(path, name=None):
-    """POST a file to /v0.5/files (multipart); returns the platform's JSON (with file_id).
+    """POST a file to /api/files (multipart); returns the platform's JSON (with file_id).
 
     Connectors and examples reference `file_id` (the filename), not the `fil_` uid.
     A retry after a lost response can leave an unused copy on the platform; harmless."""
