@@ -39,7 +39,7 @@ committed one, because the record's `id` carries the run's upload suffix; compar
 | `tva-output-1_pass_2_pass_3_pass_A.json` | Three `PASSED` verdicts with timestamps and reasons. 678 bytes. |
 | `tva-output-1_pass_2_pass_3_pass_A-FALSE-FAIL.json` | **The same clip on the 2026-10-15 blueprint**: step 3 `FAILED` on a wrench that visibly tightens the cap, with an invented reason (a plastic bag that is not in the clip). Reproduced identically by two clients. |
 | `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproduced before 2026-10-15; the current blueprint catches this clip. |
-| `tva-output-1_fail_2_pass_3_pass_A-CORRECT-MISSING.json` | **The same clip on the 2026-10-15 blueprint**: step 1 correctly `MISSING`. Across all six O-ring takes in the worked example, though, five still pass — this take is the exception. |
+| `tva-output-1_fail_2_pass_3_pass_A-CORRECT-MISSING.json` | **The same clip on the 2026-10-15 blueprint**: step 1 correctly `MISSING`. Across six O-ring takes measured on that blueprint, though, five still pass — this take is the exception. |
 | `tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json` | The **same clip at an adequate budget**: steps 1–2 `PASSED`, step 3 correctly `MISSING` — *"no wrench is introduced"*. This is what the shipped default returns. |
 | `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | The **same clip at `max_new_tokens: 2048`**: `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
 
@@ -52,7 +52,7 @@ committed one, because the record's `id` carries the run's upload suffix; compar
 
 Neither action happens in its clip. The only difference is whether the **object** is on
 screen. (Both outputs predate 2026-10-15. The current blueprint catches this particular
-O-ring take, but still passes five of the six in the worked example.)
+O-ring take, but still passes five of the six measured.)
 
 The model reliably answers **"is this thing in the video at all?"** — and when the
 object is present, it assumes the action happened. A workstation has its parts laid
@@ -105,10 +105,6 @@ On the 2026-10-15 blueprint, at the shipped default of 5760:
 | `1_pass_2_pass_3_pass_A.mp4` | **the false fail** | the 3-`PASSED` output |
 | `1_pass_2_pass_3_fail_A.mp4` | a correct `MISSING` | the same, **and** the empty result at `--max-new-tokens 2048` (not re-tested since) |
 | `1_fail_2_pass_3_pass_A.mp4` | a correct `MISSING` | **the false pass** |
-
-The remaining nine labelled takes, a batch sweep and an offline scorer are in the worked
-example:
-[task-verification-agent-example](https://github.com/archetypeai/task-verification-agent-example).
 
 ## Ground truth in the filename
 

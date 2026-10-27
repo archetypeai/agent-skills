@@ -126,10 +126,10 @@ KNOWN_BROKEN_SINK_FORMATS: set[str] = set()
 # shared with the reasoning block".
 DEFAULT_MAX_NEW_TOKENS = 5760
 
-# Where a project is expected to keep its procedure. Matches the worked example's
-# layout, so a `sop/` directory beside the script is picked up with no flag. When it
-# is absent — a fresh skill checkout — fall back to the SOP shipped in sample_data,
-# and say which one is in force rather than guessing silently.
+# Where a project is expected to keep its procedure: a `sop/` directory beside the
+# script is picked up with no flag. When it is absent — a fresh skill checkout —
+# fall back to the SOP shipped in sample_data, and say which one is in force rather
+# than guessing silently.
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
 BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "sample_data", "oring-numbered.txt")

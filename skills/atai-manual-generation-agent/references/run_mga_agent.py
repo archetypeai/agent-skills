@@ -134,7 +134,7 @@ BLUEPRINT_DEFAULT = "mga"
 # the output template: a prompt that specifies its own format makes the parser
 # return zero steps.
 #
-# Replaced 2026-10-27 with the worked example's prompt. The previous one ("Generate
+# Replaced 2026-10-27. The previous one ("Generate
 # a concise, ordered list ... Use up to 20 steps. Keep each step to at most 15
 # words ...") looped on a silent 80 s mouse-assembly clip on production: 16 steps,
 # 2 distinct texts, "Take the battery out of the mouse." 15 times on a wired mouse.

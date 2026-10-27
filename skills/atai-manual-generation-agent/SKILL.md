@@ -301,7 +301,7 @@ POST {endpoint}/agents/bundles
 
 Wired as `${values.prompt}`, feeding `connectors.source.config.default_text`. Preflight it — it has been unwired before, and `text_extensions: []` means there is no text-input back door when it is.
 
-**The one hard rule: say what to COVER, never how to FORMAT.** `ManualGenerationResultsParserNode` owns the output template, so a prompt specifying markdown headings or its own step layout makes the parser return **zero steps** — with no error. The runner's default, from the [worked example](https://github.com/archetypeai/manual-generation-agent-example), parses cleanly:
+**The one hard rule: say what to COVER, never how to FORMAT.** `ManualGenerationResultsParserNode` owns the output template, so a prompt specifying markdown headings or its own step layout makes the parser return **zero steps** — with no error. The runner's default parses cleanly:
 
 > Generate an ordered list of every distinct step performed in this video, in order. Include brief steps and steps that are repeated. Write each step as a direct, actionable instruction, as if telling the reader what to do. Do not narrate or describe what is happening in the video. Capture the details needed to repeat the action exactly: control and part names, printed and on-screen text quoted word for word, part numbers, model and serial numbers, tool types and sizes, quantities, and which way things move. For every component being handled, state where it is using grid terms such as top-left, top-right, bottom-left, bottom-right, center-left, or upper-center. Where several similar actions are performed, such as four screws on one panel, treat each as its own step and say what distinguishes it. Where the video shows how to tell the step worked, say that. Base every step on what is visible; use the spoken narration where there is any, and rely on the picture alone where the video is silent. Each step must describe a different action from the one before it — where two moments look alike, state what changed between them. Do not invent steps, parts, or details that are not shown or stated in the video.
 
@@ -532,6 +532,3 @@ skills/atai-manual-generation-agent/
 └── tests/
     └── test_references.py        network-free
 ```
-
-Worked end-to-end example, including the video-selection stage and an offline scorer:
-[manual-generation-agent-example](https://github.com/archetypeai/manual-generation-agent-example).

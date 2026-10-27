@@ -34,8 +34,8 @@ python3 ../run_mga_agent.py --score mga-output-prod-old-prompt-SHIFTED.json \
 
 The source is a **YouTube video, copyrighted by its uploader**. CrossTask itself
 distributes annotations and video IDs only, never the media, and this skill does the
-same. `run_mga_agent.py --video <path>` takes your own file; the worked example repo
-fetches the sample with `yt-dlp` at run time.
+same. `run_mga_agent.py --video <path>` takes your own file; fetch the sample with
+`yt-dlp` from the link below if you want to reproduce these outputs.
 
 ## The video these outputs came from
 
