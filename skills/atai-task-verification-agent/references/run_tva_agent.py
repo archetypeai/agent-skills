@@ -218,7 +218,7 @@ def pair_names(video: str, sop: str, suffix: str | None = None) -> tuple[str, st
 
 
 def upload(path: str, rename: str | None = None) -> str:
-    """POST a file to /v0.5/files, streamed from disk. Returns the file_id.
+    """POST a file to <root>/api/files, streamed from disk. Returns the file_id.
 
     The DECLARED Content-Type is enforced against a MIME allowlist, not the bytes:
     `video/mp4` for the clip, `text/plain` for the SOP. The returned `file_id` is
@@ -420,7 +420,7 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
 
 
 def fetch_results(agent_id: str, out_path: str) -> bytes | None:
-    """Save the first output. The `ref` is RELATIVE, resolves under /v0.5, and
+    """Save the first output. The `ref` is RELATIVE, resolves under <root>/api, and
     needs the bearer token; an absolute ref is presigned and must not get it.
     Run outputs do not expire, so this is re-fetchable later."""
     _, endpoint = env()
@@ -589,10 +589,10 @@ def main() -> None:
 
     if args.dry_run:
         _, endpoint = env()
-        print(f"POST {endpoint}/agents/bundles")
+        print(f"POST {endpoint}/api/agents/bundles")
         print(json.dumps({"blueprint": args.blueprint, "name": args.name,
                           "values": values}, indent=2))
-        print(f"\nPOST {endpoint}/agents/bundles/<id>/run")
+        print(f"\nPOST {endpoint}/api/agents/bundles/<id>/run")
         v_name, s_name = pair_names(args.video, args.sop, run_suffix())
         print(f"# stems match ({os.path.splitext(v_name)[0]}): the pipeline pairs a "
               f"video with its SOP by stem, and the -<UTC>-<hex> tail keeps concurrent "
@@ -662,7 +662,7 @@ def main() -> None:
         show(out_path)
     if verdict != "completed":
         sys.exit(f"run {verdict} — full log: "
-                 f"{endpoint}/agents/instances/{agent_id}/logs")
+                 f"{endpoint}/api/agents/instances/{agent_id}/logs")
 
 
 if __name__ == "__main__":
