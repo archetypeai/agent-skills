@@ -119,7 +119,7 @@ returned the identical wrong verdict or no verdict at all. Budget for human revi
 
 #### Since the 2026-10-15 blueprint, the errors run both ways
 
-Re-measured on production on 2026-10-26 (all 12 clips of the worked example, 5760, the
+Re-measured on production on 2026-10-26 (12 labelled clips, 5760, the
 shipped SOP; the three shipped clips also through this runner, with identical
 results):
 
@@ -570,6 +570,3 @@ skills/atai-task-verification-agent/
 └── tests/
     └── test_references.py        network-free
 ```
-
-Worked end-to-end example, with twelve labelled clips, a batch sweep and an offline scorer:
-[task-verification-agent-example](https://github.com/archetypeai/task-verification-agent-example).
