@@ -8,8 +8,7 @@ recordings that way and checks every answer against deliver.py's batch output:
 
   1. a bundle of the promoted blueprint, as it is, at step 1 (bundle values override a
      blueprint's): the platform supplies the serving connectors when it runs a bundle in
-     serving mode, so no served copy of the blueprint is made (creating a blueprint
-     takes the admin role on Staging);
+     serving mode;
   2. that bundle run with {"mode": "serving"};
   3. each recording replayed one sample at a time: every query holds the latest
      `window_size` samples (--windows-per-query N sends N consecutive windows at once).
@@ -23,7 +22,7 @@ recordings that way and checks every answer against deliver.py's batch output:
      SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
      cleanup.py finds them after a kill -9.
 
-Dev and Staging only for now. Needs deliver.py's output at step 1 (its default). Writes
+Needs deliver.py's output at step 1 (its default). Writes
 <out>/serving/<file>_wpq<N>.csv (a row per window) and .json (the summary).
 
     python serve.py --roles roles --out out --recordings normal_48h_run43 idv05_run3
@@ -104,9 +103,6 @@ def main(argv=None):
     ap.add_argument("--max-windows", type=int, help="replay only the first N windows of each recording")
     a = ap.parse_args(argv)
     load_dotenv()
-    # match the deployment, not one host: dev is api.dev.* and platform.dev.*, staging platform.stage.*
-    if not any(d in root() for d in (".dev.", ".stage.")):
-        sys.exit("agent serving is on dev and staging only for now")
     check_auth(log)
     m = load_manifest(a.roles)
     test = json.load(open(os.path.join(a.out, "test_state.json")))

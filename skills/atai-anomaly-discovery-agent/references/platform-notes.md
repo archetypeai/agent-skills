@@ -62,10 +62,12 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 - **Evals reports window-level macro-F1 at one threshold, and it moves with the class
   mix.** The same TEP detector scored 0.854 on validation (46% normal rows) and 0.732 on
   test (21% normal), with anomaly F1 0.870 on both.
-- **Predictions carry `gold`, `predicted`, `abstained` and a `row_index` counted across
-  the whole eval** — no score, no timestamp. A window's place in its file is its rank
-  within its example; windows tile each file from row 0 at `step_size`. Detection delay
-  and AUROC need agent runs.
+- **Predictions carry `example`, `expected`, `predicted`, `outcome` and `key`** — no
+  score. `key.predicted` is the window's [start, end] in epoch seconds; order by it, since
+  `input` is 0 on every record. An abstention is `outcome: "missed"` with a null
+  `predicted`. Windows tile each file from row 0 at `step_size`. Until 2026-10-20 the
+  records carried `gold`, `abstained` and a `row_index` instead. Detection delay and AUROC
+  need agent runs.
 - **Promoted blueprints can't be deleted by a regular key** (403, admin only), as in OSM;
   name them distinctively.
 

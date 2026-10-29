@@ -162,6 +162,19 @@ class TestTimestamps(unittest.TestCase):
         self.assertEqual((state["runs"][0]["status"], state["runs"][0]["error"]), ("completed", None))
         self.assertEqual(calls["results"], 4)     # 3 checks, then the final collection
 
+    def test_partial_outputs_are_skipped(self):
+        def item(name, status):
+            attrs = {"job_output": {"status": status}} if status else {}
+            return {"data": {"filename": name, "file_attributes": attrs}}
+        items = [item("done", "complete"), item("writing", "partial"), item("old", None)]
+        body = "finish_timestamp,predicted_state\n150.0,y\n"
+        fetched = []
+        with mock.patch.multiple(deliver, list_all=lambda url: items, agents=lambda: "x",
+                                 fetch=lambda name: fetched.append(name) or body):
+            per_file, _, _ = deliver.download([{"agent": "agt_x"}], [(100_000, 200_000, "b.csv")])
+        self.assertEqual(fetched, ["done", "old"])     # a platform reporting no status is read as before
+        self.assertEqual(len(per_file["b.csv"]), 2)
+
 @unittest.skipIf(score is None, "pandas / numpy not installed")
 class TestScoring(unittest.TestCase):
     STATES = ["drain", "fill", "spin", "wash"]
@@ -195,9 +208,25 @@ class TestHttp(unittest.TestCase):
         self.env.stop()
         self.sleep.stop()
 
-    def test_versionless_agents(self):
-        self.assertEqual(atai_http.agents(), "https://x.test/agents")
-        self.assertEqual(atai_http.files_url(), "https://x.test/v0.5/files")
+    def test_api_prefix(self):
+        for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
+                         "https://x.test/v0.5/", "https://x.test/api", "https://x.test/api/"):
+            with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": endpoint}):
+                self.assertEqual(atai_http.agents(), "https://x.test/api/agents")
+                self.assertEqual(atai_http.files_url(), "https://x.test/api/files")
+
+    def test_deployment_ignores_the_host_generation(self):
+        same = ["https://api.u1.archetypeai.app", "https://platform.u1.archetypeai.app/api",
+                "https://api.u1.archetypeai.app/v0.5"]
+        self.assertEqual({atai_http.deployment(e) for e in same}, {"u1.archetypeai.app"})
+        self.assertNotEqual(atai_http.deployment("https://platform.stage.u1.archetypeai.app"),
+                            atai_http.deployment("https://platform.u1.archetypeai.app"))
+
+    def test_same_deployment(self):
+        with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "https://platform.u1.archetypeai.app/api"}):
+            self.assertTrue(atai_http.same_deployment({"endpoint": "https://api.u1.archetypeai.app"}))
+            self.assertFalse(atai_http.same_deployment({"endpoint": "https://api.dev.u1.archetypeai.app"}))
+            self.assertTrue(atai_http.same_deployment({}))       # saved before endpoints were recorded
 
     def test_upload_retries_through_dns_failure(self):
         ok = mock.MagicMock()

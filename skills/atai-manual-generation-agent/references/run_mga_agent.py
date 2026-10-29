@@ -5,21 +5,23 @@ Built on the official archetypeai python client (`pip install -r
 requirements.txt`). Put a .env next to where you run:
 
     ATAI_API_KEY=<your API key>
-    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app   # /v0.5 suffix optional
+    ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api   # /api optional
 
     python3 run_mga_agent.py --video procedure.mp4
     python3 run_mga_agent.py --video procedure.mp4 --blueprint mga    # active blueprint
     python3 run_mga_agent.py --dry-run --video procedure.mp4
     python3 run_mga_agent.py --score out.json --reference steps.csv   # offline
+    python3 run_mga_agent.py --score out.json --reference steps.csv --keywords kw.json
 
-Budget ~15 minutes per run: ~7.5 min of model download and load happens on EVERY
-run (nothing is cached), then roughly 2.5x realtime processing. Run one at a
+Budget ~10 minutes per run (610-618 s on production, 2026-10-27): ~7 min of model
+download and load happens on EVERY run (nothing is cached), then roughly 1.1x
+realtime processing. Run one at a
 time. Concurrent submissions queue only when other workloads hold the workers;
 when they don't, they come up as concurrent pods and contend — one was SIGKILLed
 mid-load. Other tenants' work is invisible to you, so neither outcome is
 predictable and there is no serialization to rely on.
 
-SIX THINGS THAT WILL BITE YOU (verified end to end; the same video reproduces an identical 18-step manual run to run)
+SIX THINGS THAT WILL BITE YOU (verified end to end; the same video and values reproduce an identical manual run to run)
 
   1. `POST /agents/bundle` is 404. The endpoint is PLURAL: /agents/bundles.
   2. Starting a run returns HTTP 202, not 201. Treat only 201 as success and you
@@ -41,7 +43,7 @@ Twice in five days the setting that decided whether the manual was usable was on
 the blueprint did not expose — max_new_tokens (hardcoded at 256), then prompt
 (hardcoded to "10 steps or less"). Both are exposed again today. The lesson is
 not either defect but that an unwired value is accepted with HTTP 201 and echoed
-straight back at you, so it costs a 15-minute run to notice. This script
+straight back at you, so it costs a 10-minute run to notice. This script
 preflights every value and warns.
 
 max_new_tokens is SHARED WITH THE REASONING BLOCK. The model reasons before it
@@ -52,13 +54,13 @@ STEPS.
 There is no threshold to memorise. A 2026-08-13 measurement on a 173 s video read
 0 steps at 2048/4096 and 18 at 16384/32768/65536; the same video on 2026-08-20
 returned the full 18-step manual at EVERY budget from 2048 to 65536, all
-18/18 identical in content (five different md5s — deterministic in content, not
-in bytes). Treat the older numbers as dated, keep the empty-output check, and see
+18/18 identical in content (five different md5s that day; three runs on
+2026-10-27 were byte-identical — compare content, not bytes). Treat the older numbers as dated, keep the empty-output check, and see
 SKILL.md, "`max_new_tokens` and the reasoning block".
 
 file_id IS THE FILENAME, and it is a mutable pointer in an ORG-WIDE namespace.
 Uploading the same name again repoints it and orphans the previous object. A run
-resolves inputs at submit time but does not fetch the bytes until ~7.5 min of
+resolves inputs at submit time but does not fetch the bytes until ~7 min of
 model loading later, so a colleague uploading the same filename in that window
 kills your run with `S3 object not found` — blaming storage, not the overwrite.
 upload_name() suffixes every upload for this reason.
@@ -130,13 +132,35 @@ BLUEPRINT_DEFAULT = "mga"
 
 # Says what to COVER, never how to FORMAT. ManualGenerationResultsParserNode owns
 # the output template: a prompt that specifies its own format makes the parser
-# return zero steps, which is why `prompt` was exposed once and rolled back.
+# return zero steps.
+#
+# Replaced 2026-10-27. The previous one ("Generate
+# a concise, ordered list ... Use up to 20 steps. Keep each step to at most 15
+# words ...") looped on a silent 80 s mouse-assembly clip on production: 16 steps,
+# 2 distinct texts, "Take the battery out of the mouse." 15 times on a wired mouse.
+# This one gave 17 distinct steps on the same clip, same values. On the 173 s tire
+# video the old prompt's texts also sat ~5 s early (0/11 reference steps at
+# IoU>=0.5 by text, against 6/11 here). "concise" plus a word cap drove the loop;
+# naming the kinds of detail wanted and requiring each step to differ from the one
+# before is what stops it. Both pairs are in sample_data/.
 DEFAULT_PROMPT = (
-    "Generate a concise, ordered list of every distinct step performed in this "
-    "video, covering the procedure from the first action to the last. Include "
-    "brief steps and steps that are repeated. Use up to 20 steps. Keep each step "
-    "to at most 15 words. Use both what is shown and what is said. Do not invent "
-    "steps that are not shown or stated in the video."
+    "Generate an ordered list of every distinct step performed in this video, in "
+    "order. Include brief steps and steps that are repeated. Write each step as a "
+    "direct, actionable instruction, as if telling the reader what to do. Do not "
+    "narrate or describe what is happening in the video. Capture the details "
+    "needed to repeat the action exactly: control and part names, printed and "
+    "on-screen text quoted word for word, part numbers, model and serial numbers, "
+    "tool types and sizes, quantities, and which way things move. For every "
+    "component being handled, state where it is using grid terms such as "
+    "top-left, top-right, bottom-left, bottom-right, center-left, or "
+    "upper-center. Where several similar actions are performed, such as four "
+    "screws on one panel, treat each as its own step and say what distinguishes "
+    "it. Where the video shows how to tell the step worked, say that. Base every "
+    "step on what is visible; use the spoken narration where there is any, and "
+    "rely on the picture alone where the video is silent. Each step must describe "
+    "a different action from the one before it — where two moments look alike, "
+    "state what changed between them. Do not invent steps, parts, or details that "
+    "are not shown or stated in the video."
 )
 TERMINAL_EVENTS = ("pod.terminated", "job.completed", "job.failed", "job.canceled")
 
@@ -148,7 +172,11 @@ def load_dotenv(path: str = ".env") -> None:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip())
+            v = v.strip()
+            # A quoted value would otherwise keep its quotes: `"https://…"` is not a URL.
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            os.environ.setdefault(k.strip(), v)
 
 
 def env() -> tuple[str, str]:
@@ -157,7 +185,8 @@ def env() -> tuple[str, str]:
     endpoint = (os.environ.get("ATAI_API_ENDPOINT") or "").rstrip("/")
     if not key or not endpoint:
         sys.exit("set ATAI_API_KEY and ATAI_API_ENDPOINT (see .env.example)")
-    # Tolerate a /vX.Y suffix: this script mounts /agents and /v0.5/files itself.
+    # Tolerate a /vX.Y suffix: build_client() reduces this to the root and mounts
+    # /api/agents and /api/files itself.
     for suffix in ("/v0.5", "/v0.4", "/v1"):
         if endpoint.endswith(suffix):
             endpoint = endpoint[: -len(suffix)]
@@ -344,12 +373,19 @@ def show(path: str) -> None:
               "max_new_tokens: 256.")
 
 
-def score(out_path: str, ref_path: str) -> None:
+def score(out_path: str, ref_path: str, keywords_path: str | None = None) -> None:
     """Reference-step recall + temporal IoU. Offline; no API key needed.
 
     Deliberately no precision: a reference step list is typically a documented
     procedure rather than an inventory of the video, so a predicted step with no
     reference match is not necessarily wrong.
+
+    Temporal IoU is blind to text: it credits whichever prediction overlaps the
+    reference interval, whatever it says. A manual whose texts sit one step early
+    still scores well — measured 2026-10-27, 7/11 at IoU>=0.5 by time and 0/11 once
+    each reference step is matched to the prediction that actually names it. With
+    keywords_path (JSON: {"<step>": ["phrase", ...]}) that text-matched score is
+    reported too, and every time-only match whose text names nothing is flagged.
     """
     steps = load_manual(out_path)
     per: dict[int, list[tuple[float, float]]] = {}
@@ -372,9 +408,12 @@ def score(out_path: str, ref_path: str) -> None:
              for s in steps
              if not s["instruction"].strip().lower().startswith(advisory)]
 
+    words = ({int(k): [w.lower() for w in v] for k, v in json.load(open(keywords_path)).items()}
+             if keywords_path else {})
+
     print(f"\nscored against {os.path.basename(ref_path)} "
           f"({len(ref)} reference steps, {len(steps)} predicted)")
-    hits = []
+    hits, text_hits, wrong_text = [], [], 0
     for k in sorted(ref):
         best, txt = 0.0, "— none —"
         for a, b, t in cands:
@@ -382,13 +421,29 @@ def score(out_path: str, ref_path: str) -> None:
             if v > best:
                 best, txt = v, t
         hits.append(best)
-        print(f"  step {k:>2} {ref[k][0]:6.1f}-{ref[k][1]:<6.1f} IoU {best:4.2f}  {txt[:56]}")
+        line = f"  step {k:>2} {ref[k][0]:6.1f}-{ref[k][1]:<6.1f} IoU {best:4.2f}  {txt[:56]}"
+        if k in words:
+            names = lambda t: any(w in t.lower() for w in words[k])
+            text_hits.append(max((iou(ref[k], (a, b)) for a, b, t in cands if names(t)),
+                                 default=0.0))
+            if best > 0 and not names(txt):
+                wrong_text += 1
+                line += f"\n{'':28}^ text names a different action; text-matched IoU {text_hits[-1]:.2f}"
+        print(line)
     for thr in (0.1, 0.3, 0.5):
         n = sum(1 for v in hits if v >= thr)
         print(f"  recall @ IoU>={thr}: {n}/{len(ref)} ({100 * n / len(ref):.0f}%)")
     matched = [v for v in hits if v > 0]
     if matched:
         print(f"  mean IoU over matched steps: {sum(matched) / len(matched):.2f}")
+    if text_hits:
+        n = sum(1 for v in text_hits if v >= 0.5)
+        print(f"  text-matched recall @ IoU>=0.5: {n}/{len(text_hits)} — the prediction that "
+              f"names the step, not\n   whichever overlaps it most")
+        if wrong_text:
+            print(f"  WARNING: {wrong_text} time-only match(es) name a different action, so "
+                  f"the IoU recall above\n   may overstate this manual; check its timestamps "
+                  f"against the video")
     print("  (recall only — a predicted step with no reference match is not "
           "scored as\n   a false positive; see sample_data/README.md)")
 
@@ -402,9 +457,10 @@ def main() -> None:
                          f"stop resolving when the blueprint is republished")
     ap.add_argument("--max-frames", type=int, default=64)
     ap.add_argument("--max-new-tokens", type=int, default=16384,
-                    help="output budget (default 16384, matching the blueprint). A "
+                    help="output budget (default 16384; the production blueprint's own "
+                         "default is 8192 since 2026-10-15, so this is always sent). A "
                          "FLOOR, not a ceiling: the model reasons out of this budget, "
-                         "so 4096 returns an EMPTY manual rather than a short one, and "
+                         "so a low budget has returned an EMPTY manual rather than a short one, and "
                          "nothing above 16384 changes the answer")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT,
                     help="the instruction, honoured as ${values.prompt}; "
@@ -421,6 +477,10 @@ def main() -> None:
     ap.add_argument("--score", metavar="FILE", help="offline: score an output")
     ap.add_argument("--reference", metavar="CSV",
                     help="reference steps: <step>,<start_sec>,<end_sec>")
+    ap.add_argument("--keywords", metavar="JSON",
+                    help='with --score: {"<step>": ["phrase", ...]} naming each '
+                         'reference step, to also score by the prediction whose TEXT '
+                         'names it (temporal IoU alone is blind to text)')
     ap.add_argument("--show", metavar="FILE", help="offline: print a manual")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -432,7 +492,7 @@ def main() -> None:
         if not args.reference:
             sys.exit("--score needs --reference")
         show(args.score)
-        score(args.score, args.reference)
+        score(args.score, args.reference, args.keywords)
         return
     if not args.video:
         ap.error("--video is required (or use --show / --score)")
@@ -464,7 +524,7 @@ def main() -> None:
         sys.exit(f"no video at {args.video}")
 
     # Preflight BEFORE uploading: an ignored value should surface in seconds, not
-    # after 15 minutes of GPU.
+    # after 10 minutes of GPU.
     bp = client().agents.blueprints.get(args.blueprint)
     # NOT include_yaml=True: the published client accepts the kwarg and the
     # call then fails with an empty `ApiError: {}`. `document` is returned
@@ -496,7 +556,7 @@ def main() -> None:
     agent = client().agents.bundles.run(
         bundle["id"], source=[{"type": "file", "id": file_id, "format": "mp4"}])
     print(f"started run\n  agent_id={agent['id']}\n"
-          f"  watching /logs (~7.5 min of model loading first) ...")
+          f"  watching /logs (~7 min of model loading first) ...")
 
     verdict = watch(agent["id"])
     print(f"\nrun {verdict}")

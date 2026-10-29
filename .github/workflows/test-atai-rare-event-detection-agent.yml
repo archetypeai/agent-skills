@@ -26,10 +26,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        # the runner needs the official client; pytest runs the tests (unittest or pytest style)
+        # Path 1 needs the official client, Path 2 numpy and pandas; pytest runs the tests (unittest or pytest style)
         run: |
           python -m pip install --upgrade pip
-          pip install -r skills/atai-rare-event-detection-agent/references/requirements.txt pytest
+          pip install -r skills/atai-rare-event-detection-agent/references/requirements.txt -r skills/atai-rare-event-detection-agent/references/red_lifecycle/requirements.txt pytest
 
       - name: Run the network-free tests
         run: python -m pytest skills/atai-rare-event-detection-agent/tests -v
