@@ -90,7 +90,7 @@ output is one CSV of per-window predictions.
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), on the official `archetypeai` client | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1.5 min on a clear queue | ~6 min on the sample; longer with load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (RED became optimizable there on 2026-10-12) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
 
 The Quick Start classifier holds one pump's two breakdowns, so running your own asset
 through it is a transfer test, not a deployment: for your own asset, take Path 2. Path
@@ -546,7 +546,7 @@ python promote_and_test.py --roles $R --out out --name red-sample
    (`aar_…`).
 2. **Test once** with the Evals API on every test file, with predictions. An eval takes no
    value overrides: it runs at the trial's window and step.
-3. **Check** every prediction's gold label against the file's `label` column (the
+3. **Check** every prediction's `expected` label against the file's `label` column (the
    platform's rule: each row scored once, so at step 1 a window's last row) and the
    offline confusion matrix against the platform's, then score each incident as the
    design does: each window by the majority of its rows, detected or missed, how soon,

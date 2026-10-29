@@ -10,9 +10,9 @@
    An eval takes no value overrides: it runs at the trial's window and step.
 3. Check before reporting. The platform scores each row once: a window answers for the
    rows since the previous window ended (all its rows for the first), collapsed to their
-   last row. Every prediction's gold label must equal that, read from the file's `label`
-   column (windows tile each file from row 0 at step_size; `row_index` counts across the
-   whole eval, so a window's place in its file is its rank within its example), and the
+   last row. Every prediction's expected label must equal that, read from the file's
+   `label` column (windows tile each file from row 0 at step_size; a window's place in its
+   file is its rank by `key.predicted`, its [start, end] in epoch seconds), and the
    offline confusion matrix must equal the platform's.
 4. Score as the design does (score.py): each window by the majority of its rows; each
    incident detected or missed, and how soon; false alarms on windows with no event row.
@@ -77,15 +77,16 @@ def check(roles, m, ev, preds, window, step):
         name = os.path.basename(f["file"])
         labels = pd.read_csv(os.path.join(roles, f["file"]), usecols=["label"]).label.tolist()
         starts = list(range(0, len(labels) - window + 1, step))
-        got = sorted(by_ex.get(name, []), key=lambda p: p["row_index"])
+        # `input` is 0 on every record; the window's own [start, end] orders them
+        got = sorted(by_ex.get(name, []), key=lambda p: p["key"]["predicted"][0])
         if len(got) != len(starts):
             sys.exit(f"{name}: {len(got)} predictions for {len(starts)} windows at window {window}, step {step}")
         windows = []
         for k, (s, p) in enumerate(zip(starts, got)):
             gold = labels[s + window - 1]           # the span's last row: at step 1, the window's last row
-            if p["gold"] != gold:
-                sys.exit(f"{name} window {k}: platform gold {p['gold']}, the label column says {gold}: misaligned")
-            if p["abstained"]:
+            if p["expected"] != gold:
+                sys.exit(f"{name} window {k}: platform expected {p['expected']}, the label column says {gold}: misaligned")
+            if p["outcome"] == "missed" or p["predicted"] is None:   # the classifier abstained
                 abstained += 1
                 continue
             offline[names.index(gold)][names.index(p["predicted"])] += 1
