@@ -9,7 +9,8 @@ description: >
   normal-only library, validation and test with labelled incidents, a delivery)
   fit and score settings with the Optimizations API, promote the best trial to a
   blueprint, test it once with the Evals API, deliver it as a bundle and score
-  detection, delay and false alarms. Use when the user wants to flag "this no
+  detection, delay and false alarms, then serve it a window at a time over
+  `/query` (agent serving) and check it against the delivery. Use when the user wants to flag "this no
   longer looks like normal operation" from **normal-only reference data** — no
   fault library, no labelled examples of the thing being detected. Covers the
   output schema, the validation settings that silently invalidate every window
@@ -81,10 +82,10 @@ inputs abort and why only one feature mode is reachable.
 |---|---|---|
 | you have | a prepared CSV (the bearing sample, or data like it) | normal-operation recordings of **your** asset, and a few labelled incidents |
 | you get | per-window scores from a detector fitted on **one bearing's** healthy baseline | your own blueprint and bundle, fitted on your normal data and chosen on your incidents, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), on the official `archetypeai` client | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
 
 The Quick Start detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -515,8 +516,9 @@ and self-scores against the `_labels.csv` sidecar at the end.
 # Path 2 — Build an AD agent on your own data
 
 > **Status: verified end to end on dev (2026-10-13)**, where AD support in the
-> Optimizations and Evals APIs landed on 2026-10-12; check another deployment before relying
-> on it there. Built on the Tennessee Eastman Process:
+> Optimizations and Evals APIs landed on 2026-10-12, and on Staging (2026-10-23). Production's
+> `ad` blueprint doesn't report the metrics these steps read yet; check a deployment before
+> relying on it there. Built on the Tennessee Eastman Process:
 > [anomaly-discovery-agent-example-tep-quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 > (the whole lifecycle in about 30 minutes, reproduced exactly by a second run from
 > scratch). The scripts use a small stdlib HTTP helper
@@ -528,6 +530,8 @@ role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals
   (prep skill)   fit on normal,  best trial     one-shot, with           a score per window          detection, delay,
                  score on        → blueprint    predictions checked                                   false alarms
                  validation
+                                                                                 └──► 5 serve (/query, Dev): a window per
+                                                                                      query, checked against step 3
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
@@ -651,6 +655,17 @@ each output is downloaded again until its last window reaches the input's end, a
 network outage is waited out instead of failing every file. **Expect, on the sample**
 (~13 min): `2 of 2 delivery files have complete outputs`.
 
+- **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works
+  on a promoted blueprint too: per channel, an `embedding_<channel>` column (768-d) and an
+  `embedding_<channel>_features` column (one value per feature), each cell a JSON list in the
+  CSV. Nothing else returns embeddings: a trial, an eval (predictions only) and the promoted
+  detector (`aar_…`, no download route) don't. To plot where the fit's normal sits, run the
+  library files through the promoted blueprint in batch at the trial's `step_size` with
+  `output_embeddings: true`: the same windows and encoder as the fit, so the same embeddings.
+- **At scale, the bundle lists its own runs.** `deliver_state.json` keeps each file's last
+  attempt; `GET /agents/instances?bundle_id=<bnd_…>` also finds the attempts a rerun
+  replaced (734 agents behind the TEP full example's 714 files). `cleanup.py` uses both.
+
 ## Step 4 — Score the delivery
 
 ```sh
@@ -685,6 +700,70 @@ calibration: 4,565 known-normal windows; 1.51% over the trial's threshold; thres
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
 
+## Step 5 — Serve it
+
+```sh
+python serve.py --roles $R --out out --recordings normal_48h_run43 idv05_run3   # ~25 min
+python serve.py --roles $R --out out --windows-per-query 16                     # 16 consecutive windows a query
+```
+
+Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
+window in one round trip, with no upload, queue or polling: how a live system would ask about
+the latest `window_size` samples. A running serving agent holds a serving worker until it is
+stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
+
+1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
+   a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
+   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
+   supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
+2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
+   wait until the agent's `status` is `running`.
+3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
+
+   ```json
+   {"model": "ad", "query": "", "events": [{"type": "data.numeric_array",
+     "event_data": {"contents": [[ch1 × window], [ch2 × window], …]}}]}
+   ```
+
+   The answer is at `response.data`, one record per window:
+   `{"anomaly_score": 1.0618, "finish_timestamp": 47, "invalid": "false", "predicted_label": "normal", "start_timestamp": 0}`.
+   The timestamps are sample indices within the query, not times. `window + N − 1` rows give
+   N consecutive windows (step 1).
+4. **Every answer against batch** (step 3's output at step 1): the same label, the score
+   within 10⁻⁴ relative, and each recording's first sustained alarm, served and batch.
+5. **The agent cancelled and deleted, and the bundle deleted**, however the replay ends
+   (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
+   for `cleanup.py`.
+
+**Expect, on the sample** (production, 2026-10-29; ~30 min):
+
+```
+served 1,826 windows of 2 recording(s) in 1,826 queries, 1693 s
+  against the delivery (batch): predicted_label identical 1,826/1,826, anomaly_score within 1e-4 1,826/1,826 (max relative difference 1.3e-05); invalid 0
+  latency per query: median 907 ms, p95 1014 ms, max 1980 ms
+  normal_48h_run43   first sustained alarm: served a false alarm 37.15 h in; batch a false alarm 37.15 h in
+  idv05_run3         first sustained alarm: served 0.15 h after onset; batch 0.15 h after onset
+```
+
+**Measured on production (2026-10-29)**, the sample and the TEP quickstart, 1,826 windows
+each, a fault-free and a faulty run: every label, every score (within 4×10⁻⁵ relative) and
+every first alarm identical to batch, at **~0.9 s median per query** (p95 about 1 s).
+**A score can now and then be off by 1–2%** with a k-5 detector, its label unchanged: on Dev
+(2026-10-15) one window in each of those replays was, here `normal_48h_run43`'s window 168,
+1.0243 served against 1.0082 in batch. A 5th-nearest neighbour is likely swapped by the
+~2×10⁻⁴ difference between served and batch embeddings. **One window per query is the way to
+serve it:** 16 per query took 11 s
+each and saved 13% of the time, at the cost of waiting for 15 more samples before asking.
+For stored data, deliver in batch.
+
+- **A query must hold the whole window.** The agent keeps nothing between queries: rows 1–48
+  of a run, sent alone, answer exactly as batch's second window. Keep the buffer client-side.
+- **Replay one recording at a time.** The served agent numbers the samples itself and can't
+  see a time gap, so a window across two joined recordings is scored as if it were
+  continuous, where batch marks it invalid.
+- **An idle agent is released** after 20 minutes without a query, and a query to it answers
+  409: start a new one.
+
 ## Path 2 pitfalls
 
 - **A window of 1,024 on slow data.** The `ad` blueprint's default window at a 3-minute rate
@@ -707,10 +786,27 @@ your own agent instances, and any bundle you created:
 
 | object | delete | notes |
 |---|---|---|
-| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel`) |
-| your delivery bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete the instances first |
+| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel` with `{}`); a running serving agent holds a shared worker |
+| your delivery and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete its agents first: a bundle that still has one answers **409** |
 | promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
 | optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
+
+For Path 2, `cleanup.py` does it from the ids in `out/`: dry run by default, `--yes` to
+delete, an id already gone counts as done, progress saved for a rerun.
+
+```sh
+python cleanup.py --out out           # what would be deleted, and what stays
+python cleanup.py --out out --yes
+```
+
+To see which serving agents are running (yours and anyone's on the same workers),
+`status=running` filters on the server; `mode=serving` is ignored there, so filter it
+client-side:
+
+```sh
+curl -s "$ATAI_API_ENDPOINT/agents/instances?status=running&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
+  | jq -c '.data[] | select(.mode=="serving") | {id, blueprint, name, created_at}'
+```
 
 ## File Layout
 
@@ -731,7 +827,9 @@ skills/atai-anomaly-discovery-agent/
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval, predictions checked
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: detection, delay, AUROC, false alarms, at two thresholds
-│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py)
+│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
+│       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
+│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
     └── test_lifecycle.py     ← Path 2: network-free unit tests

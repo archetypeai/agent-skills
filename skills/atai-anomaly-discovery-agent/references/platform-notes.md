@@ -1,6 +1,6 @@
 # AD on the Optimizations and Evals APIs: measured platform behaviour
 
-What Path 2 relies on, measured on the dev deployment (2026-10-12 → 10-13) while building
+What Path 2 relies on, measured on the dev deployment (2026-10-12 → 10-15) while building
 the [TEP quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-12
 (atai_core #7196); check another deployment before relying on it there.
@@ -82,3 +82,40 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   once and 886 s with 4.
 - **The checkpoint abort is fixed** (runtime 1.1.9-590); `deliver.py` turns the triggers off
   anyway, which is harmless where the fix has landed.
+- **A bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>`, every attempt
+  included. The TEP full example's 714 delivered files left 734 agents, the extra 20 from
+  reruns that replaced an attempt; a state file holding the last attempt per file misses them.
+- **A bundle that still has agents can't be deleted** (409): delete its agents first. An
+  agent that is still running is cancelled first (`POST …/cancel` with `{}`).
+- **`output_embeddings: true` works on a promoted blueprint's bundle.** Per channel, an
+  `embedding_<channel>` (768-d) and an `embedding_<channel>_features` column, each cell a JSON
+  list in the CSV. It is the only source of embeddings: trials and evals return metrics and
+  predictions, and the promoted detector (`aar_…`) has no download route. Running the library
+  files in batch at the trial's step recomputes the fit's reference windows (2,280 for TEP).
+
+## Agent serving (production 2026-10-29; first on Dev 2026-10-15, Staging 2026-10-23)
+
+- **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
+  it is cancelled, or released after 20 minutes without a query; a query to a released agent
+  answers 409.
+- **The promoted blueprint is served as it is.** It reads and writes CSV; run in serving mode,
+  the platform supplies an `atai-records` serving source and sink in their place, so a bundle
+  of it with `step_size` 1 is all serving needs. Earlier versions of serve.py made a
+  `<key>-served-records` copy with those connectors; a copy made before the connector change
+  is refused.
+- **Staging (2026-10-23):** the TEP quickstart's replay matched batch on 1,826 / 1,826 windows
+  at **~2.6 s median per query**, about three times Dev's and RED's or OSM's ~0.9 s there.
+- **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
+  the samples 0, 1, 2… itself and answers with sample indices for `start_timestamp` and
+  `finish_timestamp`; records come back with their keys in alphabetical order.
+- **Served equals batch to float32 noise.** On production (2026-10-29) the sample and the TEP
+  quickstart, 1,826 windows each, matched batch on every label, score (within 4×10⁻⁵
+  relative) and first alarm. On Dev (2026-10-15) one window in each k-5 replay was 1.6–2% off,
+  its label unchanged (most likely a neighbour swap). Served embeddings differ from batch by
+  about 2×10⁻⁴ relative.
+- **Latency: ~0.9 s median per one-window query on production** (sample: 907 ms, p95 1.0 s,
+  worst 2.0 s; the TEP quickstart 928 ms). Free-trial accounts serve on CPU only and can be
+  slower. A busy Dev stretched the sample's tail to a 3.1 s p95 and a 30 s worst query.
+  16 windows per query took 11 s, 13% less per window.
+- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
+  is silently ignored, so pick the serving agents client-side (`select(.mode=="serving")`).
