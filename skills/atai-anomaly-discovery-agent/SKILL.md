@@ -589,6 +589,14 @@ Give an option several values to search it; `--threshold LOW:HIGH` searches a fl
 - **`feature_names` can only be pinned**; compare feature sets with one optimization each.
 - **The space can't be empty**, so `n_neighbors` is always in it, even with one value.
 - **Both legs use the one `step_size`**, so validation is scored at the fit stride.
+- **Prefer a random search once the grid is large.** The platform draws distinct points at
+  random: a budget at or above the grid's size runs every point (a grid), below it a random
+  subset. With the one or two settings that matter, a dozen random points usually land
+  close to the best, and the rest of a large grid buys little. The script runs a grid of up
+  to 12 points in full and samples 12 from a bigger one (or from a threshold range);
+  `--max-trials` sets the budget. Trials that share `window_size` and `step_size` share
+  their embeddings, so windows and steps are the expensive settings; `n_neighbors`,
+  `metric`, `pca_components` and `threshold` are cheap.
 
 **Expect, on the sample** (2 trials, ~10 min on a busy queue):
 
