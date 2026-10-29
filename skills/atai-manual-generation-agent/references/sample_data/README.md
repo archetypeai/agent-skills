@@ -1,40 +1,51 @@
 # Sample data
 
-Reference **outputs**, not inputs. Five MGA runs over the same video, differing
-only in configuration, plus the reference step annotations to score them against.
+Reference **outputs**, not inputs: MGA runs over the tire video below (and two over a
+silent mouse-assembly clip), plus the reference step annotations and step keywords to
+score them against.
 
-The two `-current-` files are what the skill's defaults produce. The other three are
-older runs on superseded blueprints, kept because the offline scorer needs more than
-one point of comparison — not as configurations to reproduce.
+`mga-output-current-16384.json` is what the skill's defaults produce today. The others
+are kept because the offline scorer and the tests need more than one point of
+comparison — not as configurations to reproduce.
 
 | File | What it is |
 |---|---|
-| `mga-output-current-16384.json` | **What the skill's defaults produce today** — canonical blueprint, `max_new_tokens: 16384`, coverage prompt. 18 steps, 11–139 s, 11/11 reference steps covered and **7/11 at IoU ≥ 0.5**, the best of the five. Reproduced byte-for-byte on two machines. |
-| `mga-output-current-4096-EMPTY.json` | Same blueprint, same prompt, `max_new_tokens: 4096`, captured 2026-08-13. **38 bytes, zero steps** — `job.completed`, no ERROR row, 11.3 minutes of generation spent inside the model's reasoning block. Keep this one: it is what an empty manual looks like, and it looks like success everywhere except the step count. **It no longer reproduces** — the same video at 4096 returned the full 18-step manual on 2026-08-20, as did 2048 through 65536. See SKILL.md, "`max_new_tokens` and the reasoning block". |
+| `mga-output-current-16384.json` | **What the skill's defaults produce today** — production, `blp_7vc935…`, 2026-10-27, `max_frames: 64`, `max_new_tokens: 16384`, the current prompt. 16 steps, 14–138 s; 11/11 reference steps covered, 7/11 at IoU ≥ 0.5 by time and 6/11 by text. Identical on three runs. |
+| `mga-output-prod-old-prompt-SHIFTED.json` | Same day and values, the **previous** default prompt. 20 steps, and every text sits ~5 s early — 7/11 at IoU ≥ 0.5 by time, **0/11 by text**. The fixture for `--keywords`. |
+| `mga-output-mouse-current-prompt.json` | Silent 80 s mouse-assembly clip, production, current prompt: 17 distinct steps, every one exactly 5 s. |
+| `mga-output-mouse-old-prompt-LOOP.json` | The same clip, previous prompt: 16 steps, **2 distinct texts** — "Take the battery out of the mouse." 15 times. Why the prompt was replaced. |
+| `mga-output-dev-old-prompt-18steps.json` | The previous prompt on dev, Aug 2026: 18 steps, 11–139 s, 7/11 at IoU ≥ 0.5 by time and by text. Was `mga-output-current-16384.json` until 2026-10-27. |
+| `mga-output-current-4096-EMPTY.json` | Dev, `max_new_tokens: 4096`, captured 2026-08-13. **38 bytes, zero steps** — `job.completed`, no ERROR row, 11.3 minutes of generation spent inside the model's reasoning block. Keep this one: it is what an empty manual looks like, and it looks like success everywhere except the step count. **It no longer reproduces** — the same video at 4096 returned the full 18-step manual on 2026-08-20, as did 2048 through 65536. See SKILL.md, "`max_new_tokens` and the reasoning block". |
 | `mga-output-truncated-active-blueprint.json` | Older: a 256-token output cap. 6 steps, 16–85 s, last step cut mid-clause — what truncation looks like. |
 | `mga-output-max_new_tokens2048.json` | Older: budget raised, no caller prompt. 10 steps, 16–120 s, clean. |
-| `mga-output-max_new_tokens2048-coverage-prompt.json` | Older: budget plus a coverage prompt. 19 steps, 11–139 s — the same shape the current defaults produce. |
+| `mga-output-max_new_tokens2048-coverage-prompt.json` | Older: budget plus a coverage prompt. 19 steps, 11–139 s. |
 | `40567_i2JWkDyg26A_reference_steps.csv` | Reference annotations: `<step>,<start_sec>,<end_sec>`, two independent annotators. |
+| `40567_i2JWkDyg26A_step_keywords.json` | Phrases naming each reference step, for `--keywords`: a prediction counts as naming step N if its text contains one of them. |
 
 Score any of them offline, no API key needed:
 
 ```sh
-python3 ../run_mga_agent.py --score mga-output-max_new_tokens2048.json \
-    --reference 40567_i2JWkDyg26A_reference_steps.csv
+python3 ../run_mga_agent.py --score mga-output-prod-old-prompt-SHIFTED.json \
+    --reference 40567_i2JWkDyg26A_reference_steps.csv \
+    --keywords 40567_i2JWkDyg26A_step_keywords.json
 ```
 
 ## Why no video ships here
 
 The source is a **YouTube video, copyrighted by its uploader**. CrossTask itself
 distributes annotations and video IDs only, never the media, and this skill does the
-same. `run_mga_agent.py --video <path>` takes your own file; the worked example repo
-fetches the sample with `yt-dlp` at run time.
+same. `run_mga_agent.py --video <path>` takes your own file; fetch the sample with
+`yt-dlp` from the link below if you want to reproduce these outputs.
 
 ## The video these outputs came from
 
 [`i2JWkDyg26A`](https://www.youtube.com/watch?v=i2JWkDyg26A) — "How to change a wheel
 on your Toyota", 173.2 s, 640×360, 25 fps, 4,329 frames. Chosen because it sits at
 58% of MGA's ~5-minute ceiling and has all 11 reference steps annotated.
+
+The two `mouse` outputs come from an 80 s silent clip of a USB mouse being assembled
+(1280×720, 30 fps, no audio track), used only to test how a prompt behaves without
+narration. It has no reference annotations, so those two are not scored.
 
 ## Attribution
 

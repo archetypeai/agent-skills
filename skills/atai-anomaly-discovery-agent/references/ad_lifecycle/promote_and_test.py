@@ -7,10 +7,10 @@
    the trial's values.
 2. Test once: POST /agents/evals with the blueprint and every test file, at the trial's own
    threshold and step (an eval takes no value overrides), with predictions.
-3. Check the predictions before reporting: each window's gold label equals its sidecar's
-   label at the window's last row (windows tile each file from row 0 at step_size;
-   `row_index` counts across the whole eval, so a window's place in its file is its rank
-   within its example), and the offline confusion matrix equals the platform's.
+3. Check the predictions before reporting: each window's expected label equals its
+   sidecar's label at the window's last row (windows tile each file from row 0 at
+   step_size; a window's place in its file is its rank by `key.predicted`, its
+   [start, end] in epoch seconds), and the offline confusion matrix equals the platform's.
 
 Every id goes to <out>/test_state.json, so a rerun resumes. Once you have seen the test
 number, the setting is frozen.
@@ -71,13 +71,14 @@ def check(roles, m, ev, preds, window, step):
         name = os.path.basename(f["file"])
         side = pd.read_csv(os.path.join(roles, f["labels"]), dtype=str).fillna("")
         ends = [side.iloc[i + window - 1] for i in range(0, len(side) - window + 1, step)]
-        got = sorted(by_ex.get(name, []), key=lambda p: p["row_index"])
+        # `input` is 0 on every record; the window's own [start, end] orders them
+        got = sorted(by_ex.get(name, []), key=lambda p: p["key"]["predicted"][0])
         if len(got) != len(ends):
             sys.exit(f"{name}: {len(got)} predictions for {len(ends)} windows at window {window}, step {step}")
         for i, (row, p) in enumerate(zip(ends, got)):
-            if p["gold"] != row["label"]:
-                sys.exit(f"{name} window {i}: platform gold {p['gold']}, sidecar {row['label']}: misaligned")
-            if p["abstained"]:
+            if p["expected"] != row["label"]:
+                sys.exit(f"{name} window {i}: platform expected {p['expected']}, sidecar {row['label']}: misaligned")
+            if p["outcome"] == "missed" or p["predicted"] is None:   # the detector abstained
                 abstained += 1
                 continue
             g, pr = row["label"], p["predicted"]

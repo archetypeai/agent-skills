@@ -93,8 +93,11 @@ class PredictionCheck(unittest.TestCase):
             os.path.join(self.dir, "labels", "t_labels.csv"), index=False)
         self.m = {"test": [{"file": "test/t.csv", "labels": "labels/t_labels.csv"}]}
         # window 4, step 4: windows end on rows 3, 7, 11 -> normal, anomaly, anomaly
-        self.preds = [{"example": "t.csv", "row_index": i, "gold": g, "predicted": p, "abstained": False}
-                      for i, (g, p) in enumerate([("normal", "normal"), ("anomaly", "anomaly"), ("anomaly", "normal")])]
+        # records as Evals writes them, listed out of order: the window's [start, end] orders them
+        windows = [("normal", "normal"), ("anomaly", "anomaly"), ("anomaly", "normal")]
+        self.preds = [{"example": "t.csv", "input": 0, "key": {"predicted": [4.0 * i, 4.0 * i + 3]},
+                       "expected": g, "predicted": p, "correct": g == p, "outcome": "matched"}
+                      for i, (g, p) in reversed(list(enumerate(windows)))]
 
     def ev(self, tp, fn, fp, tn):
         return {"metrics_report": {"targets": {"anomaly": {
@@ -107,9 +110,16 @@ class PredictionCheck(unittest.TestCase):
         self.assertEqual(abstained, 0)
 
     def test_misaligned_gold_is_caught(self):
-        bad = [dict(p, gold="normal") for p in self.preds]
+        bad = [dict(p, expected="normal") for p in self.preds]
         with self.assertRaises(SystemExit):
             promote_and_test.check(self.dir, self.m, self.ev(1, 1, 0, 1), bad, 4, 4)
+
+    def test_abstention_is_counted_not_scored(self):
+        preds = [dict(p, predicted=None, correct=False, outcome="missed") if p["key"]["predicted"][0] == 8.0 else p
+                 for p in self.preds]
+        per_type, abstained = promote_and_test.check(self.dir, self.m, self.ev(1, 0, 0, 1), preds, 4, 4)
+        self.assertEqual(per_type, {"idv01": [1, 1]})
+        self.assertEqual(abstained, 1)
 
     def test_confusion_mismatch_is_caught(self):
         with self.assertRaises(SystemExit):

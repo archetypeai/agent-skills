@@ -1,7 +1,8 @@
 # Sample data
 
-Real artifacts from real runs against the `tva` blueprint, 2026-08-11 to 2026-08-12. Three
-clips ship, so the skill can be exercised **live** as well as offline.
+Real artifacts from real runs against the `tva` blueprint: 2026-08-11 to 2026-08-12, and
+2026-10-26 on the blueprint published 2026-10-15. Three clips ship, so the skill can be
+exercised **live** as well as offline.
 
 Offline — no API key, no network, no GPU:
 
@@ -21,9 +22,11 @@ python3 ../run_tva_agent.py --video 1_pass_2_pass_3_pass_A.mp4 --sop oring-numbe
 python3 ../run_tva_agent.py --video 1_pass_2_pass_3_pass_A.mp4
 ```
 
-Expect three `PASSED` verdicts. The digest may differ from the committed one if your
-`max_new_tokens` differs — generation is deterministic for a given budget, and the
-committed output predates the current default of 5760.
+On the current (2026-10-15) blueprint, expect **step 3 `FAILED`** on this clip, though
+every step was performed — `tva-output-1_pass_2_pass_3_pass_A-FALSE-FAIL.json` is that
+run. The three-`PASSED` output predates that blueprint. The digest never matches a
+committed one, because the record's `id` carries the run's upload suffix; compare the
+`results`.
 
 ## Files
 
@@ -34,7 +37,9 @@ committed output predates the current default of 5760.
 | `1_fail_2_pass_3_pass_A.mp4` | Step 1 skipped — **the O-ring is never fitted**, though the rings sit on the mat throughout. 7.5 MB. |
 | `oring-numbered.txt` | The 3-step SOP both clips were run against, one step per line. |
 | `tva-output-1_pass_2_pass_3_pass_A.json` | Three `PASSED` verdicts with timestamps and reasons. 678 bytes. |
-| `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproducible — its clip ships. |
+| `tva-output-1_pass_2_pass_3_pass_A-FALSE-FAIL.json` | **The same clip on the 2026-10-15 blueprint**: step 3 `FAILED` on a wrench that visibly tightens the cap, with an invented reason (a plastic bag that is not in the clip). Reproduced identically by two clients. |
+| `tva-output-1_fail_2_pass_3_pass_A-FALSE-PASS.json` | **The failure you cannot detect from the output.** Step 1 `PASSED` on a clip where the O-ring was never fitted, with an invented reason. Reproduced before 2026-10-15; the current blueprint catches this clip. |
+| `tva-output-1_fail_2_pass_3_pass_A-CORRECT-MISSING.json` | **The same clip on the 2026-10-15 blueprint**: step 1 correctly `MISSING`. Across six O-ring takes measured on that blueprint, though, five still pass — this take is the exception. |
 | `tva-output-1_pass_2_pass_3_fail_A-CORRECT-MISSING.json` | The **same clip at an adequate budget**: steps 1–2 `PASSED`, step 3 correctly `MISSING` — *"no wrench is introduced"*. This is what the shipped default returns. |
 | `tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.json` | The **same clip at `max_new_tokens: 2048`**: `results: []` — 44 bytes, `job.completed`, no ERROR row. What an exhausted reasoning budget returns. |
 
@@ -46,7 +51,8 @@ committed output predates the current default of 5760.
 | `1_fail_2_pass_3_pass_A-FALSE-PASS` | the O-ring — **on the mat throughout, untouched** | `PASSED` ❌ |
 
 Neither action happens in its clip. The only difference is whether the **object** is on
-screen.
+screen. (Both outputs predate 2026-10-15. The current blueprint catches this particular
+O-ring take, but still passes five of the six measured.)
 
 The model reliably answers **"is this thing in the video at all?"** — and when the
 object is present, it assumes the action happened. A workstation has its parts laid
@@ -90,17 +96,15 @@ Note what does *not* fix it: raising the budget. That WARN suggests it, and on t
 clips 8192 and 16384 both returned nothing where 5760 returned correct verdicts. Read
 the `dropping N` count instead — see SKILL.md.
 
-## Every output here is reproducible
+## What each clip reproduces today
 
-| clip | reproduces |
-|---|---|
-| `1_pass_2_pass_3_pass_A.mp4` | the 3-`PASSED` output |
-| `1_pass_2_pass_3_fail_A.mp4` | a correct `MISSING` at the default, **and** the empty result at `--max-new-tokens 2048` |
-| `1_fail_2_pass_3_pass_A.mp4` | **the false pass** |
+On the 2026-10-15 blueprint, at the shipped default of 5760:
 
-The remaining nine labelled takes, a batch sweep and an offline scorer are in the worked
-example:
-[task-verification-agent-example](https://github.com/archetypeai/task-verification-agent-example).
+| clip | reproduces | before 2026-10-15 |
+|---|---|---|
+| `1_pass_2_pass_3_pass_A.mp4` | **the false fail** | the 3-`PASSED` output |
+| `1_pass_2_pass_3_fail_A.mp4` | a correct `MISSING` | the same, **and** the empty result at `--max-new-tokens 2048` (not re-tested since) |
+| `1_fail_2_pass_3_pass_A.mp4` | a correct `MISSING` | **the false pass** |
 
 ## Ground truth in the filename
 
@@ -114,8 +118,8 @@ Two cautions about scoring against labels like these:
 - **A binary label cannot express `FAILED` vs `MISSING`.** Both mean "not done
   correctly", but they are different claims — attempted-and-wrong versus
   never-happened. Every failure in these clips is an omission, so `MISSING` is the
-  status that matches the video, and **`FAILED` has never once been emitted** across
-  12 clips.
+  status that matches the video. **`FAILED` was never emitted before 2026-10-15**; since
+  then it has appeared only on steps that were performed correctly.
 - **An all-pass clip cannot validate a detector.** Three `PASSED` verdicts on a clip
   where everything was done correctly is exactly what a model that always answers
   `PASSED` would produce. `--score` says so when every label is `pass`.
