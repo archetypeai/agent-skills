@@ -2,8 +2,8 @@
 
 Mocks urllib at the request boundary, so these run with NO credentials and
 NO network. They lock in the verified invariants:
-  * The agent API is versionless: any /vX.Y suffix on ATAI_API_ENDPOINT is
-    stripped before mounting /agents (the files API keeps its own /v0.5).
+  * Every surface lives under one /api prefix: any /api or /vX.Y suffix on
+    ATAI_API_ENDPOINT is stripped before appending /api.
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
     endpoint.
   * The pre-packaged bundle is resolved by EXACT name via
@@ -45,11 +45,9 @@ STATES = {"drilling", "reaming", "off_bottom", "in_slips", "trip_in_slips", "shu
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """Each API surface gets its own client, mounted where the platform serves it.
+    """One client at <root>/api serves both surfaces (/api/agents, /api/files).
 
-    Files are versioned (/v0.5/files), the agents API is versionless
-    (/agents), so no single api_endpoint serves both. Both .env conventions in
-    this repo must reduce to the same root.
+    Every endpoint form in use (bare, /v0.5, /api) must reduce to the same root.
     """
 
     ROOT = "https://platform.u1.archetypeai.app"
