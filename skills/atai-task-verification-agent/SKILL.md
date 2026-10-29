@@ -487,6 +487,65 @@ Measured on production with the 2026-10-15 blueprint, 13 runs on 2026-10-26:
 
 **Do not count on these jobs being serialized — or on them running in parallel.** Whether concurrent submissions queue depends on what else is running on the deployment at that moment. Both have been observed: one pod waited 7 minutes and started **3 seconds** after the previous finished; on 2026-10-26 twelve submissions ran **two at a time**, each new pod starting within 2 s of one of the pair finishing. Other tenants' workloads aren't visible to you, and `/logs` carries no node or GPU field, so neither is a guarantee. Submit one at a time unless you have measured otherwise.
 
+[Agent serving](#agent-serving--load-once-query-many-preview-dev-only) pays the load once for many clips, but is not on production yet.
+
+## Agent serving — load once, query many (preview, dev only)
+
+> **Not on production.** As of 2026-10-28 agent serving runs only on Archetype AI's
+> dev deployment. Everything below was measured there, on 2026-10-26 to -28, with the
+> 12 clips and 3-step O-ring SOP above, and will change before it ships. On
+> production, use the batch run above.
+
+A batch run downloads and loads the model for **every** clip. A serving agent runs the same `tva` bundle, loads once, and then answers one request per clip in about 3 s:
+
+```
+POST {endpoint}/agents/bundles/{bundle_id}/run      {"mode": "serving"}   → {"id": "agt_…"}
+GET  {endpoint}/agents/instances/{agent_id}         poll until "status": "running"
+POST {endpoint}/agents/instances/{agent_id}/query
+     {"model": "tv", "query": "<the SOP's text>", "file_ids": ["base64:<the mp4's bytes>"]}
+→ 200 {"response": {"data": [{"step": 0, "status": "PASSED", "timestamp_start": …,
+                              "timestamp_end": …, "frame_start": …, "frame_end": …,
+                              "reason": "…"}, …]}}
+POST {endpoint}/agents/instances/{agent_id}/cancel
+```
+
+No uploads and no connectors. The SOP travels in `query`, so one agent still serves every SOP; the video goes inline. The bundle is created exactly as in Step 3. The rows are batch's rows — 0-based, `MISSING` without timestamps, extra rows possible — but under `response.data`, not `{"id", "results"}`.
+
+**What it costs**, 12 clips of 21–43 s:
+
+| | wall clock |
+|---|---|
+| batch, production, 2026-10-26 | 51 min (12 jobs of 488–729 s, two at a time) |
+| serving, load once per agent | **657–929 s** across eight agents (once 1,385 s); none downloading |
+| serving, one query | **2–5 s** |
+| **serving, all 12 whole clips** | **11.6–12.9 min**, almost all of it the load |
+
+**Same score, different mistakes.** Whole clips have to be re-encoded to fit the request cap (640×480, CRF 28, no audio: 0.6–1.4 MB). Served that way, the 12 clips scored 28/36, as batch on production did, but three clips changed verdict — batch's only caught O-ring among them. One clip compared both ways on the original bytes matched batch exactly, so the re-encode is the likelier cause; that is not settled. Don't swap batch for serving and expect the same verdicts clip for clip.
+
+**Chunking, which serving makes cheap.** A 4 s chunk of these clips fits the cap as the clip's own bytes (`-c copy` on keyframes), so each clip can go as 5–11 queries on the same agent, each verified against the **whole SOP**. Most steps come back `MISSING` in most chunks; merge per step:
+
+| merge rule | a step is | overall, 4 s chunks | overall, 10 s chunks (4 s overlap) |
+|---|---|---|---|
+| `any` | `PASSED` if any chunk passed it | **30/36** | **30/36** |
+| `longest` | the verdict with the longest interval | 30/36 | 30/36 |
+| `majority` | the commoner of `PASSED`/`FAILED`, a tie `FAILED` | 28/36 | 30/36 |
+| `strict` | `FAILED` if any chunk failed it | 26/36 | 28/36 |
+
+- **It fixes false FAILs on steps that were done.** All three wrench uses that the whole clip rejected pass under `any`, and all three wrench omissions still come back `MISSING`: a chunk that contains the tightening shows it, where a whole clip was judged on its end state.
+- **It makes the presence blind spot complete.** 0 of 6 omitted O-rings caught at 4 s and at 10 s, against 1 of 6 in batch: every chunk shows the O-ring on the table, so each is another chance to pass it (§1). The gain is all on the step that matters least for QA.
+- **Chunks return malformed answers more often.** A 4th row for a 3-step SOP, or a step left out. Score only the SOP's steps and treat a missing row as "this chunk did not see it".
+
+**Limits, as of 2026-10-28:**
+
+- **One GPU agent at a time.** A second fails within a minute with *"no worker is free"*. Cancel yours when done, Ctrl-C included.
+- **The whole request is capped at 2 MiB** — about 1.5 MB of video after base64.
+- **Each query has a 58 s budget**, then `504 query_timeout`. None hit it here (TVA answers in ~3 s), but retry 5xx, and set a client-side timeout (~90–120 s): on 2026-10-26 one query never returned at all.
+- **An agent with no query for 20 minutes is released**, and every later query gets a `409` (since 2026-10-27 it should say `… released after 20 minutes without a query; run the agent again`). A hung request is not activity — that hung query cost its agent. Stop on a 409 and start a new agent.
+- **A bad video fails only its own query** (since 2026-10-28) — a `400` naming the problem — and the agent answers the next one. A 35-frame chunk, which on 2026-10-26 ended the agent, is now padded and answered (checked with an MGA serving agent).
+- **`/logs` shows the load as it happens**: *"Still loading newton-fusion-1-0 model after 4min0s"* once a minute, then the warm-up. Unlike batch, the `status` field was reliable here: wait for `running`.
+- **Answers were reproducible.** Repeated queries to one agent were identical, and on 2026-10-28 all three sweeps (whole clips, 4 s and 10 s chunks; 146 queries) returned byte-identical answers on fresh agents to those of 2026-10-26.
+- **To delete the bundle afterwards, delete the agent first.** `DELETE /agents/bundles/{id}` returns `409 … still referenced by existing runs` while the run exists; `DELETE /agents/instances/{id}` (which removes the run — see [Cleanup](#cleanup)) then the bundle both return 204.
+
 ## Common Pitfalls
 
 | Symptom | Cause |
