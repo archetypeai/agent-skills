@@ -93,29 +93,29 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   predictions, and the promoted detector (`aar_…`) has no download route. Running the library
   files in batch at the trial's step recomputes the fit's reference windows (2,280 for TEP).
 
-## Agent serving (Dev 2026-10-15; Staging 2026-10-23)
+## Agent serving (production 2026-10-29; first on Dev 2026-10-15, Staging 2026-10-23)
 
-- **Dev has 3 serving workers, shared by everyone.** A running serving agent holds one until
+- **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
   it is cancelled, or released after 20 minutes without a query; a query to a released agent
   answers 409.
 - **The promoted blueprint is served as it is.** It reads and writes CSV; run in serving mode,
-  the platform supplies an `atai-records` serving source and sink in their place (atai_core
-  #7286), so a bundle of it with `step_size` 1 is all serving needs. Earlier versions of
-  serve.py made a `<key>-served-records` copy with those connectors; creating a blueprint now
-  takes the admin role on Staging, and a copy made before the connector change is refused.
+  the platform supplies an `atai-records` serving source and sink in their place, so a bundle
+  of it with `step_size` 1 is all serving needs. Earlier versions of serve.py made a
+  `<key>-served-records` copy with those connectors; a copy made before the connector change
+  is refused.
 - **Staging (2026-10-23):** the TEP quickstart's replay matched batch on 1,826 / 1,826 windows
   at **~2.6 s median per query**, about three times Dev's and RED's or OSM's ~0.9 s there.
 - **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
   the samples 0, 1, 2… itself and answers with sample indices for `start_timestamp` and
   `finish_timestamp`; records come back with their keys in alphabetical order.
-- **Served equals batch to float32 noise.** Three detectors, 1,826 windows each (the two TEP
-  examples and this skill's sample): every label and every first alarm identical, scores
-  within 3×10⁻⁵ relative, except one window in each k-5 detector, 1.6–2% off and the same on
-  every rerun (most likely a neighbour swap; the k-10 full example had none). Served
-  embeddings differ from batch by about 2×10⁻⁴ relative.
-- **The latency tail depends on Dev's load:** the sample's replay had a median of 836 ms but
-  a p95 of 3.1 s and a 30 s worst query, where the TEP replays had p95 under 1 s.
-- **Latency: ~0.8 s median per one-window query** (p95 under 1 s; about 0.9 s with `output_embeddings`);
+- **Served equals batch to float32 noise.** On production (2026-10-29) the sample and the TEP
+  quickstart, 1,826 windows each, matched batch on every label, score (within 4×10⁻⁵
+  relative) and first alarm. On Dev (2026-10-15) one window in each k-5 replay was 1.6–2% off,
+  its label unchanged (most likely a neighbour swap). Served embeddings differ from batch by
+  about 2×10⁻⁴ relative.
+- **Latency: ~0.9 s median per one-window query on production** (sample: 907 ms, p95 1.0 s,
+  worst 2.0 s; the TEP quickstart 928 ms). Free-trial accounts serve on CPU only and can be
+  slower. A busy Dev stretched the sample's tail to a 3.1 s p95 and a 30 s worst query.
   16 windows per query took 11 s, 13% less per window.
 - **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
   is silently ignored, so pick the serving agents client-side (`select(.mode=="serving")`).

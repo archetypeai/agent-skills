@@ -10,7 +10,7 @@ description: >
   fit and score settings with the Optimizations API, promote the best trial to a
   blueprint, test it once with the Evals API, deliver it as a bundle and score
   detection, delay and false alarms, then serve it a window at a time over
-  `/query` (agent serving, Dev and Staging only) and check it against the delivery. Use when the user wants to flag "this no
+  `/query` (agent serving) and check it against the delivery. Use when the user wants to flag "this no
   longer looks like normal operation" from **normal-only reference data** — no
   fault library, no labelled examples of the thing being detected. Covers the
   output schema, the validation settings that silently invalidate every window
@@ -82,10 +82,10 @@ inputs abort and why only one feature mode is reachable.
 |---|---|---|
 | you have | a prepared CSV (the bearing sample, or data like it) | normal-operation recordings of **your** asset, and a few labelled incidents |
 | you get | per-window scores from a detector fitted on **one bearing's** healthy baseline | your own blueprint and bundle, fitted on your normal data and chosen on your incidents, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), on the official `archetypeai` client | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
 
 The Quick Start detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -700,7 +700,7 @@ calibration: 4,565 known-normal windows; 1.51% over the trial's threshold; thres
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
 
-## Step 5 — Serve it (Dev and Staging only)
+## Step 5 — Serve it
 
 ```sh
 python serve.py --roles $R --out out --recordings normal_48h_run43 idv05_run3   # ~25 min
@@ -709,15 +709,13 @@ python serve.py --roles $R --out out --windows-per-query 16                     
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a live system would ask about
-the latest `window_size` samples. It is on Dev and Staging only for first tests, with a few
-serving workers shared by everyone.
+the latest `window_size` samples. A running serving agent holds a serving worker until it is
+stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
 
 1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
    a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
    No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
    supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
-   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
-   admin role on Staging.)
 2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
@@ -737,27 +735,24 @@ serving workers shared by everyone.
    (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
    for `cleanup.py`.
 
-**Expect, on the sample** (Dev, 2026-10-15; ~25–40 min, depending on Dev's load):
+**Expect, on the sample** (production, 2026-10-29; ~30 min):
 
 ```
-served 1,826 windows of 2 recording(s) in 1,826 queries, 2423 s
-  against the delivery (batch): predicted_label identical 1,826/1,826, anomaly_score within 1e-4 1,825/1,826 (max relative difference 1.6e-02); invalid 0
-  latency per query: median 836 ms, p95 3085 ms, max 30158 ms
+served 1,826 windows of 2 recording(s) in 1,826 queries, 1693 s
+  against the delivery (batch): predicted_label identical 1,826/1,826, anomaly_score within 1e-4 1,826/1,826 (max relative difference 1.3e-05); invalid 0
+  latency per query: median 907 ms, p95 1014 ms, max 1980 ms
   normal_48h_run43   first sustained alarm: served a false alarm 37.15 h in; batch a false alarm 37.15 h in
   idv05_run3         first sustained alarm: served 0.15 h after onset; batch 0.15 h after onset
 ```
 
-The one window off is `normal_48h_run43`'s window 168: 1.0243 served against 1.0082 in batch,
-`normal` both ways. Every other score is within 2.2×10⁻⁵ relative.
-
-**Measured on the TEP examples (Dev, 2026-10-15)**, 1,826 windows, a fault-free and an IDV 5
-run: labels identical to batch on 1,826 / 1,826 in both examples, scores within 3×10⁻⁵
-relative but one, every first alarm identical, **~0.8 s median per query** (p95 under 1 s;
-a busy Dev stretches the tail, as in the sample's 3 s p95). **Expect one window in a few
-thousand to be off by 1–2%** with a k-5 detector: one in the quickstart, one in the sample,
-each the same on every rerun and with its label unchanged. A 5th-nearest neighbour is likely
-swapped by the ~2×10⁻⁴ difference between served and batch embeddings; k 10 (the full
-example) showed none. **One window per query is the way to serve it:** 16 per query took 11 s
+**Measured on production (2026-10-29)**, the sample and the TEP quickstart, 1,826 windows
+each, a fault-free and a faulty run: every label, every score (within 4×10⁻⁵ relative) and
+every first alarm identical to batch, at **~0.9 s median per query** (p95 about 1 s).
+**A score can now and then be off by 1–2%** with a k-5 detector, its label unchanged: on Dev
+(2026-10-15) one window in each of those replays was, here `normal_48h_run43`'s window 168,
+1.0243 served against 1.0082 in batch. A 5th-nearest neighbour is likely swapped by the
+~2×10⁻⁴ difference between served and batch embeddings. **One window per query is the way to
+serve it:** 16 per query took 11 s
 each and saved 13% of the time, at the cost of waiting for 15 more samples before asking.
 For stored data, deliver in batch.
 
