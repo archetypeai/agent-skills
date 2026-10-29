@@ -84,7 +84,7 @@ inputs abort and why only one feature mode is reachable.
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), on the official `archetypeai` client | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (AD support in these APIs landed there on 2026-10-12) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
 
 The Quick Start detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -606,10 +606,10 @@ python promote_and_test.py --roles $R --out out --name ad-sample
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, every test file and
    `emit_predictions: true`. An eval takes no value overrides: it runs at the trial's own
    threshold and step.
-3. **Check before reporting:** every prediction's gold label equals the sidecar's at the
-   window's last row (windows tile each file from row 0 at `step_size`; `row_index` counts
-   across the whole eval, so a window's place is its rank within its file), and the offline
-   confusion matrix equals the platform's.
+3. **Check before reporting:** every prediction's `expected` label equals the sidecar's at
+   the window's last row (windows tile each file from row 0 at `step_size`; a window's place
+   is its rank within its file by `key.predicted`, its [start, end] in epoch seconds), and
+   the offline confusion matrix equals the platform's.
 
 **Expect, on the sample** (~3–8 min for the eval):
 
