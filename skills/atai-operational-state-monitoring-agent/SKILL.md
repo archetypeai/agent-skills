@@ -42,7 +42,7 @@ either.
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1–2 min on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | verified on production | **verified on production, staging (2026-10-01) and dev (2026-09-30), identical results** |
+| status | verified on production | **verified on production (2026-10-28, under `/api`), staging (2026-10-01) and dev (2026-09-30), identical results** |
 
 Path 2's last step *is* Path 1, run on your own bundle instead of the maintained one, so the
 output schema, polling, pitfalls and cleanup below apply to both.
