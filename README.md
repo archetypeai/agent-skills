@@ -81,6 +81,7 @@ The agent lifecycle end to end on real data, over the Agents API (Python scripts
 | Example | Skills | What it demonstrates |
 |---------|--------|----------------------|
 | [LARCO washing-machine quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart) | `atai-operational-state-monitoring-agent` + `atai-operational-state-monitoring-agent-data-prep` | LARCO washing-machine vibration (9 channels, 200 Hz) → an OSM agent fitted on the platform: an Optimizations search over windowing and kNN settings, the best trial promoted to a blueprint, one Evals test, then a bundle delivered to a second machine and scored against its held-back labels (fill / wash / spin / drain). Test macro-F1 0.86, delivery 0.77. |
+| [TEP chemical-plant quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart) | `atai-anomaly-discovery-agent` | Tennessee Eastman Process (33 process variables, a sample every 3 minutes) → an AD agent fitted on **normal operation only**: an Optimizations search, the best trial promoted to a blueprint, one Evals test on faults it has never seen, a bundle delivered over 84 more plant runs and scored against their held-back labels, then the same blueprint served a window per query (agent serving) and checked against the delivery. Test anomaly F1 0.87; delivery: 78% of fault windows flagged at a 1% false-alarm threshold, AUROC 0.90. |
 
 ## Quick Start
 
