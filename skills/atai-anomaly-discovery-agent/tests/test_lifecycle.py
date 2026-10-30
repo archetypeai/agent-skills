@@ -286,5 +286,40 @@ class DeliverResume(unittest.TestCase):
         self.assertEqual(len(one), 9)
 
 
+class QueryRetry(unittest.TestCase):
+    """A serving query is retried after a timeout; any other POST is not (it could duplicate)."""
+
+    def run_request(self, **kw):
+        calls = []
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def urlopen(req, timeout):
+            calls.append(req)
+            if len(calls) == 1:
+                raise TimeoutError("The read operation timed out")
+            return Resp()
+        with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k"}), \
+                mock.patch.object(atai_http.urllib.request, "urlopen", urlopen), \
+                mock.patch.object(atai_http.time, "sleep", lambda s: None):
+            return atai_http.request("POST", "https://x/api/agents/instances/a/query", {"data": []}, **kw), calls
+
+    def test_an_idempotent_post_is_retried(self):
+        answer, calls = self.run_request(idempotent=True)
+        self.assertEqual((answer, len(calls)), ({"ok": True}, 2))
+
+    def test_a_plain_post_is_not(self):
+        with self.assertRaises(TimeoutError):
+            self.run_request()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -155,9 +155,10 @@ def _retrying(send, what, retry_http=True, only_unsent=False):
         delay = min(delay * 2, 60)
 
 
-def request(method, url, body=None):
+def request(method, url, body=None, idempotent=None):
     """JSON request. GETs retry through outages; POSTs retry only a connection that never
-    reached the server (a repeat of a delivered POST could duplicate an optimization)."""
+    reached the server (a repeat of a delivered POST could duplicate an optimization),
+    unless idempotent=True (a serving query: a repeat only asks again)."""
     data = json.dumps(body).encode() if body is not None else None
 
     def send():
@@ -167,8 +168,8 @@ def request(method, url, body=None):
             req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read() or b"null")
-    get = method == "GET"
-    return _retrying(send, f"{method} {url}", retry_http=get, only_unsent=not get)
+    retry = method == "GET" if idempotent is None else idempotent
+    return _retrying(send, f"{method} {url}", retry_http=retry, only_unsent=not retry)
 
 
 def upload_file(path, name=None):

@@ -166,7 +166,7 @@ def main(argv=None):
             for k, count in chunks(firsts, window, wpq):
                 t = time.time()
                 answer = request("POST", f"{agents()}/instances/{ex['agent']}/query",
-                                 query_body(X[firsts[k]:firsts[k] + count * window]))
+                                 query_body(X[firsts[k]:firsts[k] + count * window]), idempotent=True)
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:
