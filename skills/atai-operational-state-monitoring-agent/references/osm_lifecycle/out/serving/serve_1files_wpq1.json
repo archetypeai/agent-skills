@@ -1,0 +1,91 @@
+{
+ "blueprint": "osm-sample-w512-s512-cosine-k5-uniform-g19j5x",
+ "files": [
+  "becken-flt_warm_fast-15_2__seg0.csv"
+ ],
+ "windows": 367,
+ "windows_per_query": 1,
+ "queries": 367,
+ "same_state": 367,
+ "same_p": 367,
+ "max_p_diff": 0.0,
+ "invalid": 0,
+ "served": {
+  "macro_f1": 0.7431,
+  "f1": {
+   "drain": 0.8047,
+   "fill": 0.8378,
+   "spin": 0.7114,
+   "wash": 0.6186
+  },
+  "confusion": [
+   [
+    68,
+    0,
+    8,
+    8
+   ],
+   [
+    0,
+    93,
+    0,
+    33
+   ],
+   [
+    11,
+    0,
+    53,
+    14
+   ],
+   [
+    6,
+    3,
+    10,
+    60
+   ]
+  ],
+  "windows": 367
+ },
+ "batch": {
+  "macro_f1": 0.7431,
+  "f1": {
+   "drain": 0.8047,
+   "fill": 0.8378,
+   "spin": 0.7114,
+   "wash": 0.6186
+  },
+  "confusion": [
+   [
+    68,
+    0,
+    8,
+    8
+   ],
+   [
+    0,
+    93,
+    0,
+    33
+   ],
+   [
+    11,
+    0,
+    53,
+    14
+   ],
+   [
+    6,
+    3,
+    10,
+    60
+   ]
+  ],
+  "windows": 367
+ },
+ "latency_ms": {
+  "median": 453,
+  "p95": 519,
+  "max": 616
+ },
+ "replay_s": 174
+}
