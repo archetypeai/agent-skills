@@ -71,7 +71,8 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   most N windows (`--max-windows-per-run 1000`: 12 runs of 24–34 min, 2 h 15 min in all, the
   production scores exactly).
   `serve.py` replays at the delivery's step: at step 8 there, 805/805 windows matched batch
-  (score within 2e-7, the same first alarms) at a 768 ms median per query. A rerun of
+  (score within 2e-7, the same first alarms) at a 768 ms median per query, and at step 1, on
+  the delivery made in 1,000-window runs, 1,826/1,826 in 27 min (851 ms median). A rerun of
   `deliver.py` starts a new agent for a file whose agent failed.
 - **An eval takes a blueprint and no value overrides.** Whatever you set through bundle
   values (a delivery threshold, a stride) cannot be evaluated; the eval runs at the

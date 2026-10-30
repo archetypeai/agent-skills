@@ -157,8 +157,8 @@ def main(argv=None):
             for k in range(0, n, wpq):
                 count = min(wpq, n - k)
                 t = time.time()
-                answer = request("POST", f"{agents()}/instances/{ex['agent']}/query",
-                                 query_body(X[first + k * step:first + (k + count - 1) * step + window]))
+                chunk = X[first + k * step:first + (k + count - 1) * step + window]
+                answer = request("POST", f"{agents()}/instances/{ex['agent']}/query", query_body(chunk), idempotent=True)
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:

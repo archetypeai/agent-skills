@@ -154,7 +154,7 @@ def main(argv=None):
                 lo = first + k
                 t = time.time()
                 answer = request("POST", f"{agents()}/instances/{ex['agent']}/query",
-                                 query_body(X[lo:lo + window + count - 1]))
+                                 query_body(X[lo:lo + window + count - 1]), idempotent=True)
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:
