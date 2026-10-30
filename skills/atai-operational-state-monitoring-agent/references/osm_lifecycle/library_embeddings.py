@@ -118,23 +118,28 @@ def project(X, codes, k=50, shrink=1e-3):
     windows nearest their own state's centre in 2-D."""
     codes = np.asarray(codes)
     states = np.unique(codes)
-    Xn = X / np.linalg.norm(X, axis=1, keepdims=True)
-    mean = Xn.mean(axis=0)
-    Xc = Xn - mean
-    # PCA through the n x n Gram matrix: the windows are fewer than the dimensions
-    eigval, eigvec = np.linalg.eigh(Xc @ Xc.T)
-    top = np.argsort(eigval)[::-1][:min(k, len(X) - 1)]
-    k = len(top)
-    P = (Xc.T @ eigvec[:, top]) / np.sqrt(eigval[top])           # unit principal axes, [dim, k]
-    Z = Xc @ P
-    m = np.array([Z[codes == i].mean(axis=0) for i in states])
-    Sw = sum((Z[codes == i] - m[j]).T @ (Z[codes == i] - m[j]) for j, i in enumerate(states))
-    Sw += shrink * np.trace(Sw) / k * np.eye(k)
-    Sb = sum((codes == i).sum() * np.outer(m[j] - Z.mean(0), m[j] - Z.mean(0)) for j, i in enumerate(states))
-    w, V = np.linalg.eig(np.linalg.solve(Sw, Sb))
-    A = P @ V[:, np.argsort(-w.real)[:2]].real                    # [dim, 2]
-    A /= (Xc @ A).std(axis=0)
-    ref = Xc @ A
+    # NumPy 2.2 on macOS warns "overflow/invalid in matmul" on finite inputs (fixed in 2.3,
+    # which needs Python 3.11+): silence that, and check the result is finite instead
+    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+        Xn = X / np.linalg.norm(X, axis=1, keepdims=True)
+        mean = Xn.mean(axis=0)
+        Xc = Xn - mean
+        # PCA through the n x n Gram matrix: the windows are fewer than the dimensions
+        eigval, eigvec = np.linalg.eigh(Xc @ Xc.T)
+        top = np.argsort(eigval)[::-1][:min(k, len(X) - 1)]
+        k = len(top)
+        P = (Xc.T @ eigvec[:, top]) / np.sqrt(eigval[top])       # unit principal axes, [dim, k]
+        Z = Xc @ P
+        m = np.array([Z[codes == i].mean(axis=0) for i in states])
+        Sw = sum((Z[codes == i] - m[j]).T @ (Z[codes == i] - m[j]) for j, i in enumerate(states))
+        Sw += shrink * np.trace(Sw) / k * np.eye(k)
+        Sb = sum((codes == i).sum() * np.outer(m[j] - Z.mean(0), m[j] - Z.mean(0)) for j, i in enumerate(states))
+        w, V = np.linalg.eig(np.linalg.solve(Sw, Sb))
+        A = P @ V[:, np.argsort(-w.real)[:2]].real                # [dim, 2]
+        A /= (Xc @ A).std(axis=0)
+        ref = Xc @ A
+    if not (np.isfinite(A).all() and np.isfinite(ref).all()):
+        sys.exit("the projection is not finite: check the embeddings for NaN or all-zero windows")
     centroids = np.array([ref[codes == i].mean(axis=0) for i in states])
     nearest = states[((ref[:, None] - centroids[None]) ** 2).sum(-1).argmin(1)]
     return mean, A.T, ref, float((nearest == codes).mean())
