@@ -7,13 +7,19 @@ metric, `events` and `background`, and a bundle's values override its blueprint'
 adds only one prediction per row (--step to change). Then POST
 /agents/bundles/{id}/run per delivery file, --parallel at a time.
 
+--max-windows-per-run N splits a longer file into runs of at most N windows, for a
+deployment that caps a run's time (the free trial: 2 hours). Each run's rows overlap the
+next by window - step, so every window lies whole in one run; the runs' outputs are joined
+into the file's, the same windows as one run gives. Off by default: a run per file.
+
 Each output is downloaded again every 15 s until its last window reaches the input's last
 timestamp: a run can report `completed` while its output is still being written. A
 network outage is waited out (every 60 s, up to an hour), not counted as a failed file.
 
-Writes <out>/delivery/<file>.csv and <out>/deliver_state.json (resume: finished outputs
-are skipped, running agents are polled, not started again; a file whose agent failed
-or was cancelled without a complete output gets a new agent).
+Writes <out>/delivery/<file>.csv (split runs' inputs and outputs in <out>/delivery-runs/)
+and <out>/deliver_state.json (resume: finished outputs are skipped, running agents are
+polled, not started again; a file whose agent failed or was cancelled without a complete
+output gets a new agent).
 
     python deliver.py --roles roles --out out --name red-sample
 """
@@ -43,6 +49,36 @@ def last_ts(path, col):
     with open(path) as fh:
         header = fh.readline().strip().split(",")
     return float(line.split(",")[header.index(col)])
+
+
+def pieces(rows, window, step, max_windows):
+    """[(first row, end row)] of each run of a file. A file of more than max_windows windows
+    is split into runs of at most that many: each starts on a multiple of the step and
+    overlaps the next by window - step rows, so every window lies whole in one run and the
+    runs' outputs, joined, are the file's. One run when max_windows is 0 or the file fits."""
+    n = (rows - window) // step + 1
+    if not max_windows or n <= max_windows:
+        return [(0, rows)]
+    return [(k * step, min(rows, (k + max_windows - 1) * step + window)) for k in range(0, n, max_windows)]
+
+
+def join(parts, dst, window, step):
+    """Concatenate the runs' outputs into dst; exit unless each run gave its windows, in order."""
+    header, rows = None, []
+    for (first, end), path in parts:
+        with open(path) as fh:
+            r = csv.reader(fh)
+            header = next(r)
+            got = list(r)
+        if len(got) != (end - first - window) // step + 1:
+            sys.exit(f"{path}: {len(got)} windows for rows {first}-{end}, expected {(end - first - window) // step + 1}")
+        rows += got
+    fin = [float(x[header.index("finish_timestamp")]) for x in rows]
+    if any(b <= a for a, b in zip(fin, fin[1:])):
+        sys.exit(f"{dst}: the joined windows are not in time order")
+    with open(dst + ".part", "w", newline="") as fh:
+        csv.writer(fh).writerows([header] + rows)
+    os.replace(dst + ".part", dst)
 
 
 def covered(out_path, source_end):
@@ -107,6 +143,8 @@ def main(argv=None):
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="red")
     ap.add_argument("--step", type=int, default=1, help="step_size for delivery (the trial's, if 0)")
+    ap.add_argument("--max-windows-per-run", type=int, default=0, metavar="N",
+                    help="split a longer file into runs of at most N windows (default 0: a run per file)")
     ap.add_argument("--parallel", type=int, default=3)
     add_background_flag(ap, "{out}/deliver.log")
     a = ap.parse_args(argv)
@@ -141,50 +179,84 @@ def main(argv=None):
         log(f"bundle {b['id']} on {key}: {json.dumps(values)}")
     out_dir = os.path.join(a.out, "delivery")
     os.makedirs(out_dir, exist_ok=True)
+    window = test["blueprint"]["values"]["window_size"]
+    step = state["values"].get("step_size") or test["blueprint"]["values"]["step_size"]
 
-    def one(f):
-        src = os.path.join(a.roles, f["file"])
-        dst = os.path.join(out_dir, os.path.basename(f["file"]))
+    def one(job):
+        """One agent run: job's source to its output (resume: a finished output is kept)."""
+        name, src, dst = job
         if os.path.exists(dst):
             return dst
         runs = state.setdefault("agents", {})
-        if f["file"] not in runs:
+        if name not in runs:
             fid = upload_file(src, f"{a.name}-{os.path.basename(src).replace('.csv', '')}-{stamp()}.csv")["file_id"]
             agent = request("POST", f"{agents()}/bundles/{state['bundle']}/run",
                             {"connectors": {"source": [{"type": "file", "id": fid, "format": "csv"}]}})
             with lock:
-                runs[f["file"]] = agent["id"]
+                runs[name] = agent["id"]
             save()
-            log(f"{f['file']}: agent {agent['id']}")
-        status = poll(runs[f["file"]])
-        got = download(runs[f["file"]], dst, src, m["timestamp_column"])
+            log(f"{name}: agent {agent['id']}")
+        status = poll(runs[name])
+        got = download(runs[name], dst, src, m["timestamp_column"])
         if not got and status in ("failed", "canceled", "cancelled"):   # forget the dead agent: a rerun starts a new one
+            error = str(request("GET", f"{agents()}/instances/{runs[name]}").get("error") or "")
+            if "DeadlineExceeded" in error:
+                log(f"{name}: {error[:200]} A plain rerun hits it again: rerun with --max-windows-per-run N "
+                    f"(the same windows in runs of N, each well under the limit) or --step 0 (the trial's step: "
+                    f"fewer windows, a coarser delay)")
             with lock:
-                del runs[f["file"]]
+                del runs[name]
             save()
-        log(f"{f['file']}: {status}; " + ("output complete" if got else "no complete output: rerun to retry"))
+        log(f"{name}: {status}; " + ("output complete" if got else "no complete output: rerun to retry"))
         return got
 
-    def safe(f):
+    def safe(job):
         for attempt in range(NETWORK_RETRIES + 1):
             try:
-                return one(f)
+                return one(job)
             except Exception as e:   # noqa: BLE001
                 text = f"{type(e).__name__} {e}"
                 if attempt < NETWORK_RETRIES and any(k in text for k in ("URLError", "urlopen", "timed out", "Connection")):
-                    log(f"{f['file']}: network error ({e}); retrying in {NETWORK_WAIT_S} s")
+                    log(f"{job[0]}: network error ({e}); retrying in {NETWORK_WAIT_S} s")
                     time.sleep(NETWORK_WAIT_S)
                     continue
-                log(f"{f['file']}: {text}; rerun to retry")
+                log(f"{job[0]}: {text}; rerun to retry")
                 return None
 
+    jobs, split = [], {}            # split: a file's output -> [((first, end), the run's output)]
+    for f in m["delivery"]:
+        src = os.path.join(a.roles, f["file"])
+        dst = os.path.join(out_dir, os.path.basename(f["file"]))
+        if os.path.exists(dst):
+            continue
+        with open(src) as fh:
+            header, *lines = fh.readlines()
+        parts = pieces(len(lines), window, step, a.max_windows_per_run)
+        if len(parts) == 1:
+            jobs.append((f["file"], src, dst))
+            continue
+        pdir = os.path.join(a.out, "delivery-runs")
+        os.makedirs(pdir, exist_ok=True)
+        stem = os.path.basename(f["file"])[:-4]
+        split[dst] = []
+        for i, (first, end) in enumerate(parts):
+            psrc = os.path.join(pdir, f"{stem}_run{i + 1:02d}.csv")
+            if not os.path.exists(psrc):
+                with open(psrc, "w") as fh:
+                    fh.writelines([header] + lines[first:end])
+            jobs.append((f"{f['file']} rows {first}-{end}", psrc, psrc[:-4] + "_out.csv"))
+            split[dst].append(((first, end), psrc[:-4] + "_out.csv"))
+        log(f"{f['file']}: {len(parts)} runs of at most {a.max_windows_per_run:,} windows")
     with ThreadPoolExecutor(a.parallel) as pool:
-        got = list(pool.map(safe, m["delivery"]))
-    done = sum(1 for g in got if g)
-    log(f"{done} of {len(got)} delivery files have complete outputs in {out_dir}")
-    if done == len(got):
+        list(pool.map(safe, jobs))
+    for dst, parts in split.items():
+        if all(os.path.exists(p) for _, p in parts):
+            join(parts, dst, window, step)
+    done = sum(os.path.exists(os.path.join(out_dir, os.path.basename(f["file"]))) for f in m["delivery"])
+    log(f"{done} of {len(m['delivery'])} delivery files have complete outputs in {out_dir}")
+    if done == len(m["delivery"]):
         print(f"\nnext: python score.py --roles {a.roles} --out {a.out}")
-    return 0 if done == len(got) else 1
+    return 0 if done == len(m["delivery"]) else 1
 
 
 if __name__ == "__main__":

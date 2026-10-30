@@ -210,43 +210,80 @@ class Promote(unittest.TestCase):
             self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
 
 class DeliverResume(unittest.TestCase):
-    """A file whose agent failed without a complete output gets a new agent on the next run."""
+    """A file whose agent failed without a complete output gets a new agent on the next run;
+    a file longer than --max-windows-per-run goes in several runs whose outputs join to its own."""
 
-    def deliver(self, out, status):
+    def deliver(self, status, *args):
         started = []
 
         def fake(method, url, body=None):
+            if method == "GET":
+                return {"error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
             assert url.endswith("/run"), url
             started.append(body)
             return {"id": f"agt_new{len(started)}"}
+
+        def download(agent, dst, src, ts_col):     # a batch output: a window every `step` rows of src
+            if status != "completed":
+                return None
+            ts = pd.read_csv(src)["t"].tolist()
+            rows = [(ts[s + 3], ts[s], "x") for s in range(0, len(ts) - 4 + 1, 2)]
+            pd.DataFrame(rows, columns=["finish_timestamp", "start_timestamp", "predicted"]).to_csv(dst, index=False)
+            return dst
         with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
                                  load_manifest=lambda roles: {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t"},
                                  root=lambda: "https://x", same_deployment=lambda s: True,
                                  agents=lambda: "https://x/api/agents", request=fake,
                                  upload_file=lambda src, name: {"file_id": "fil_1"},
-                                 poll=lambda agent: status, download=lambda *a: None):
-            deliver.main(["--roles", "roles", "--out", out])
-        return started, json.load(open(os.path.join(out, "deliver_state.json")))["agents"]
+                                 poll=lambda agent: status, download=download):
+            deliver.main(["--roles", self.roles, "--out", self.out, *args])
+        return started, json.load(open(os.path.join(self.out, "deliver_state.json")))["agents"]
 
     def setUp(self):
-        self.out = tempfile.mkdtemp()
-        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp"}}),
+        self.out, self.roles = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.roles, "delivery"))
+        pd.DataFrame({"t": range(100, 120), "v": range(20)}).to_csv(os.path.join(self.roles, "delivery", "d.csv"), index=False)
+        # window 4, step 2: 20 rows hold 9 windows
+        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp", "values": {"window_size": 4, "step_size": 2}}}),
                             ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1",
-                                                    "values": {}, "agents": {"delivery/d.csv": "agt_dead"}})):
+                                                    "values": {"step_size": 2}, "agents": {"delivery/d.csv": "agt_dead"}})):
             json.dump(state, open(os.path.join(self.out, name), "w"))
 
     def test_a_failed_agent_is_replaced_on_the_next_run(self):
-        started, runs = self.deliver(self.out, "failed")
+        started, runs = self.deliver("failed")
         self.assertEqual(started, [])                       # this run only polls the dead agent
         self.assertEqual(runs, {})
-        started, runs = self.deliver(self.out, "timeout")      # still running when this run stopped waiting
+        started, runs = self.deliver("timeout")             # still running when this run stopped waiting
         self.assertEqual(len(started), 1)
         self.assertEqual(runs, {"delivery/d.csv": "agt_new1"})
 
     def test_a_completed_or_still_running_agent_is_kept(self):
         for status in ("completed", "timeout"):
-            started, runs = self.deliver(self.out, status)
+            os.makedirs(os.path.join(self.out, "delivery"), exist_ok=True)
+            started, runs = self.deliver(status)
             self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_dead"}))
+
+    def test_pieces(self):
+        self.assertEqual(deliver.pieces(20, 4, 2, 0), [(0, 20)])
+        self.assertEqual(deliver.pieces(20, 4, 2, 9), [(0, 20)])
+        # 9 windows at most 4 a run: windows 0-3, 4-7, 8; each run's rows overlap the next by window - step
+        self.assertEqual(deliver.pieces(20, 4, 2, 4), [(0, 10), (8, 18), (16, 20)])
+        self.assertEqual(deliver.pieces(10, 4, 1, 3), [(0, 6), (3, 9), (6, 10)])
+
+    def test_split_runs_join_to_the_whole_files_output(self):
+        whole = os.path.join(self.out, "delivery", "d.csv")
+        os.makedirs(os.path.dirname(whole))
+        state = json.load(open(os.path.join(self.out, "deliver_state.json")))
+        state["agents"] = {}
+        json.dump(state, open(os.path.join(self.out, "deliver_state.json"), "w"))
+        self.deliver("completed")
+        one = pd.read_csv(whole)
+        os.remove(whole)
+        started, runs = self.deliver("completed", "--max-windows-per-run", "4")
+        self.assertEqual(len(started), 3)
+        self.assertEqual(sorted(r for r in runs if " rows " in r), ["delivery/d.csv rows 0-10", "delivery/d.csv rows 16-20", "delivery/d.csv rows 8-18"])
+        pd.testing.assert_frame_equal(pd.read_csv(whole), one)
+        self.assertEqual(len(one), 9)
 
 
 if __name__ == "__main__":
