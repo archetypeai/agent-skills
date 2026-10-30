@@ -171,7 +171,7 @@ Fit (OSM Path 2: your own labelled data):
 A run can report `completed` before its last output file is fully written (a known platform
 issue): check that an output reaches its input's end before using it, as the OSM runners do.
 
-Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception:** the OSM skill's Path 2 (`references/osm_lifecycle/`) drives the Optimizations, Evals and promote endpoints through a small stdlib HTTP helper of its own, rather than the client's `agents.optimizations` and `agents.evals` namespaces.
+The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception:** the OSM skill's Path 2 (`references/osm_lifecycle/`) drives the Optimizations, Evals and promote endpoints through a small stdlib HTTP helper of its own, rather than the client's `agents.optimizations` and `agents.evals` namespaces.
 
 ## API Base URL
 
