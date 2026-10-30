@@ -657,6 +657,20 @@ each output is downloaded again until its last window reaches the input's end, a
 network outage is waited out instead of failing every file. **Expect, on the sample**
 (~13 min): `2 of 2 delivery files have complete outputs`.
 
+- **If a run hits a time limit** (`DeadlineExceeded`: the free trial stops a run after 2
+  hours, with no output), a plain rerun hits it again. Two ways through, both resumable:
+  - `--max-windows-per-run N`: the same windows, in runs of at most N. Each run starts on a
+    multiple of the step and overlaps the next by window − step rows, and the outputs are
+    joined, so the scores equal one run's. Off by default; production needs it only for
+    recordings far longer than the sample's.
+  - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
+    measured in steps of 8 samples.
+
+  **On the free trial** (2026-10-30, CPU, 3 runs at once): the sample at step 1 stopped at 2 h
+  on both files. With `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min
+  in all, and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min.
+  Queued runs report `running` too; whether queue time counts toward the limit is not known,
+  so keep `--parallel` at 3.
 - **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works
   on a promoted blueprint too: per channel, an `embedding_<channel>` column (768-d) and an
   `embedding_<channel>_features` column (one value per feature), each cell a JSON list in the

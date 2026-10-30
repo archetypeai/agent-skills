@@ -67,7 +67,9 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
   ~13 min on production, was stopped on both files with no output: `DeadlineExceeded: stopped
   after reaching the platform's maximum runtime of 2 hours`. On the free trial, deliver at
-  the trial's step (`deliver.py --step 0`: 2/2 files in 28 min) or split long recordings.
+  the trial's step (`deliver.py --step 0`: 2/2 files in 28 min) or at step 1 in runs of at
+  most N windows (`--max-windows-per-run 1000`: 12 runs of 24–34 min, 2 h 15 min in all, the
+  production scores exactly).
   `serve.py` replays at the delivery's step: at step 8 there, 805/805 windows matched batch
   (score within 2e-7, the same first alarms) at a 768 ms median per query. A rerun of
   `deliver.py` starts a new agent for a file whose agent failed.

@@ -584,6 +584,14 @@ one agent run per delivery file, `--parallel 3` at a time. Each output is downlo
 until its last window reaches the input's end (a run can report `completed` while its
 output is still being written).
 
+- **If a run hits a time limit** (`DeadlineExceeded`: the free trial stops a run after 2
+  hours, with no output), a plain rerun hits it again. `--max-windows-per-run N` delivers the
+  same windows in runs of at most N: each starts on a multiple of the step and overlaps the
+  next by window − step rows, and the outputs are joined, so the result equals one run's.
+  Off by default. The sample (2,654 rows) took 28 min on the free trial, so it doesn't need
+  it; at that rate a recording past ~10,000 rows at step 1 would. A larger `--step` also
+  fits, at a coarser delay.
+
 - **Embeddings from your own classifier.** `output_embeddings: true` in a bundle's values
   works on a promoted blueprint too: per channel, an `embedding_<channel>` column (10 × 768
   on the pump's 10 channels) and an `embedding_<channel>_features` column, each cell a JSON

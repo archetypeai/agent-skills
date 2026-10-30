@@ -70,8 +70,8 @@ on it there.
   Further jobs queue, and a queued one already reports `running`. On 2026-10-30 the sample's
   step-1 delivery (one 2,654-row file) took 28 min there against ~1 min on production, with
   the same scores; serving answered at a 340 ms median, as on production. A longer recording
-  at step 1 can reach the 2-hour limit (`DeadlineExceeded`): deliver it at a larger step or
-  in pieces. A rerun of `deliver.py` starts a new agent for a file whose agent failed.
+  at step 1 can reach the 2-hour limit (`DeadlineExceeded`): deliver it at a larger step
+  (`deliver.py --step N`) or in runs of at most N windows (`--max-windows-per-run N`). A rerun of `deliver.py` starts a new agent for a file whose agent failed.
 - **An eval takes a blueprint and no value overrides:** it runs at the trial's window and step.
 - **Predictions** carry `example`, `expected`, `predicted`, `correct`, `outcome` and `key`:
   no probabilities. `key.predicted` is the window's [start, end] in epoch seconds; order by
