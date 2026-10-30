@@ -11,7 +11,7 @@ description: >
   and distance with the Optimizations API, promote the best trial to a blueprint,
   test it once with the Evals API, deliver it as a bundle, score each incident
   (detected, how soon) and the false alarms, then serve it a window at a time
-  over `/query` (agent serving, Dev and Staging only) and check it against the delivery. Use when the user wants server-side
+  over `/query` (agent serving) and check it against the delivery. Use when the user wants server-side
   detection of a *named* rare event recurring — equipment breakdowns, process
   excursions — from a handful of labelled examples. Covers the output schema,
   the Embeddings variant, what the `red` blueprint exposes since its 2026-10-12
@@ -91,7 +91,7 @@ output is one CSV of per-window predictions.
 | APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), on the official `archetypeai` client | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1.5 min on a clear queue | ~6 min on the sample; longer with load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
 
 The Quick Start classifier holds one pump's two breakdowns, so running your own asset
 through it is a transfer test, not a deployment: for your own asset, take Path 2. Path
@@ -442,9 +442,8 @@ runs the whole build, including the channel-leakage audits this data requires.
 
 # Path 2 — Build a RED agent on your own data
 
-> **Status: verified end to end on dev (2026-10-13)**, where the `red` blueprint became
-> optimizable on 2026-10-12, and on Staging (2026-10-23). Production's `red` blueprint is
-> not optimizable yet (it carries no `metrics`); check a deployment before relying on it there. Built
+> **Status: verified end to end on production (2026-10-28; agent serving 2026-10-29)**,
+> first on dev (2026-10-13, where the `red` blueprint became optimizable on 2026-10-12). Built
 > on the Kaggle pump:
 > [rare-event-detection-agent-example-pump-quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
 > (the whole lifecycle in about 10 minutes, reproduced byte for byte by a second run from
@@ -618,25 +617,23 @@ delivery/inc04.csv: 2,591 windows scored (0 invalid)
 The agent run and the eval agree: the same detection minute and the same 10 false
 alarms, all within 1,024 rows of the breakdown.
 
-## Step 5 — Serve it (Dev and Staging only)
+## Step 5 — Serve it
 
 ```sh
-python serve.py --roles $R --out out                          # the windows within 120 rows of each incident (~8 min)
+python serve.py --roles $R --out out                          # the windows within 120 rows of each incident (~7 min)
 python serve.py --roles $R --out out --whole                  # every window (inc04: 2,591, ~20 min)
 python serve.py --roles $R --out out --windows-per-query 16   # 16 consecutive windows a query
 ```
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a pump's historian would ask
-every minute about the latest `window_size` readings. It is on Dev and Staging only for
-first tests, with a few serving workers shared by everyone.
+every minute about the latest `window_size` readings. A running serving agent holds a serving
+worker until it is stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
 
 1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
    a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
    No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
    supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
-   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
-   admin role on Staging.)
 2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per row:** `POST /agents/instances/{agt}/query` with the latest `window_size`
@@ -659,12 +656,12 @@ first tests, with a few serving workers shared by everyone.
    (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
    for `cleanup.py`.
 
-**Expect, on the sample** (Dev, 2026-10-16; ~8 min, depending on Dev's load):
+**Expect, on the sample** (production, 2026-10-29; ~7 min):
 
 ```
-served 846 windows of 1 file(s) in 846 queries, 450 s
+served 846 windows of 1 file(s) in 846 queries, 423 s
   against the delivery (batch): predicted_state identical 846/846, probabilities within 1e-4 846/846 (max difference 0.0e+00); invalid 0
-  latency per query: median 503 ms, p95 792 ms, max 1573 ms
+  latency per query: median 467 ms, p95 687 ms, max 957 ms
   inc04 (windows ending on rows 904-1749): served +16 rows, 10 false alarm(s); batch +16 rows, 10 false alarm(s)
   -> out/serving/inc04_wpq1.csv / .json
 ```
@@ -672,14 +669,14 @@ served 846 windows of 1 file(s) in 846 queries, 450 s
 The same detection minute and the same 10 false alarms as step 4: all of inc04's false
 alarms lie within 120 rows of the breakdown.
 
-**Measured on the pump examples (Dev, 2026-10-15 and 16)**, breakdowns #4 and #7, 1,162
-windows: every `predicted_state` and every probability identical to batch (max difference 0),
-the same detections (+54 and +60 rows) and the same 45 false alarms, in the full example (twice)
-and in the quickstart. **Served is batch, to the bit:** the head is
+**Measured on production (2026-10-29)**, the sample and the pump quickstart (breakdowns #4
+and #7, 1,162 windows): every `predicted_state` and every probability identical to batch (max
+difference 0), the same detections (+54 and +60 rows) and the same 45 false alarms, as on Dev
+and Staging before. **Served is batch, to the bit:** the head is
 nearest-prototype, so its probabilities are 0 or 1, and the tiny float differences between
-served and batch embeddings change nothing. **~0.35–0.43 s median per query**, depending on
-Dev's load (p95 0.4–0.6 s, a worst query up to 1.9 s), so a replay runs at ~2–3 rows a second
-and 1,162 windows take 7–9 min. With `output_embeddings: true` on the served bundle, each
+served and batch embeddings change nothing. **~0.45 s median per query** (sample: 467 ms,
+p95 0.7 s, worst 1.0 s; the quickstart 436 ms), so a replay runs at ~2 rows a second and
+1,162 windows take about 10 min. With `output_embeddings: true` on the served bundle, each
 answer also carries the window's embeddings (10 × 768), at about 0.3 s a query: what a live
 monitor needs to place each window among the training windows.
 
@@ -689,7 +686,7 @@ monitor needs to place each window among the training windows.
   more rows. For stored data, deliver in batch.
 - **An idle agent is released** after 20 minutes without a query, and a query to it answers
   409: delete it and start a new one. A live monitor paused that long must do the same.
-- **A running serving agent holds one of Dev's 3 workers** until it is deleted. Delete it on
+- **A running serving agent holds a serving worker** until it is deleted. Delete it on
   every way out (signals included), and keep its ids on disk until then.
 
 ## Path 2 pitfalls

@@ -93,28 +93,31 @@ on it there.
   32.5% and 4.0% of the variance and the class means sit where a local encoder's
   prototypes do (to within 0.1 on PC 1).
 
-## Agent serving (Dev 2026-10-15 and 16; Staging 2026-10-23)
+## Agent serving (production 2026-10-29; first on Dev 2026-10-15 and 16, Staging 2026-10-23)
 
-- **Dev has 3 serving workers, shared by everyone.** A running serving agent holds one until
+- **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
   it is cancelled, or released after 20 minutes without a query; a query to a released agent
   answers 409.
 - **The promoted blueprint is served as it is.** It reads and writes CSV; run in serving mode,
-  the platform supplies an `atai-records` serving source and sink in their place (atai_core
-  #7286), so a bundle of it with `step_size` 1 is all serving needs. Earlier versions of
-  serve.py made a `<key>-served-records` copy with those connectors; creating a blueprint now
-  takes the admin role on Staging, and a copy made before the connector change is refused.
+  the platform supplies an `atai-records` serving source and sink in their place, so a bundle
+  of it with `step_size` 1 is all serving needs. Earlier versions of serve.py made a
+  `<key>-served-records` copy with those connectors; a copy made before the connector change
+  is refused.
 - **Staging (2026-10-23):** the pump examples' replays matched batch on every window (316 /
   316 in the quickstart, 1,162 / 1,162 in the full example) at ~0.95 s median per query.
 - **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
   the rows 0, 1, 2… itself and answers with row indices for `start_timestamp` and
   `finish_timestamp`.
+- **Production (2026-10-29):** the sample's 846 windows and the pump quickstart's 1,162
+  matched batch on every state, probability, detection and false alarm.
 - **Served equals batch, to the bit.** The pump examples' 1,162 windows (breakdowns #4 and
   #7) and the 1,023 of the live monitor's demo window, in both examples: every
   `predicted_state` and every probability identical (max difference 0), and the same
   detections and false alarms. The probabilities are 0 or 1 (nearest prototype), so the
   float32 noise between served and batch embeddings changes nothing.
-- **Latency: ~0.35–0.43 s median per one-window query**, depending on Dev's load (p95
-  0.4–0.6 s, worst 1.9 s). `output_embeddings` on the served bundle cost no measurable
+- **Latency: ~0.45 s median per one-window query on production** (sample: 467 ms, p95
+  0.7 s, worst 1.0 s; the quickstart 436 ms). Free-trial accounts serve on CPU only and can be
+  slower. On Dev, 0.35–0.43 s depending on load (p95 0.4–0.6 s, worst 1.9 s). `output_embeddings` on the served bundle cost no measurable
   time (~0.3 s median in the live monitor's runs) and answers each window's 10 × 768
   embeddings too.
 - **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`

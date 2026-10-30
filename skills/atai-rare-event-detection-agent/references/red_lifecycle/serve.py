@@ -8,8 +8,7 @@ delivery files that way and checks every answer against deliver.py's batch outpu
 
   1. a bundle of the promoted blueprint, as it is, at step 1 (bundle values override a
      blueprint's): the platform supplies the serving connectors when it runs a bundle in
-     serving mode, so no served copy of the blueprint is made (creating a blueprint
-     takes the admin role on Staging);
+     serving mode;
   2. that bundle run with {"mode": "serving"};
   3. each file replayed one row at a time: every query holds the latest `window_size`
      rows (--windows-per-query N sends N consecutive windows at once). By default only
@@ -22,7 +21,7 @@ delivery files that way and checks every answer against deliver.py's batch outpu
      cleanup.py finds them after a kill -9.
 
 A served agent keeps nothing between queries, so a query must carry the whole window; the
-timestamps in its answer are row indices within the query. Dev and Staging only for now.
+timestamps in its answer are row indices within the query.
 Needs deliver.py's output at step 1 (its default). Writes <out>/serving/<files>_wpq<N>.csv
 (a row per window) and .json (the summary).
 
@@ -102,9 +101,6 @@ def main(argv=None):
     ap.add_argument("--windows-per-query", type=int, default=1, help=f"1 = live, one window per row; up to {MAX_WPQ}")
     a = ap.parse_args(argv)
     load_dotenv()
-    # match the deployment, not one host: dev is api.dev.* and platform.dev.*, staging platform.stage.*
-    if not any(d in root() for d in (".dev.", ".stage.")):
-        sys.exit("agent serving is on dev and staging only for now")
     check_auth(log)
     m = load_manifest(a.roles)
     test = json.load(open(os.path.join(a.out, "test_state.json")))
