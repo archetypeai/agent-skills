@@ -1,0 +1,56 @@
+{
+ "model": {
+  "optimization": "opt_70p5wyp9419vn9pb0ndaebhy3a",
+  "trial": "otr_2c0bvb6aw694kt9c0pnkg19j5x",
+  "blueprint": {
+   "id": "blp_1w4f8dbpjk96fta359rqh22b3j",
+   "key": "osm-sample-w512-s512-cosine-k5-uniform-g19j5x"
+  },
+  "window": 512,
+  "step": 512,
+  "k": 5,
+  "metric": "cosine",
+  "weights": "uniform"
+ },
+ "eval": "evl_1wyv2qak1g888apxwjh2dvs22k",
+ "macro_f1": 0.8463,
+ "f1": {
+  "drain": 0.8701,
+  "fill": 0.9823,
+  "spin": 0.6031,
+  "wash": 0.9298
+ },
+ "windows": 1076,
+ "confusion": [
+  [
+   67,
+   0,
+   6,
+   0
+  ],
+  [
+   0,
+   111,
+   1,
+   0
+  ],
+  [
+   4,
+   0,
+   79,
+   41
+  ],
+  [
+   10,
+   3,
+   52,
+   702
+  ]
+ ],
+ "class_names": [
+  "drain",
+  "fill",
+  "spin",
+  "wash"
+ ]
+}

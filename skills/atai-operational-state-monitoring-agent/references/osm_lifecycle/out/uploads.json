@@ -1,0 +1,9 @@
+{
+ "u1.archetypeai.app|library/drain__library.csv|16907236|1793256617": "osm-sample-library__drain__library-20261029T065033Z.csv",
+ "u1.archetypeai.app|library/fill__library.csv|16911960|1793256618": "osm-sample-library__fill__library-20261029T065033Z.csv",
+ "u1.archetypeai.app|library/spin__library.csv|16918022|1793256618": "osm-sample-library__spin__library-20261029T065033Z.csv",
+ "u1.archetypeai.app|library/wash__library.csv|16953634|1793256619": "osm-sample-library__wash__library-20261029T065033Z.csv",
+ "u1.archetypeai.app|validation/becken_warm_15-min_40_0__seg0.csv|17330780|1793256620": "osm-sample-validation__becken_warm_15-min_40_0__seg0-20261029T065033Z.csv",
+ "u1.archetypeai.app|test/becken_warm_fast-45_40_0__seg0.csv|48181913|1793256622": "osm-sample-test__becken_warm_fast-45_40_0__seg0-20261029T065237Z.csv",
+ "u1.archetypeai.app|delivery/becken-flt_warm_fast-15_2__seg0.csv|15459832|1793256622": "osm-sample-delivery__becken-flt_warm_fast-15_2__seg0-20261029T065341Z.csv"
+}
