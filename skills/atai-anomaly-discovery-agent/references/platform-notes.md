@@ -67,9 +67,10 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
   ~13 min on production, was stopped on both files with no output: `DeadlineExceeded: stopped
   after reaching the platform's maximum runtime of 2 hours`. On the free trial, deliver at
-  the trial's step (`deliver.py --step 0`) or split long recordings; `serve.py` compares
-  against a step-1 delivery only. A rerun of `deliver.py` starts a new agent for a file whose
-  agent failed.
+  the trial's step (`deliver.py --step 0`: 2/2 files in 28 min) or split long recordings.
+  `serve.py` replays at the delivery's step: at step 8 there, 805/805 windows matched batch
+  (score within 2e-7, the same first alarms) at a 768 ms median per query. A rerun of
+  `deliver.py` starts a new agent for a file whose agent failed.
 - **An eval takes a blueprint and no value overrides.** Whatever you set through bundle
   values (a delivery threshold, a stride) cannot be evaluated; the eval runs at the
   trial's own threshold and step.

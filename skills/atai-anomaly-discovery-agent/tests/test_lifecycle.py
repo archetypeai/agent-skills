@@ -159,6 +159,8 @@ class Serving(unittest.TestCase):
     def test_segments(self):
         labels = pd.DataFrame({"recording": ["n"] * 10 + ["f"] * 6 + ["s"] * 3})
         self.assertEqual(serve.segments(labels, 4), [("n", 0, 7), ("f", 10, 3)])   # "s" is shorter than a window
+        # at step 3 the windows start on rows 0, 3, 6, ...: "f" (rows 10-15) holds only the one at 12
+        self.assertEqual(serve.segments(labels, 4, 3), [("n", 0, 3), ("f", 12, 1)])
 
     def test_first_alarm(self):
         self.assertEqual(serve.first_alarm(["normal", "anomaly", "anomaly", "anomaly"]), 3)
