@@ -30,7 +30,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, states_override, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, root, list_trials, load_dotenv, report_f1, request, states_override, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
@@ -149,7 +149,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"optimize_{opt_id}.json")
     with open(path, "w") as f:
-        json.dump({"optimization": opt, "trials": trials, "summary": rows, "search_space": space,
+        json.dump({"endpoint": root(), "optimization": opt, "trials": trials, "summary": rows, "search_space": space,
                    "validation": [os.path.relpath(p, args.roles) for p in validation]}, f, indent=1)
     log(f"wrote {path}; next: python promote_and_test.py --roles {args.roles} --out {args.out} --name {args.name}")
 

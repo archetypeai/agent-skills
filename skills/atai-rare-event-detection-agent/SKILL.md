@@ -88,10 +88,10 @@ output is one CSV of per-window predictions.
 |---|---|---|
 | you have | a prepared CSV (the pump sample, or data like it) | a labelled recording of **your** asset with a few incidents of a named event |
 | you get | per-window predictions from a classifier fitted on **two pump breakdowns** | your own blueprint and bundle: prototypes fitted on your incidents, window and distance chosen on the next ones, a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), on the official `archetypeai` client | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1.5 min on a clear queue | ~6 min on the sample; longer with load |
-| status | verified on production; re-verified on dev 2026-10-13 | **verified on dev, 2026-10-13** (RED became optimizable there on 2026-10-12); serving, 2026-10-16; all of it on Staging 2026-10-23; not yet on production |
+| status | verified on production; re-verified on dev 2026-10-13 | **verified on production, 2026-10-28** (first on dev, 2026-10-13) |
 
 The Quick Start classifier holds one pump's two breakdowns, so running your own asset
 through it is a transfer test, not a deployment: for your own asset, take Path 2. Path
@@ -107,16 +107,19 @@ scoring below apply to both. Worked example:
 ## Endpoints
 
 ```
-Files API   POST {ATAI_API_ENDPOINT}/v0.5/files                  (multipart upload)
-            GET  {ATAI_API_ENDPOINT}/v0.5/files/download/{name}  (download)
-Agents API   {ATAI_API_ENDPOINT}/agents/...                       (versionless!)
+Files API   POST {ATAI_API_ENDPOINT}/api/files                  (multipart upload)
+            GET  {ATAI_API_ENDPOINT}/api/files/download/{name}  (download)
+Agents API       {ATAI_API_ENDPOINT}/api/agents/...
 Authorization: Bearer <API_KEY> on every call
 ```
 
-The Agents API is **versionless** — `/agents`, not `/v0.5/agents`. If
-`ATAI_API_ENDPOINT` carries a `/vX.Y` suffix, strip it before appending
-`/agents`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no
-default endpoint.
+Every surface lives under one versionless **`/api`** prefix. Set
+`ATAI_API_ENDPOINT` to the deployment root (`https://platform.u1.archetypeai.app`);
+if it carries an `/api` or `/vX.Y` suffix, strip it before appending `/api`. The
+old mounts (`/agents`, `/v0.5/files`) return 404 on that host. Paths below are
+written relative to the prefix: `/agents/bundles` means
+`{ATAI_API_ENDPOINT}/api/agents/bundles`. Both `ATAI_API_KEY` and
+`ATAI_API_ENDPOINT` are required; there is no default endpoint.
 
 > **⚠️ The bundle API is plural everywhere** as of 2026-08-11:
 > `GET /agents/bundles` (list/search), `GET /agents/bundles/{id}` (fetch),
@@ -140,7 +143,7 @@ default endpoint.
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
   -F "file=@prepared_slice.csv;type=text/csv" \
-  "$ATAI_API_ENDPOINT/v0.5/files"
+  "$ATAI_API_ENDPOINT/api/files"
 ```
 
 Returns both `file_id` (the filename, what connectors take) and `file_uid`
@@ -159,7 +162,7 @@ name for portability:
 
 ```sh
 curl -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/agents/bundles?query=RED%20Quick%20Start"
+  "$ATAI_API_ENDPOINT/api/agents/bundles?query=RED%20Quick%20Start"
 ```
 
 `?query=` does a case-insensitive **substring** search over name and id
@@ -194,7 +197,7 @@ name — pin ids only as a last resort.)
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles/$BUNDLE_ID/run" -d '{
+  "$ATAI_API_ENDPOINT/api/agents/bundles/$BUNDLE_ID/run" -d '{
     "connectors": {"source": [{"type": "file", "id": "prepared_slice.csv"}]}
   }'
 ```
@@ -205,8 +208,8 @@ classifier does not change.
 ### 4. Poll until terminal
 
 ```sh
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID"
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/events"
+curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID"
+curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID/events"
 ```
 
 `status` goes `running` → `completed` / `failed` / `canceled`. The events stream
@@ -215,7 +218,7 @@ is the audit log and announces the JOS job id at dispatch.
 ### 5. Download the results
 
 ```sh
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/agents/instances/$AGENT_ID/results"
+curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID/results"
 ```
 
 **A `completed` run can still be writing its output** (a known platform issue): a download
@@ -226,7 +229,7 @@ does, for up to 10 min.
 
 Each result nests its fields under an inner `data` object: `filename`,
 `num_bytes`, and `ref`. For a **run output** the `ref` is a *relative*
-`/files/download/{name}` path that resolves under `/v0.5` and needs the bearer
+`/files/download/{name}` path that resolves under `/api` and needs the bearer
 token; `expires_at` is `null`, so run outputs do not expire. For a **fitted
 classifier artifact** the `ref` is an absolute presigned S3 URL that expires in
 ~20 minutes — derive a durable `s3://` path instead (see below).
@@ -273,7 +276,7 @@ bundle has to fill the head's slot and pin everything the classifier was fitted 
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/agents/bundles" -d '{
+  "$ATAI_API_ENDPOINT/api/agents/bundles" -d '{
     "blueprint": "red",
     "name": "my fault detector",
     "values": {"step_size": 1, "window_size": 64, "metric": "l2",
@@ -414,12 +417,10 @@ python3 run_red_agent.py --csv my_slice.csv    # your own prepared CSV
 python3 run_red_agent.py --score-only out.csv  # re-score a downloaded output
 ```
 
-Either endpoint form works — the runner reduces it to a root and mounts each API
-surface where the platform serves it: files under `/v0.5/files`, the agents API
-versionless at `/agents`. No single `api_endpoint` serves both, so the runner
-builds one client per surface; handing the client a single endpoint 404s half the
-calls and reports a bodyless `ApiError: {}`. The model skills in this repo ship
-`ATAI_API_ENDPOINT` with `/v0.5`; one `.env` serves both families.
+Any endpoint form works — the runner reduces it to the deployment root (dropping an
+`/api` or `/vX.Y` suffix) and points one client at `<root>/api`, where both the files
+and agents APIs live. A wrong prefix 404s every call as a bodyless `ApiError: {}`.
+One `.env` serves every skill in this repo.
 
 ## References
 
@@ -549,7 +550,7 @@ python promote_and_test.py --roles $R --out out --name red-sample
    (`aar_…`).
 2. **Test once** with the Evals API on every test file, with predictions. An eval takes no
    value overrides: it runs at the trial's window and step.
-3. **Check** every prediction's gold label against the file's `label` column (the
+3. **Check** every prediction's `expected` label against the file's `label` column (the
    platform's rule: each row scored once, so at step 1 a window's last row) and the
    offline confusion matrix against the platform's, then score each incident as the
    design does: each window by the majority of its rows, detected or missed, how soon,

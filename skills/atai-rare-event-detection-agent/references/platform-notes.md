@@ -61,9 +61,11 @@ on it there.
   download route). Promoted blueprints can't be deleted by a regular key (403): name them
   distinctively.
 - **An eval takes a blueprint and no value overrides:** it runs at the trial's window and step.
-- **Predictions** carry `row_index`, `example`, `predicted`, `gold`, `correct`,
-  `abstained`, `outcome`: no timestamp, no probabilities. Windows tile each file from row 0
-  at `step_size`; `row_index` counts across the whole eval.
+- **Predictions** carry `example`, `expected`, `predicted`, `correct`, `outcome` and `key`:
+  no probabilities. `key.predicted` is the window's [start, end] in epoch seconds; order by
+  it, since `input` is 0 on every record. An abstention is `outcome: "missed"` with a null
+  `predicted`. Windows tile each file from row 0 at `step_size`. Until 2026-10-20 the
+  records carried `gold`, `abstained` and a `row_index` instead.
 
 ## Bundles and agent runs
 

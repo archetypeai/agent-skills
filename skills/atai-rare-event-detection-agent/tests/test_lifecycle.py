@@ -104,8 +104,11 @@ class PromoteAndCheck(unittest.TestCase):
             os.path.join(self.dir, "test", "inc01.csv"), index=False)
         self.m = {"background": "normal", "test": [{"file": "test/inc01.csv"}]}
         # window 4, step 4: windows end on rows 3, 7, 11 -> gold normal, breakdown, normal (last row)
-        self.preds = [{"example": "inc01.csv", "row_index": i, "gold": g, "predicted": p, "abstained": False}
-                      for i, (g, p) in enumerate([("normal", "normal"), ("breakdown", "breakdown"), ("normal", "normal")])]
+        # records as Evals writes them, listed out of order: the window's [start, end] orders them
+        windows = [("normal", "normal"), ("breakdown", "breakdown"), ("normal", "normal")]
+        self.preds = [{"example": "inc01.csv", "input": 0, "key": {"predicted": [4.0 * i, 4.0 * i + 3]},
+                       "expected": g, "predicted": p, "correct": g == p, "outcome": "matched"}
+                      for i, (g, p) in reversed(list(enumerate(windows)))]
 
     def ev(self, cm):
         return {"metrics_report": {"targets": {"event": {"class_names": ["breakdown", "normal"], "confusion_matrix": cm,
@@ -117,9 +120,15 @@ class PromoteAndCheck(unittest.TestCase):
         self.assertTrue(per_file["inc01.csv"]["incidents"][0]["detected"])
 
     def test_misaligned_gold_is_caught(self):
-        bad = [dict(p, gold="breakdown") for p in self.preds]
+        bad = [dict(p, expected="breakdown") for p in self.preds]
         with self.assertRaises(SystemExit):
             promote_and_test.check(self.dir, self.m, self.ev([[1, 0], [0, 2]]), bad, 4, 4)
+
+    def test_abstention_is_counted_not_scored(self):
+        preds = [dict(p, predicted=None, correct=False, outcome="missed") if p["key"]["predicted"][0] == 8.0 else p
+                 for p in self.preds]
+        per_file, abstained = promote_and_test.check(self.dir, self.m, self.ev([[1, 0], [0, 1]]), preds, 4, 4)
+        self.assertEqual(abstained, 1)
 
     def test_confusion_mismatch_is_caught(self):
         with self.assertRaises(SystemExit):

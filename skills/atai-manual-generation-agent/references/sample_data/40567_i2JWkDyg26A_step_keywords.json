@@ -1,0 +1,13 @@
+{
+  "1": ["hazard", "brake", "stop your car", "stop the car"],
+  "2": ["retrieve", "trunk"],
+  "3": ["loosen"],
+  "4": ["jack up", "raise the vehicle", "raise the car"],
+  "5": ["remove the wheel nuts", "remove the nuts"],
+  "6": ["take off the flat", "remove the flat", "remove the wheel"],
+  "7": ["onto the hub"],
+  "8": ["replace the wheel nuts", "screw"],
+  "9": ["lower the jack", "lower the car", "lower the vehicle"],
+  "10": ["tighten the wheel nuts firmly", "tighten them firmly", "fully tighten"],
+  "11": ["proper place", "back in", "put the jack", "put away", "store the tools"]
+}
