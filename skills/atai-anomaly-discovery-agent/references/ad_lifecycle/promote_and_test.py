@@ -52,11 +52,17 @@ def promote(run, trial, name):
     if trial.get("promoted_blueprint"):
         bp = trial["promoted_blueprint"]
         return {"id": bp["id"], "key": bp["blueprint_key"], "trial": trial["id"], "values": vals}
-    bp = request("POST", f"{agents()}/optimizations/{run['optimization']}/trials/{trial['id']}/promote", {
-        "blueprint_key": f"{name}-{trial['id'][-6:]}",
-        "name": f"{name} (w {vals.get('window_size')}, step {vals.get('step_size')}, k {vals.get('n_neighbors')}, "
-                f"{vals.get('metric')}, PCA {vals.get('pca_components')}, threshold {vals.get('threshold')})",
-        "description": f"Promoted from {run['optimization']}, trial {trial['id']}."})
+    url = f"{agents()}/optimizations/{run['optimization']}/trials/{trial['id']}/promote"
+    body = {"name": f"{name} (w {vals.get('window_size')}, step {vals.get('step_size')}, k {vals.get('n_neighbors')}, "
+                    f"{vals.get('metric')}, PCA {vals.get('pca_components')}, threshold {vals.get('threshold')})",
+            "description": f"Promoted from {run['optimization']}, trial {trial['id']}."}
+    try:
+        bp = request("POST", url, {"blueprint_key": f"{name}-{trial['id'][-6:]}", **body})
+    except RuntimeError as e:
+        # choosing the key needs the admin role (a free-trial org has none): let the platform choose it
+        if "(403)" not in str(e) or "blueprint_key" not in str(e):
+            raise
+        bp = request("POST", url, body)
     return {"id": bp["id"], "key": bp["blueprint_key"], "trial": trial["id"], "values": vals}
 
 

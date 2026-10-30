@@ -6,12 +6,14 @@ Agent serving keeps an agent loaded and answers a window of samples in one round
 as a live system would ask it for the latest `window_size` samples. This replays delivery
 recordings that way and checks every answer against deliver.py's batch output:
 
-  1. a bundle of the promoted blueprint, as it is, at step 1 (bundle values override a
-     blueprint's): the platform supplies the serving connectors when it runs a bundle in
-     serving mode;
+  1. a bundle of the promoted blueprint, as it is, at the delivery's step (bundle values
+     override a blueprint's): the platform supplies the serving connectors when it runs a
+     bundle in serving mode;
   2. that bundle run with {"mode": "serving"};
-  3. each recording replayed one sample at a time: every query holds the latest
+  3. each recording replayed one step at a time: every query holds the latest
      `window_size` samples (--windows-per-query N sends N consecutive windows at once).
+     At step 1 that is a query per sample, as live; at a larger step (deliver.py --step,
+     for a deployment that can't deliver at step 1 in time) the windows batch scored.
      A served agent keeps nothing between queries and numbers the samples itself, so
      recordings are replayed one by one: a window across a join would not be marked
      invalid as batch marks it;
@@ -22,7 +24,7 @@ recordings that way and checks every answer against deliver.py's batch output:
      SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
      cleanup.py finds them after a kill -9.
 
-Needs deliver.py's output at step 1 (its default). Writes
+Needs deliver.py's output (step 1 by default; any step works). Writes
 <out>/serving/<file>_wpq<N>.csv (a row per window) and .json (the summary).
 
     python serve.py --roles roles --out out --recordings normal_48h_run43 idv05_run3
@@ -53,13 +55,16 @@ def query_body(chunk, model=MODEL):
             "event_data": {"contents": [chunk[:, c].tolist() for c in range(chunk.shape[1])]}}]}
 
 
-def segments(labels, window):
-    """(recording, first row, windows) for each recording of a delivery file."""
+def segments(labels, window, step=1):
+    """(recording, first window's first row, windows) for each recording of a delivery file:
+    the windows batch scored inside it (they tile the file from row 0 at `step`)."""
     out = []
     for rec, rows in labels.groupby("recording", sort=False):
-        n = len(rows) - window + 1
+        lo, hi = int(rows.index[0]), int(rows.index[0]) + len(rows)
+        first = -(-lo // step) * step
+        n = (hi - window - first) // step + 1
         if n > 0:
-            out.append((rec, int(rows.index[0]), n))
+            out.append((rec, first, n))
     return out
 
 
@@ -109,32 +114,32 @@ def main(argv=None):
     if not same_deployment(test):
         sys.exit(f"the blueprint in {a.out}/test_state.json is on {test['endpoint']}, a different deployment from {root()}")
     deliver = json.load(open(os.path.join(a.out, "deliver_state.json")))
-    if deliver.get("values", {}).get("step_size") != 1:
-        sys.exit("serve.py compares against deliver.py's output at step 1: rerun deliver.py with --step 1")
     bp = test["blueprint"]
     channels, window = m["channels"], bp["values"]["window_size"]
+    step = deliver.get("values", {}).get("step_size") or bp["values"]["step_size"]
     f = next((d for d in m["delivery"] if (a.file and d["file"].endswith(a.file)) or
               (not a.file and not d.get("calibration"))), None) or sys.exit(f"no delivery file {a.file or ''}")
     data = pd.read_csv(os.path.join(a.roles, f["file"]))
     labels = pd.read_csv(os.path.join(a.roles, f["labels"]))
     batch = pd.read_csv(os.path.join(a.out, "delivery", os.path.basename(f["file"])))
-    if len(batch) != len(data) - window + 1:
-        sys.exit(f"{f['file']}: the delivery output has {len(batch)} windows, expected {len(data) - window + 1}")
-    segs = [s for s in segments(labels, window) if not a.recordings or s[0] in a.recordings]
+    if len(batch) != (len(data) - window) // step + 1:
+        sys.exit(f"{f['file']}: the delivery output has {len(batch)} windows, expected "
+                 f"{(len(data) - window) // step + 1} at step {step}")
+    segs = [s for s in segments(labels, window, step) if not a.recordings or s[0] in a.recordings]
     if not segs:
         sys.exit(f"none of {a.recordings} in {f['file']}")
     segs = [(rec, first, min(n, a.max_windows or n)) for rec, first, n in segs]
     wpq = max(1, min(a.windows_per_query, MAX_WPQ))
     X = data[channels].to_numpy(dtype=float)
     ts = data[m["timestamp_column"]].to_numpy(dtype=float)
-    log(f"{f['file']}: {len(segs)} recording(s), {sum(s[2] for s in segs):,} windows, {wpq} per query; "
+    log(f"{f['file']}: {len(segs)} recording(s), {sum(s[2] for s in segs):,} windows, {wpq} per query, step {step}; "
         f"model {bp['key']}")
 
     sf = os.path.join(a.out, "serve_state.json")
     if os.path.exists(sf):
         sys.exit(f"{sf} holds an earlier replay's agent and bundle: run cleanup.py first")
     bundle = request("POST", f"{agents()}/bundles", {"blueprint": bp["key"], "name": f"{a.name} serving",
-                                                      "values": {"step_size": 1}})
+                                                      "values": {"step_size": step}})
     ex = {"endpoint": root(), "bundle": bundle["id"], "agent": None}
     json.dump(ex, open(sf, "w"))
     served, latency = {}, []
@@ -153,7 +158,7 @@ def main(argv=None):
                 count = min(wpq, n - k)
                 t = time.time()
                 answer = request("POST", f"{agents()}/instances/{ex['agent']}/query",
-                                 query_body(X[first + k:first + k + window + count - 1]))
+                                 query_body(X[first + k * step:first + (k + count - 1) * step + window]))
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:
@@ -168,25 +173,25 @@ def main(argv=None):
 
     rows, per_rec = [], []
     for rec, first, n in segs:
-        ref, got = batch.iloc[first:first + n], served[rec]
+        ref, got = batch.iloc[first // step:first // step + n], served[rec]
         for k, (s, b) in enumerate(zip(got, ref.itertuples())):
-            rows.append({"recording": rec, "window": k, "finish_timestamp": ts[first + k + window - 1],
+            rows.append({"recording": rec, "window": k, "finish_timestamp": ts[first + k * step + window - 1],
                          "batch_label": b.predicted_label, "served_label": s["predicted_label"],
                          "batch_score": b.anomaly_score, "served_score": float(s["anomaly_score"]),
                          "served_invalid": str(s["invalid"]).lower() == "true",
                          "same_label": s["predicted_label"] == b.predicted_label,
                          "same_score": abs(float(s["anomaly_score"]) / b.anomaly_score - 1) < 1e-4})
-        lab = labels.label.to_numpy()[first:first + n + window - 1]
+        lab = labels.label.to_numpy()[first:first + (n - 1) * step + window]
         onset = int(np.argmax(lab == "anomaly")) if (lab == "anomaly").any() else None
         alarm = {}
         for who, labs in (("served", [s["predicted_label"] for s in got]), ("batch", ref.predicted_label.tolist())):
             i = first_alarm(labs)
             if i is None:
                 alarm[who] = None
-            elif onset is None or i + window - 1 < onset:
-                alarm[who] = f"a false alarm {(ts[first + i + window - 1] - ts[first]) / 3600:.2f} h in"
+            elif onset is None or i * step + window - 1 < onset:
+                alarm[who] = f"a false alarm {(ts[first + i * step + window - 1] - ts[first]) / 3600:.2f} h in"
             else:
-                alarm[who] = f"{(ts[first + i + window - 1] - ts[first + onset]) / 3600:.2f} h after onset"
+                alarm[who] = f"{(ts[first + i * step + window - 1] - ts[first + onset]) / 3600:.2f} h after onset"
         per_rec.append({"recording": rec, "windows": n, "first_alarm": alarm})
 
     df = pd.DataFrame(rows)
@@ -195,7 +200,7 @@ def main(argv=None):
     stem = os.path.join(sdir, f"{os.path.basename(f['file']).replace('.csv', '')}_wpq{wpq}")
     df.to_csv(stem + ".csv", index=False)
     ms = sorted(x * 1000 for x in latency)
-    summary = {"blueprint": bp["key"], "file": f["file"], "recordings": per_rec,
+    summary = {"blueprint": bp["key"], "file": f["file"], "step": step, "recordings": per_rec,
                "windows": len(df), "windows_per_query": wpq, "queries": len(latency),
                "same_label": int(df.same_label.sum()), "same_score": int(df.same_score.sum()),
                "max_score_rel_diff": float((df.served_score / df.batch_score - 1).abs().max()),

@@ -387,5 +387,35 @@ class TestSampleCommandsMatchThePrepSkill(unittest.TestCase):
             self.assertIn(command, prep_lines, f"not in the prep skill's SKILL.md: {command}")
 
 
+class Promote(unittest.TestCase):
+    """Choosing the key can need the admin role (the free trial): promote again without one."""
+
+    def promote(self, error):
+        calls = []
+
+        def fake(method, url, body=None):
+            if method == "GET":
+                raise RuntimeError(f"GET {url} failed (404): not found")
+            calls.append(body)
+            if "blueprint_key" in body:
+                raise error(url)
+            return {"id": "blp_1", "blueprint_key": "osm-otr_abc123"}
+        with mock.patch.object(promote_and_test, "request", fake), \
+                mock.patch.object(promote_and_test, "agents", lambda: "https://x/api/agents"), \
+                mock.patch.object(promote_and_test, "trial_setting", lambda t: (512, 512, 5, "cosine", "uniform")), \
+                mock.patch.object(promote_and_test, "log", lambda *a: None):
+            return promote_and_test.promote("opt_1", {"id": "otr_abc123"}, "osm-sample"), calls
+
+    def test_a_forbidden_key_falls_back_to_the_platforms(self):
+        bp, calls = self.promote(lambda url: RuntimeError(f"POST {url} failed (403): choosing the `blueprint_key` of a promoted blueprint requires the admin role"))
+        self.assertIn("blueprint_key", calls[0])
+        self.assertNotIn("blueprint_key", calls[1])
+        self.assertEqual(calls[0]["name"], calls[1]["name"])
+        self.assertEqual(bp["blueprint_key"], "osm-otr_abc123")
+
+    def test_any_other_error_still_stops(self):
+        with self.assertRaises(RuntimeError):
+            self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
+
 if __name__ == "__main__":
     unittest.main()

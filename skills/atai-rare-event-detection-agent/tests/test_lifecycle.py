@@ -3,6 +3,7 @@
     python -m pytest skills/atai-rare-event-detection-agent/tests -v
 """
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -184,6 +185,74 @@ class Serving(unittest.TestCase):
                              ("delivery", "instances", "agt_d0"), ("delivery", "instances", "agt_d1"),
                              ("delivery", "bundles", "bnd_d")])
         self.assertEqual(cleanup.targets({}, {}, set()), [])
+
+
+class Promote(unittest.TestCase):
+    """Choosing the key can need the admin role (the free trial): promote again without one."""
+
+    def promote(self, error):
+        calls = []
+
+        def fake(method, url, body=None):
+            calls.append(body)
+            if "blueprint_key" in body:
+                raise error(url)
+            return {"id": "blp_1", "blueprint_key": "red-otr_abc123"}
+        run = {"optimization": "opt_1", "pinned": {"window_size": 64}}
+        trial = {"id": "otr_abc123", "trial_values": {"values": {}}}
+        with mock.patch.object(promote_and_test, "request", fake), \
+                mock.patch.object(promote_and_test, "agents", lambda: "https://x/api/agents"):
+            return promote_and_test.promote(run, trial, "red-sample"), calls
+
+    def test_a_forbidden_key_falls_back_to_the_platforms(self):
+        bp, calls = self.promote(lambda url: RuntimeError(f"POST {url} failed (403): choosing the `blueprint_key` of a promoted blueprint requires the admin role"))
+        self.assertEqual(calls[0]["blueprint_key"], "red-sample-abc123")
+        self.assertNotIn("blueprint_key", calls[1])
+        self.assertEqual(calls[0]["name"], calls[1]["name"])
+        self.assertEqual(bp["key"], "red-otr_abc123")
+
+    def test_any_other_error_still_stops(self):
+        with self.assertRaises(RuntimeError):
+            self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
+
+class DeliverResume(unittest.TestCase):
+    """A file whose agent failed without a complete output gets a new agent on the next run."""
+
+    def deliver(self, out, status):
+        started = []
+
+        def fake(method, url, body=None):
+            assert url.endswith("/run"), url
+            started.append(body)
+            return {"id": f"agt_new{len(started)}"}
+        with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t"},
+                                 root=lambda: "https://x", same_deployment=lambda s: True,
+                                 agents=lambda: "https://x/api/agents", request=fake,
+                                 upload_file=lambda src, name: {"file_id": "fil_1"},
+                                 poll=lambda agent: status, download=lambda *a: None):
+            deliver.main(["--roles", "roles", "--out", out])
+        return started, json.load(open(os.path.join(out, "deliver_state.json")))["agents"]
+
+    def setUp(self):
+        self.out = tempfile.mkdtemp()
+        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp"}}),
+                            ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1",
+                                                    "values": {}, "agents": {"delivery/d.csv": "agt_dead"}})):
+            json.dump(state, open(os.path.join(self.out, name), "w"))
+
+    def test_a_failed_agent_is_replaced_on_the_next_run(self):
+        started, runs = self.deliver(self.out, "failed")
+        self.assertEqual(started, [])                       # this run only polls the dead agent
+        self.assertEqual(runs, {})
+        started, runs = self.deliver(self.out, "timeout")      # still running when this run stopped waiting
+        self.assertEqual(len(started), 1)
+        self.assertEqual(runs, {"delivery/d.csv": "agt_new1"})
+
+    def test_a_completed_or_still_running_agent_is_kept(self):
+        for status in ("completed", "timeout"):
+            started, runs = self.deliver(self.out, status)
+            self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_dead"}))
 
 
 if __name__ == "__main__":

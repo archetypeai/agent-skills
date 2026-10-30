@@ -95,6 +95,17 @@ Why they exist:
   blueprint with the trial's setting and fitted kNN attached; no S3, no classifier
   artifact. Give each promotion a **unique `blueprint_key`** (ours ends in the trial
   id): a key reused across runs makes a "promote or reuse" script test an older model.
+- **Choosing the key can need the admin role.** On the free trial (2026-10-29) a promote with a
+  `blueprint_key` answered 403, "choosing the `blueprint_key` of a promoted blueprint requires the
+  admin role"; without it the platform keyed the blueprint `osm-otr_<trial id>`, and the `name`
+  (a display label, what the console's "Blueprint name" sets) was still ours. Production
+  accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
+  back on that 403.
+- **The free trial runs on CPU, at most 3 jobs per org at once, each for at most 2 hours.**
+  Further jobs queue, and a queued one already reports `running`. On 2026-10-29/30 the sample
+  ran end to end there (optimize, test, delivery, serving) with the production scores; a much
+  larger delivery run can reach the 2-hour limit (`DeadlineExceeded`): split it with
+  `deliver.py --files-per-run`.
 - **The Evals report is pooled over all its files.** There is no per-file breakdown:
   for a score without one file, run a second eval on that file and subtract its
   confusion matrix (confusion matrices add up).
