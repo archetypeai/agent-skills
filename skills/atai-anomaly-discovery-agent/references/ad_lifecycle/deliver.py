@@ -12,7 +12,8 @@ timestamp: a run can report `completed` while its output is still being written.
 network outage is waited out (every 60 s, up to an hour), not counted as a failed file.
 
 Writes <out>/delivery/<file>.csv and <out>/deliver_state.json (resume: finished outputs
-are skipped, started agents are polled, not started again).
+are skipped, running agents are polled, not started again; a file whose agent failed
+or was cancelled without a complete output gets a new agent).
 
     python deliver.py --roles roles --out out --name ad-sample
 """
@@ -163,6 +164,10 @@ def main(argv=None):
             log(f"{f['file']}: agent {agent['id']}")
         status = poll(runs[f["file"]])
         got = download(runs[f["file"]], dst, src, m["timestamp_column"])
+        if not got and status in ("failed", "canceled", "cancelled"):   # forget the dead agent: a rerun starts a new one
+            with lock:
+                del runs[f["file"]]
+            save()
         log(f"{f['file']}: {status}; " + ("output complete" if got else "no complete output: rerun to retry"))
         return got
 

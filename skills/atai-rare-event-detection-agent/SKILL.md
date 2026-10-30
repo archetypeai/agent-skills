@@ -548,7 +548,7 @@ python promote_and_test.py --roles $R --out out --name red-sample
 1. **Promote** the best trial across `optimize.py`'s runs (a tie goes to the optimization
    that tried more points; `--trial otr_…` picks one): the blueprint pins the trial's
    values, `events` and `background`, and carries the prototypes as a registry artifact
-   (`aar_…`).
+   (`aar_…`). Its key is `<name>-<last 6 of the trial id>`. On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `red-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
 2. **Test once** with the Evals API on every test file, with predictions. An eval takes no
    value overrides: it runs at the trial's window and step.
 3. **Check** every prediction's `expected` label against the file's `label` column (the

@@ -56,6 +56,20 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   `blueprint_key`) returns a blueprint that pins the trial's values and names its fitted
   detector as a registry artifact (`models.detection_head: aar_…`), not an `s3://` path.
   The API has no route to download it.
+- **Choosing the key can need the admin role.** On the free trial (2026-10-29) a promote with a
+  `blueprint_key` answered 403, "choosing the `blueprint_key` of a promoted blueprint requires the
+  admin role"; without it the platform keyed the blueprint `ad-otr_<trial id>`, and the `name`
+  (a display label, what the console's "Blueprint name" sets) was still ours. Production
+  accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
+  back on that 403.
+- **The free trial runs on CPU, at most 3 jobs per org at once, each for at most 2 hours.**
+  Further jobs queue, and a queued one already reports `running`. On 2026-10-30 the sample's
+  eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
+  ~13 min on production, was stopped on both files with no output: `DeadlineExceeded: stopped
+  after reaching the platform's maximum runtime of 2 hours`. On the free trial, deliver at
+  the trial's step (`deliver.py --step 0`) or split long recordings; `serve.py` compares
+  against a step-1 delivery only. A rerun of `deliver.py` starts a new agent for a file whose
+  agent failed.
 - **An eval takes a blueprint and no value overrides.** Whatever you set through bundle
   values (a delivery threshold, a stride) cannot be evaluated; the eval runs at the
   trial's own threshold and step.

@@ -379,7 +379,7 @@ python promote_and_test.py --roles $R --out out --name osm-sample --background  
    `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `blueprint_key`, `name` and
    `description` returns a **blueprint with the setting and the fitted kNN attached**: a reusable
    model with no S3 artifact to build. Keys must be **unique per trial**: the script uses
-   `<name>-w512-s512-cosine-k5-uniform-<last 6 of the trial id>`.
+   `<name>-w512-s512-cosine-k5-uniform-<last 6 of the trial id>`. On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `osm-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
    one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
    `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file

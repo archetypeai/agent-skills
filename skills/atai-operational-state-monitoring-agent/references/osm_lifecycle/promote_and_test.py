@@ -49,15 +49,24 @@ def best_trial(runs, trial_id=None):
 
 
 def promote(opt, trial, name):
+    if trial.get("promoted_blueprint"):                             # promoted on an earlier, interrupted run
+        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['blueprint_key']}")
     key = blueprint_key(trial, name)
     try:
-        return request("GET", f"{agents()}/blueprints/{key}")      # promoted on an earlier, interrupted run
+        return request("GET", f"{agents()}/blueprints/{key}")
     except RuntimeError:
         pass
     w, st, k, metric, weights = trial_setting(trial)
-    bp = request("POST", f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote", body={
-        "blueprint_key": key, "name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",
-        "description": f"Promoted from {opt} / {trial['id']}: window {w}, step {st}, {metric}, k {k}, {weights}."})
+    url = f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote"
+    body = {"name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",
+            "description": f"Promoted from {opt} / {trial['id']}: window {w}, step {st}, {metric}, k {k}, {weights}."}
+    try:
+        bp = request("POST", url, body={"blueprint_key": key, **body})
+    except RuntimeError as e:
+        # choosing the key needs the admin role (a free-trial org has none): let the platform choose it
+        if "(403)" not in str(e) or "blueprint_key" not in str(e):
+            raise
+        bp = request("POST", url, body=body)
     log(f"promoted {trial['id']} -> {bp['blueprint_key']} ({bp['id']})")
     return bp
 
