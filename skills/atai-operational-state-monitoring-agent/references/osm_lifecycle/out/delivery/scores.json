@@ -1,0 +1,84 @@
+{
+ "files": 1,
+ "files_missing": [],
+ "skipped": {
+  "invalid": 0,
+  "no label at finish time": 0
+ },
+ "unknown_predictions": [],
+ "all": {
+  "macro_f1": 0.7431,
+  "f1": {
+   "drain": 0.8047,
+   "fill": 0.8378,
+   "spin": 0.7114,
+   "wash": 0.6186
+  },
+  "confusion": [
+   [
+    68,
+    0,
+    8,
+    8
+   ],
+   [
+    0,
+    93,
+    0,
+    33
+   ],
+   [
+    11,
+    0,
+    53,
+    14
+   ],
+   [
+    6,
+    3,
+    10,
+    60
+   ]
+  ],
+  "windows": 367
+ },
+ "per_recording": {
+  "becken-flt_warm_fast-15_2": {
+   "macro_f1": 0.7431,
+   "f1": {
+    "drain": 0.8047,
+    "fill": 0.8378,
+    "spin": 0.7114,
+    "wash": 0.6186
+   },
+   "confusion": [
+    [
+     68,
+     0,
+     8,
+     8
+    ],
+    [
+     0,
+     93,
+     0,
+     33
+    ],
+    [
+     11,
+     0,
+     53,
+     14
+    ],
+    [
+     6,
+     3,
+     10,
+     60
+    ]
+   ],
+   "windows": 367
+  }
+ },
+ "test_macro_f1": 0.8463
+}

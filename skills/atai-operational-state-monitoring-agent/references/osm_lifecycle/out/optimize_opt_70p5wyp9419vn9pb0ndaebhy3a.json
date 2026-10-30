@@ -1,0 +1,717 @@
+{
+ "endpoint": "https://platform.u1.archetypeai.app",
+ "optimization": {
+  "id": "opt_70p5wyp9419vn9pb0ndaebhy3a",
+  "name": "osm-sample optimize 20261029T065036Z",
+  "org_id": "org_4h32x1d3ep8x1tz1w10216mtr0",
+  "project_id": null,
+  "blueprint_id": "blp_4f0e4esq5j8r68a2vyycxk16mf",
+  "primary": "state.macro_f1",
+  "objective": "macro_f1",
+  "resolved_targets": {
+   "state": [
+    "macro_f1",
+    "accuracy"
+   ]
+  },
+  "search_space": {
+   "parameters": {
+    "k_neighbors": {
+     "kind": "value",
+     "spec": {
+      "type": "categorical",
+      "values": [
+       5,
+       31
+      ]
+     }
+    },
+    "metric": {
+     "kind": "value",
+     "spec": {
+      "type": "categorical",
+      "values": [
+       "cosine"
+      ]
+     }
+    },
+    "step_size": {
+     "kind": "value",
+     "spec": {
+      "type": "categorical",
+      "values": [
+       512
+      ]
+     }
+    },
+    "weights": {
+     "kind": "value",
+     "spec": {
+      "type": "categorical",
+      "values": [
+       "uniform"
+      ]
+     }
+    },
+    "window_size": {
+     "kind": "value",
+     "spec": {
+      "type": "categorical",
+      "values": [
+       512
+      ]
+     }
+    }
+   }
+  },
+  "overrides": {
+   "values": {
+    "states": [
+     "drain",
+     "fill",
+     "spin",
+     "wash"
+    ]
+   },
+   "models": {}
+  },
+  "budget": {
+   "max_trials": 2
+  },
+  "training_examples": [
+   {
+    "name": "drain__library",
+    "ordinal": 1,
+    "inputs": [
+     {
+      "type": "file",
+      "id": "osm-sample-library__drain__library-20261029T065033Z.csv",
+      "format": "csv",
+      "crc32c": "1j8nKw=="
+     }
+    ],
+    "ground_truth": {
+     "state": {
+      "from": {
+       "constant": "drain"
+      }
+     }
+    }
+   },
+   {
+    "name": "fill__library",
+    "ordinal": 2,
+    "inputs": [
+     {
+      "type": "file",
+      "id": "osm-sample-library__fill__library-20261029T065033Z.csv",
+      "format": "csv",
+      "crc32c": "JBYZrQ=="
+     }
+    ],
+    "ground_truth": {
+     "state": {
+      "from": {
+       "constant": "fill"
+      }
+     }
+    }
+   },
+   {
+    "name": "spin__library",
+    "ordinal": 3,
+    "inputs": [
+     {
+      "type": "file",
+      "id": "osm-sample-library__spin__library-20261029T065033Z.csv",
+      "format": "csv",
+      "crc32c": "qU0yuw=="
+     }
+    ],
+    "ground_truth": {
+     "state": {
+      "from": {
+       "constant": "spin"
+      }
+     }
+    }
+   },
+   {
+    "name": "wash__library",
+    "ordinal": 4,
+    "inputs": [
+     {
+      "type": "file",
+      "id": "osm-sample-library__wash__library-20261029T065033Z.csv",
+      "format": "csv",
+      "crc32c": "NAxKAA=="
+     }
+    ],
+    "ground_truth": {
+     "state": {
+      "from": {
+       "constant": "wash"
+      }
+     }
+    }
+   }
+  ],
+  "validation_examples": [
+   {
+    "name": "becken_warm_15-min_40_0__seg0",
+    "ordinal": 1,
+    "inputs": [
+     {
+      "type": "file",
+      "id": "osm-sample-validation__becken_warm_15-min_40_0__seg0-20261029T065033Z.csv",
+      "format": "csv",
+      "crc32c": "VadbaQ=="
+     }
+    ],
+    "ground_truth": {
+     "state": {
+      "from": {
+       "column": "label"
+      },
+      "downsampling": "last_record"
+     }
+    }
+   }
+  ],
+  "best_trial_id": "otr_2c0bvb6aw694kt9c0pnkg19j5x",
+  "best_trial": {
+   "id": "otr_2c0bvb6aw694kt9c0pnkg19j5x",
+   "optimization_id": "opt_70p5wyp9419vn9pb0ndaebhy3a",
+   "trial_number": 1,
+   "trial_values": {
+    "models": {},
+    "values": {
+     "k_neighbors": 5,
+     "metric": "cosine",
+     "step_size": 512,
+     "weights": "uniform",
+     "window_size": 512
+    }
+   },
+   "metrics_report": {
+    "schema_version": "v2",
+    "primary": {
+     "target": "state",
+     "name": "macro_f1",
+     "value": 0.7920104797940077,
+     "aggregation": "pooled"
+    },
+    "example_count": 1,
+    "examples_failed": 0,
+    "examples_partial": 0,
+    "ground_truth_records_rejected": 0,
+    "targets": {
+     "state": {
+      "pairing": "by_time",
+      "items": 386,
+      "items_failed": 0,
+      "aggregate": {
+       "accuracy": 0.8134715025906736,
+       "macro_f1": 0.7920104797940077
+      },
+      "per_example": {
+       "accuracy": {
+        "mean": 0.8134715025906736,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.8134715025906736,
+        "median": 0.8134715025906736,
+        "max": 0.8134715025906736,
+        "p90": 0.8134715025906736
+       },
+       "macro_f1": {
+        "mean": 0.7920104797940077,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.7920104797940077,
+        "median": 0.7920104797940077,
+        "max": 0.7920104797940077,
+        "p90": 0.7920104797940077
+       }
+      },
+      "type": "category",
+      "class_names": [
+       "drain",
+       "fill",
+       "spin",
+       "wash"
+      ],
+      "per_class": {
+       "precision": [
+        0.7912087912087912,
+        0.9916666666666668,
+        0.7142857142857143,
+        0.6974789915966386
+       ],
+       "recall": [
+        0.972972972972973,
+        1.0,
+        0.47619047619047616,
+        0.7614678899082569
+       ],
+       "f1": [
+        0.8727272727272727,
+        0.99581589958159,
+        0.5714285714285714,
+        0.7280701754385965
+       ],
+       "support": [
+        74,
+        119,
+        84,
+        109
+       ]
+      },
+      "confusion_matrix": [
+       [
+        72,
+        0,
+        1,
+        1
+       ],
+       [
+        0,
+        119,
+        0,
+        0
+       ],
+       [
+        8,
+        1,
+        40,
+        35
+       ],
+       [
+        11,
+        0,
+        15,
+        83
+       ]
+      ],
+      "missed": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "false_alarms": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "outcomes": {
+       "matched": 386,
+       "missed": 0,
+       "false_alarms": 0,
+       "unscored": 0,
+       "failed": 0
+      }
+     }
+    }
+   },
+   "objective_value": 0.7920104797940077,
+   "feasible": true,
+   "status": "completed",
+   "created_at": "2026-10-29T06:50:36.911287Z",
+   "completed_at": "2026-10-29T06:52:05.935301Z"
+  },
+  "status": "completed",
+  "progress": {
+   "pending": 0,
+   "running": 0,
+   "completed": 2,
+   "failed": 0,
+   "cancelled": 0,
+   "infeasible": 0
+  },
+  "created_by": "usr_02zp1mz0af9j3vbw2ene7czd4g",
+  "created_at": "2026-10-29T06:50:36.911287Z",
+  "started_at": "2026-10-29T06:50:36.947410Z",
+  "completed_at": "2026-10-29T06:52:21.213068Z"
+ },
+ "trials": [
+  {
+   "id": "otr_5tknrpgzqw8dk84z75hsndemq6",
+   "optimization_id": "opt_70p5wyp9419vn9pb0ndaebhy3a",
+   "trial_number": 2,
+   "trial_values": {
+    "models": {},
+    "values": {
+     "k_neighbors": 31,
+     "metric": "cosine",
+     "step_size": 512,
+     "weights": "uniform",
+     "window_size": 512
+    }
+   },
+   "metrics_report": {
+    "schema_version": "v2",
+    "primary": {
+     "target": "state",
+     "name": "macro_f1",
+     "value": 0.7495845246213129,
+     "aggregation": "pooled"
+    },
+    "example_count": 1,
+    "examples_failed": 0,
+    "examples_partial": 0,
+    "ground_truth_records_rejected": 0,
+    "targets": {
+     "state": {
+      "pairing": "by_time",
+      "items": 386,
+      "items_failed": 0,
+      "aggregate": {
+       "accuracy": 0.7746113989637305,
+       "macro_f1": 0.7495845246213129
+      },
+      "per_example": {
+       "accuracy": {
+        "mean": 0.7746113989637305,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.7746113989637305,
+        "median": 0.7746113989637305,
+        "max": 0.7746113989637305,
+        "p90": 0.7746113989637305
+       },
+       "macro_f1": {
+        "mean": 0.7495845246213129,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.7495845246213129,
+        "median": 0.7495845246213129,
+        "max": 0.7495845246213129,
+        "p90": 0.7495845246213129
+       }
+      },
+      "type": "category",
+      "class_names": [
+       "drain",
+       "fill",
+       "spin",
+       "wash"
+      ],
+      "per_class": {
+       "precision": [
+        0.7142857142857143,
+        0.9915966386554622,
+        0.6166666666666667,
+        0.6788990825688074
+       ],
+       "recall": [
+        0.945945945945946,
+        0.9915966386554622,
+        0.44047619047619047,
+        0.6788990825688074
+       ],
+       "f1": [
+        0.813953488372093,
+        0.9915966386554622,
+        0.5138888888888888,
+        0.6788990825688074
+       ],
+       "support": [
+        74,
+        119,
+        84,
+        109
+       ]
+      },
+      "confusion_matrix": [
+       [
+        70,
+        0,
+        3,
+        1
+       ],
+       [
+        0,
+        118,
+        1,
+        0
+       ],
+       [
+        12,
+        1,
+        37,
+        34
+       ],
+       [
+        16,
+        0,
+        19,
+        74
+       ]
+      ],
+      "missed": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "false_alarms": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "outcomes": {
+       "matched": 386,
+       "missed": 0,
+       "false_alarms": 0,
+       "unscored": 0,
+       "failed": 0
+      }
+     }
+    }
+   },
+   "objective_value": 0.7495845246213129,
+   "feasible": true,
+   "status": "completed",
+   "created_at": "2026-10-29T06:50:36.911287Z",
+   "completed_at": "2026-10-29T06:52:18.219713Z"
+  },
+  {
+   "id": "otr_2c0bvb6aw694kt9c0pnkg19j5x",
+   "optimization_id": "opt_70p5wyp9419vn9pb0ndaebhy3a",
+   "trial_number": 1,
+   "trial_values": {
+    "models": {},
+    "values": {
+     "k_neighbors": 5,
+     "metric": "cosine",
+     "step_size": 512,
+     "weights": "uniform",
+     "window_size": 512
+    }
+   },
+   "metrics_report": {
+    "schema_version": "v2",
+    "primary": {
+     "target": "state",
+     "name": "macro_f1",
+     "value": 0.7920104797940077,
+     "aggregation": "pooled"
+    },
+    "example_count": 1,
+    "examples_failed": 0,
+    "examples_partial": 0,
+    "ground_truth_records_rejected": 0,
+    "targets": {
+     "state": {
+      "pairing": "by_time",
+      "items": 386,
+      "items_failed": 0,
+      "aggregate": {
+       "accuracy": 0.8134715025906736,
+       "macro_f1": 0.7920104797940077
+      },
+      "per_example": {
+       "accuracy": {
+        "mean": 0.8134715025906736,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.8134715025906736,
+        "median": 0.8134715025906736,
+        "max": 0.8134715025906736,
+        "p90": 0.8134715025906736
+       },
+       "macro_f1": {
+        "mean": 0.7920104797940077,
+        "excluded": 0,
+        "stderr": null,
+        "min": 0.7920104797940077,
+        "median": 0.7920104797940077,
+        "max": 0.7920104797940077,
+        "p90": 0.7920104797940077
+       }
+      },
+      "type": "category",
+      "class_names": [
+       "drain",
+       "fill",
+       "spin",
+       "wash"
+      ],
+      "per_class": {
+       "precision": [
+        0.7912087912087912,
+        0.9916666666666668,
+        0.7142857142857143,
+        0.6974789915966386
+       ],
+       "recall": [
+        0.972972972972973,
+        1.0,
+        0.47619047619047616,
+        0.7614678899082569
+       ],
+       "f1": [
+        0.8727272727272727,
+        0.99581589958159,
+        0.5714285714285714,
+        0.7280701754385965
+       ],
+       "support": [
+        74,
+        119,
+        84,
+        109
+       ]
+      },
+      "confusion_matrix": [
+       [
+        72,
+        0,
+        1,
+        1
+       ],
+       [
+        0,
+        119,
+        0,
+        0
+       ],
+       [
+        8,
+        1,
+        40,
+        35
+       ],
+       [
+        11,
+        0,
+        15,
+        83
+       ]
+      ],
+      "missed": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "false_alarms": [
+       0,
+       0,
+       0,
+       0
+      ],
+      "outcomes": {
+       "matched": 386,
+       "missed": 0,
+       "false_alarms": 0,
+       "unscored": 0,
+       "failed": 0
+      }
+     }
+    }
+   },
+   "objective_value": 0.7920104797940077,
+   "feasible": true,
+   "status": "completed",
+   "created_at": "2026-10-29T06:50:36.911287Z",
+   "completed_at": "2026-10-29T06:52:05.935301Z"
+  }
+ ],
+ "summary": [
+  {
+   "trial": 1,
+   "id": "otr_2c0bvb6aw694kt9c0pnkg19j5x",
+   "status": "completed",
+   "window": 512,
+   "step": 512,
+   "k": 5,
+   "metric": "cosine",
+   "weights": "uniform",
+   "macro_f1": 0.7920104797940077,
+   "f1": {
+    "drain": 0.8727272727272727,
+    "fill": 0.99581589958159,
+    "spin": 0.5714285714285714,
+    "wash": 0.7280701754385965
+   },
+   "windows_scored": 386,
+   "error": null
+  },
+  {
+   "trial": 2,
+   "id": "otr_5tknrpgzqw8dk84z75hsndemq6",
+   "status": "completed",
+   "window": 512,
+   "step": 512,
+   "k": 31,
+   "metric": "cosine",
+   "weights": "uniform",
+   "macro_f1": 0.7495845246213129,
+   "f1": {
+    "drain": 0.813953488372093,
+    "fill": 0.9915966386554622,
+    "spin": 0.5138888888888888,
+    "wash": 0.6788990825688074
+   },
+   "windows_scored": 386,
+   "error": null
+  }
+ ],
+ "search_space": {
+  "parameters": {
+   "window_size": {
+    "kind": "value",
+    "spec": {
+     "type": "categorical",
+     "values": [
+      512
+     ]
+    }
+   },
+   "step_size": {
+    "kind": "value",
+    "spec": {
+     "type": "categorical",
+     "values": [
+      512
+     ]
+    }
+   },
+   "k_neighbors": {
+    "kind": "fitting",
+    "spec": {
+     "type": "categorical",
+     "values": [
+      5,
+      31
+     ]
+    }
+   },
+   "metric": {
+    "kind": "fitting",
+    "spec": {
+     "type": "categorical",
+     "values": [
+      "cosine"
+     ]
+    }
+   },
+   "weights": {
+    "kind": "fitting",
+    "spec": {
+     "type": "categorical",
+     "values": [
+      "uniform"
+     ]
+    }
+   }
+  }
+ },
+ "validation": [
+  "validation/becken_warm_15-min_40_0__seg0.csv"
+ ]
+}
