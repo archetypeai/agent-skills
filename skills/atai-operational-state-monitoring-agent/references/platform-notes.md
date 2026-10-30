@@ -120,6 +120,40 @@ Why they exist:
 - **`finish_timestamp` is the window's last row**, so pair each prediction with the
   label at that row, as the Evals API does (`downsampling: last_record`).
 
+- **A bundle that still has agents can't be deleted** (409), even when they're cancelled:
+  delete its agents first. `GET /agents/instances?bundle_id=<bnd_…>` lists every agent a
+  bundle ran, including the attempts a rerun replaced.
+- **`output_embeddings: true` works on a promoted blueprint's bundle,** in batch and in
+  serving: an `embedding_<channel>` column per channel (768 values, a JSON list in the CSV),
+  predictions unchanged. Nothing else returns embeddings: not trials, not evals, and the
+  promoted kNN has no download route. Running the library files through the promoted
+  blueprint recomputes the fit's reference windows (the same encoder and windows).
+
+## Agent serving (production 2026-10-29; first on Dev 2026-10-16 to 10-18, Staging 2026-10-24)
+
+- **A bundle of the promoted blueprint** runs with `{"mode": "serving"}` and answers
+  `POST /agents/instances/{id}/query`; the platform supplies the `atai-records` serving
+  source and sink in place of the CSV ones. The bundle must set `data_columns` and
+  `timestamp_column`, which the osm source templates from values. A running serving agent
+  holds a serving worker; free-trial accounts serve on CPU only.
+- **Production (2026-10-29):** the prep skill's sample, 367 windows, every state and
+  probability as batch's, 453 ms median per query; the LARCO quickstart's 3,178 windows (k 5),
+  every state as batch's (2 probabilities a vote off), 448 ms median.
+- **Staging (2026-10-24):** both LARCO examples served 500 windows (the first 100 of each
+  quickstart cycle) with every state as batch's, ~0.9 s median per query; with k 31 one
+  window's probabilities were a neighbour's vote (1/31) off.
+- **Served answers are batch's, but for a neighbour now and then:** LARCO's 5 quickstart
+  cycles (3,178 windows) matched step 3 on every state and probability but 7 windows a
+  neighbour's vote off with k 31 (2 changed state at a near-tie), and on all 3,178 with k 5.
+- **A query holds the whole window** (one list per channel) and gets one record per
+  window; the agent keeps nothing between queries and numbers the rows itself (0 to
+  window − 1).
+- **Latency:** median about 0.45 s a query at one window on production, p95 about 0.5 s;
+  0.43–0.52 s on Dev, with rare stalls of 2–22 s when it was busy. 8 windows a query: 1.9 s (0.23 s a window).
+- **Released after 20 minutes idle:** a query to it then answers 409; start a new agent.
+- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
+  is ignored there, so filter client-side.
+
 ## Timing
 
 **It varies with platform load and job size, not a fixed cost per call:**
