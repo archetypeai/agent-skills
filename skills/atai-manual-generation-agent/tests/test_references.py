@@ -47,7 +47,7 @@ RUNNER_CODE = code_only(RUNNER_SRC)
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """The Agents API is mounted without a version prefix; files live under /v0.5."""
+    """Any endpoint form reduces to the root; build_client() appends /api."""
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in
@@ -65,11 +65,24 @@ class TestEndpointResolution(unittest.TestCase):
         self.assertEqual(mga.env()[1], "https://api.dev.u1.archetypeai.app")
 
     def test_version_suffix_stripped(self):
-        # A user pasting the /query base URL should still work: the runner mounts
-        # /agents and /v0.5/files itself.
+        # A user pasting the /query base URL should still work: build_client()
+        # reduces it to the root and mounts /api/agents and /api/files itself.
         for suffix in ("/v0.5", "/v0.4", "/v1"):
             os.environ["ATAI_API_ENDPOINT"] = f"https://api.dev.u1.archetypeai.app{suffix}"
             self.assertEqual(mga.env()[1], "https://api.dev.u1.archetypeai.app")
+
+    def test_quoted_dotenv_value_is_unquoted(self):
+        import tempfile
+        os.environ.pop("ATAI_API_ENDPOINT", None)
+        fd, path = tempfile.mkstemp(suffix=".env")
+        with os.fdopen(fd, "w") as f:
+            f.write('ATAI_API_ENDPOINT="https://platform.u1.archetypeai.app/api"\n')
+        try:
+            mga.load_dotenv(path)
+            self.assertEqual(os.environ["ATAI_API_ENDPOINT"],
+                             "https://platform.u1.archetypeai.app/api")
+        finally:
+            os.unlink(path)
 
     def test_trailing_slash_stripped(self):
         os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app/"
@@ -234,13 +247,34 @@ class TestScoringSemantics(unittest.TestCase):
         self.assertIn("advisory", RUNNER_CODE)
         self.assertIn("startswith", RUNNER_CODE)
 
-    def _score_output(self, filename):
+    def _score_output(self, filename, keywords=None):
         """Run the real scorer on a committed sample and capture what it prints."""
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             mga.score(os.path.join(DATA, filename),
-                      os.path.join(DATA, "40567_i2JWkDyg26A_reference_steps.csv"))
+                      os.path.join(DATA, "40567_i2JWkDyg26A_reference_steps.csv"),
+                      keywords and os.path.join(DATA, keywords))
         return buf.getvalue()
+
+    def test_keywords_cover_every_reference_step(self):
+        kw = json.load(open(os.path.join(DATA, "40567_i2JWkDyg26A_step_keywords.json")))
+        self.assertEqual(sorted(map(int, kw)), list(range(1, 12)))
+
+    def test_text_matched_score_is_reported_only_with_keywords(self):
+        """Temporal IoU is blind to text; --keywords adds the text-matched score."""
+        name = "mga-output-dev-old-prompt-18steps.json"
+        self.assertNotIn("text-matched", self._score_output(name))
+        out = self._score_output(name, "40567_i2JWkDyg26A_step_keywords.json")
+        self.assertIn("text-matched recall @ IoU>=0.5: 7/11", out)
+
+    def test_shifted_manual_scores_well_by_time_and_zero_by_text(self):
+        """Production, 2026-10-27, previous prompt: every text ~5 s early. Temporal
+        IoU cannot see it; matching on text can."""
+        out = self._score_output("mga-output-prod-old-prompt-SHIFTED.json",
+                                 "40567_i2JWkDyg26A_step_keywords.json")
+        self.assertIn("recall @ IoU>=0.5: 7/11", out)
+        self.assertIn("text-matched recall @ IoU>=0.5: 0/11", out)
+        self.assertIn("WARNING: 10 time-only match(es)", out)
 
     def test_scoring_reports_recall_not_precision(self):
         """A reference procedure is not an inventory, so precision would mislead."""
@@ -304,6 +338,10 @@ class TestRequestShapes(unittest.TestCase):
         """MGA reports file_extension: "json" and the body is a single object.
         A line-oriented reader works by accident on one video and breaks on two."""
         for name in ("mga-output-current-16384.json",
+                     "mga-output-prod-old-prompt-SHIFTED.json",
+                     "mga-output-dev-old-prompt-18steps.json",
+                     "mga-output-mouse-current-prompt.json",
+                     "mga-output-mouse-old-prompt-LOOP.json",
                      "mga-output-current-4096-EMPTY.json",
                      "mga-output-truncated-active-blueprint.json",
                      "mga-output-max_new_tokens2048.json",
@@ -327,12 +365,30 @@ class TestRequestShapes(unittest.TestCase):
                 _os.unlink(path)
 
     def test_current_defaults_sample_beats_the_historic_ones(self):
-        """The shipped configuration should be the best row, or the defaults are
-        wrong. 18 steps against 10, and IoU>=0.5 of 7/11 against 4/11."""
+        """The shipped configuration should beat the no-prompt row, or the defaults
+        are wrong. 16 steps against 10 (production, 2026-10-27)."""
         cur = mga.load_manual(os.path.join(DATA, "mga-output-current-16384.json"))
         old = mga.load_manual(os.path.join(DATA, "mga-output-max_new_tokens2048.json"))
-        self.assertEqual(len(cur), 18)
+        self.assertEqual(len(cur), 16)
         self.assertGreater(len(cur), len(old))
+
+    def test_previous_prompt_looped_and_current_one_does_not(self):
+        """Silent 80 s clip, production, same values: the previous prompt emitted 2
+        distinct texts in 16 steps; the current one 17 distinct in 17."""
+        loop = [s["instruction"] for s in mga.load_manual(
+            os.path.join(DATA, "mga-output-mouse-old-prompt-LOOP.json"))]
+        cur = [s["instruction"] for s in mga.load_manual(
+            os.path.join(DATA, "mga-output-mouse-current-prompt.json"))]
+        self.assertEqual((len(loop), len(set(loop))), (16, 2))
+        self.assertEqual(len(set(cur)), len(cur))
+
+    def test_default_prompt_avoids_what_drove_the_loop(self):
+        """"concise" plus a per-step word cap drove the loop; the replacement
+        requires each step to differ from the one before."""
+        p = mga.DEFAULT_PROMPT.lower()
+        self.assertNotIn("concise", p)
+        self.assertNotIn("at most 15 words", p)
+        self.assertIn("different action from the one before", p)
 
     def test_the_empty_sample_really_is_empty(self):
         """A run below the reasoning floor: job.completed, no error, no steps.
