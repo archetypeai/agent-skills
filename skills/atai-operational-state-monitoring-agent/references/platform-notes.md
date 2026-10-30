@@ -129,15 +129,16 @@ Why they exist:
   promoted kNN has no download route. Running the library files through the promoted
   blueprint recomputes the fit's reference windows (the same encoder and windows).
 
-## Agent serving (Dev 2026-10-16 to 10-18; Staging 2026-10-24)
+## Agent serving (production 2026-10-29; first on Dev 2026-10-16 to 10-18, Staging 2026-10-24)
 
-- **Dev and Staging only, a few serving workers shared by everyone.** A bundle of the
-  promoted blueprint runs with `{"mode": "serving"}` and answers
+- **A bundle of the promoted blueprint** runs with `{"mode": "serving"}` and answers
   `POST /agents/instances/{id}/query`; the platform supplies the `atai-records` serving
-  source and sink in place of the CSV ones (atai_core #7286). The bundle must set
-  `data_columns` and `timestamp_column`, which the osm source templates from values. Earlier
-  versions made a `<key>-served-records` copy; creating a blueprint now takes the admin role
-  on Staging, and a copy made before the connector change is refused.
+  source and sink in place of the CSV ones. The bundle must set `data_columns` and
+  `timestamp_column`, which the osm source templates from values. A running serving agent
+  holds a serving worker; free-trial accounts serve on CPU only.
+- **Production (2026-10-29):** the prep skill's sample, 367 windows, every state and
+  probability as batch's, 453 ms median per query; the LARCO quickstart's 3,178 windows (k 5),
+  every state as batch's (2 probabilities a vote off), 448 ms median.
 - **Staging (2026-10-24):** both LARCO examples served 500 windows (the first 100 of each
   quickstart cycle) with every state as batch's, ~0.9 s median per query; with k 31 one
   window's probabilities were a neighbour's vote (1/31) off.
@@ -147,8 +148,8 @@ Why they exist:
 - **A query holds the whole window** (one list per channel) and gets one record per
   window; the agent keeps nothing between queries and numbers the rows itself (0 to
   window − 1).
-- **Latency:** median 0.43–0.52 s a query at one window, p95 under 0.8 s, with rare stalls
-  of 2–22 s on a busy Dev. 8 windows a query: 1.9 s (0.23 s a window).
+- **Latency:** median about 0.45 s a query at one window on production, p95 about 0.5 s;
+  0.43–0.52 s on Dev, with rare stalls of 2–22 s when it was busy. 8 windows a query: 1.9 s (0.23 s a window).
 - **Released after 20 minutes idle:** a query to it then answers 409; start a new agent.
 - **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
   is ignored there, so filter client-side.

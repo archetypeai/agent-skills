@@ -10,7 +10,7 @@ description: >
   (library / validation / test / delivery) fit and score settings with the
   Optimizations API, promote the best trial to a blueprint, test it once with the
   Evals API, then deliver it as a bundle over new recordings and score the delivery,
-  serve it a window per query over `/query` (agent serving, Dev and Staging only) checked against
+  serve it a window per query over `/query` (agent serving) checked against
   the delivery, and draw the library's embeddings for a live app.
   Covers the search space, promote, Evals, batch runs, the output CSV schema
   (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
@@ -41,10 +41,10 @@ either.
 |---|---|---|
 | you have | a prepared CSV (the Volve sample, or data like it) | labelled recordings of **your** machine |
 | you get | per-window predictions from Archetype AI's six-state Volve classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
-| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** (Dev, Staging) |
+| APIs | files, bundles, instances | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), on the official `archetypeai` client | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~1–2 min on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | verified on production | **verified on production (2026-10-28, under `/api`), staging (2026-10-01) and dev (2026-09-30), identical results** |
+| status | verified on production | **verified on production (2026-10-28, under `/api`; agent serving 2026-10-29), staging (2026-10-01) and dev (2026-09-30), identical results** |
 
 Path 2's last step *is* Path 1, run on your own bundle instead of the maintained one, so the
 output schema, polling, pitfalls and cleanup below apply to both.
@@ -257,8 +257,9 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
-> Steps 5–6 (agent serving and the library view) are on Dev and Staging only, built and
-> checked on both LARCO examples (Dev 2026-10-16 to 10-18; Staging 2026-10-24).
+> Steps 5–6 (agent serving and the library view) are verified on production (2026-10-29), on
+> the sample below and on the LARCO quickstart; first built on Dev (2026-10-16 to 10-18) and
+> Staging (2026-10-24).
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -267,7 +268,7 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
   (prep skill)   fit + score     best trial     one-shot, pooled          predictions per file       held-back labels
                  on validation   → blueprint
-                                                                          └──► 5 serve (/query, Dev): a window per query, checked against step 3
+                                                                          └──► 5 serve (/query): a window per query, checked against step 3
                                                                           └──► 6 library view: the fit's windows recomputed, drawn in 2-D for a live app
 ```
 
@@ -446,7 +447,7 @@ next to the test: macro-F1 0.8463
 The second machine scores lower than the test, as in the LARCO examples (quickstart: delivery
 0.7707 against test 0.8617 over 5 and 3 cycles).
 
-## Step 5 — Serve it (Dev and Staging only)
+## Step 5 — Serve it
 
 ```sh
 python serve.py --roles $R --out out                          # every delivery file, one window a query
@@ -455,8 +456,8 @@ python serve.py --roles $R --out out --files seg0 --max-windows 50 --windows-per
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a machine's controller would
-ask about its latest `window_size` readings. It is on Dev and Staging only for first tests,
-with **a few serving workers shared by everyone**.
+ask about its latest `window_size` readings. A running serving agent holds a serving
+worker until it is stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
 
 1. **A bundle of the promoted blueprint, as it is,** with the columns to read:
 
@@ -469,8 +470,6 @@ with **a few serving workers shared by everyone**.
    supplies the `atai-records` serving source and sink itself, in place of the CSV ones. The
    osm blueprint's source takes `data_columns` and `timestamp_column` from values, which batch
    reads from the CSV header but a served query doesn't carry, so the bundle sets them.
-   (Earlier versions made a `<key>-served-records` copy; creating a blueprint now takes the
-   admin role on Staging.)
 2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
@@ -492,24 +491,25 @@ with **a few serving workers shared by everyone**.
    (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
    for `cleanup.py`.
 
-Not yet run on the prep skill's sample (367 windows, a few minutes). **Measured on the LARCO
-examples** (Dev, 2026-10-16), the quickstart's 5 delivery cycles, 3,178 windows:
+**Expect, on the sample** (production, 2026-10-29, 3 min):
 
 ```
-served 3,178 windows of 5 file(s) in 3,178 queries, 1608 s
-  against the delivery (batch): predicted_state identical in 3,176/3,178, probabilities within 1e-4 in 3,171/3,178 (max difference 3.2e-02); invalid 0
-  latency per query: median 433 ms, p95 753 ms, max 22330 ms
-  served  macro-F1 0.7966  fill 0.90  wash 0.87  spin 0.69  drain 0.73
-  batch   macro-F1 0.7962  fill 0.90  wash 0.87  spin 0.69  drain 0.74
+served 367 windows of 1 file(s) in 367 queries, 174 s
+  against the delivery (batch): predicted_state identical in 367/367, probabilities within 1e-4 in 367/367 (max difference 0.0e+00); invalid 0
+  latency per query: median 453 ms, p95 519 ms, max 616 ms
+  served  macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
+  batch   macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
 ```
 
-- **Served is batch, but for a neighbour now and then.** With k 31 (the full example), 7 of
-  3,178 windows were one neighbour's vote off (a probability 1/31 = 0.032), most likely the
-  tiny float difference between served and batch embeddings; 2 sat at a near-tie and changed
-  state. The quickstart's k 5 model matched batch on all 3,178. The same kind of difference
-  as between two deployments.
-- **~0.4–0.6 s a window** (median, with Dev's load), about 4× faster than LARCO's data
-  arrives (a 512-row window every 2.56 s). 8 windows a query took 1.9 s (0.23 s a window) but
+The same day the LARCO quickstart's 5 delivery cycles (3,178 windows, k 5) served on
+production with every state as batch's and a 448 ms median.
+
+- **Served is batch, but for a neighbour now and then.** A float difference between served
+  and batch embeddings can swap one neighbour: a probability one vote off (1/k), the state
+  unchanged. The LARCO quickstart (k 5) had 2 such windows of 3,178; the full example (k 31,
+  Dev) had 7, of which 2 sat at a near-tie and changed state. Hence the 0.1% rule above.
+- **About 0.45 s a window** (median), about 5× faster than LARCO's data arrives (a 512-row
+  window every 2.56 s). 8 windows a query took 1.9 s (0.23 s a window) but
   waits for 8 windows before it asks. **One window per query is the way to serve it live**;
   for stored data, deliver in batch.
 - **A query must hold the whole window.** The agent keeps nothing between queries: keep the
@@ -546,7 +546,8 @@ own state's centre in 2-D:
 | LARCO full (3,200 windows, k 31) | 59% | **79%** |
 | LARCO quickstart (800 windows, k 5) | 70% | **86%** |
 
-(79% and 85% on windows held out of the fit, so not an overfit.) **LD 1** is the direction
+(79% and 85% on windows held out of the fit, so not an overfit.) On the prep skill's sample
+(production, 2026-10-29): 1,600 windows, 84% nearest their own state's centre. **LD 1** is the direction
 along which the states' centres sit furthest apart relative to each state's own spread,
 **LD 2** the next best; neither has a physical unit. Writes `library-view.json` (states,
 channels, the layout) and `library-view.bin` (float32: each window's 2-D point and state, the

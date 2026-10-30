@@ -8,9 +8,8 @@ files that way and checks every answer against deliver.py's batch output for the
 
   1. a bundle of the promoted blueprint, as it is: the platform supplies the serving
      connectors when it runs a bundle in serving mode, so no served copy of the blueprint
-     is made (creating a blueprint takes the admin role on Staging). The bundle passes
-     `data_columns` and `timestamp_column`, which the osm blueprint's source templates
-     from values and batch reads from the CSV header;
+     is made. The bundle passes `data_columns` and `timestamp_column`, which the osm
+     blueprint's source templates from values and batch reads from the CSV header;
   2. that bundle run with {"mode": "serving"};
   3. each file replayed a window at a time: every query holds one window's rows of every
      channel, one list per channel (--windows-per-query N sends N consecutive windows).
@@ -22,7 +21,7 @@ files that way and checks every answer against deliver.py's batch output for the
      SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
      cleanup.py finds them after a kill -9.
 
-Dev and Staging only for now. Needs deliver.py's outputs in <out>/delivery/. Writes
+Needs deliver.py's outputs in <out>/delivery/. Writes
 <out>/serving/serve_<N>files[_first<M>]_wpq<W>.csv (a row per window) and .json (the summary).
 
     python serve.py --roles roles --out out
@@ -110,10 +109,6 @@ def main(argv=None):
     args = ap.parse_args(argv)
     load_dotenv()
     check_auth(log)
-    # match the deployment, not one host: dev is api.dev.* and platform.dev.*, staging platform.stage.*
-    if not any(d in root() for d in (".dev.", ".stage.")):
-        sys.exit("agent serving is on dev and staging only for now "
-                 "(e.g. https://platform.dev.u1.archetypeai.app, https://platform.stage.u1.archetypeai.app)")
     manifest = load_manifest(args.roles)
     states = manifest["states"]
     ts_path = os.path.join(args.out, "test_state.json")
