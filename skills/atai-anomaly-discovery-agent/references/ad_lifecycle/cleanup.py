@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Path 2, cleanup: delete the agents and bundles deliver.py and serve.py left on the platform.
+"""Path 2, cleanup: delete the sessions, deployments and packages deliver.py and serve.py left on the platform.
 
     python cleanup.py --out out           # list what would be deleted, and what stays
     python cleanup.py --out out --yes     # delete it
 
-From the ids in <out>/:
-  serve_state.json     a serving agent and its bundle, if serve.py was killed before it could
-                       delete them. A running serving agent holds a serving worker until it
-                       is cancelled, or idle for 20 minutes.
-  deliver_state.json   the delivery agents and their bundle. The state holds each file's last
-                       attempt; the bundle's own listing (GET /agents/instances?bundle_id=)
-                       also finds the attempts a rerun replaced.
+From the packages recorded in <out>/:
+  serve_state.json     serve.py's, if it was killed before it could delete them. A serving
+                       deployment holds a serving worker until it is stopped.
+  deliver_state.json   deliver.py's.
+For each package, the platform's own listings (GET /agents/deployments?package_id=, then
+GET /agents/sessions?deployment_id=) give its deployments and their sessions, so ones a
+script never recorded, or a rerun replaced, are found too.
 
-Agents go first (a bundle that still has an agent answers 409), a running one is cancelled
-before it is deleted, and an id already gone (404) counts as done. Progress goes to
-<out>/cleanup_state.json, so a rerun picks up where it stopped.
+Sessions go first, then deployments, then the package: each holds the next. A session still
+going is cancelled, and a deployment still up stopped, before it is deleted; an id already
+gone (404) counts as done. Progress goes to <out>/cleanup_state.json, so a rerun picks up
+where it stopped.
 
-What stays: the promoted blueprint (deleting a blueprint takes an org admin's key; serve.py
-serves it as it is, with no copy), and the optimizations and eval (records your results cite). After a cleanup,
-rerunning deliver.py needs <out>/deliver_state.json moved aside: its bundle is gone.
+What stays: the project, its copy of `ad`, the promoted blueprint, and the optimizations and
+eval (records your results cite). After a cleanup, rerunning deliver.py needs
+<out>/deliver_state.json moved aside: its package is gone.
 """
 import argparse
 import json
@@ -26,18 +27,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, list_all, load_dotenv, request, root, same_deployment  # noqa: E402
+from atai_http import check_auth, end, lifecycle_url, list_all, load_dotenv, request, root, same_deployment  # noqa: E402
 from common import log  # noqa: E402
 
-
-def call(method, path, body=None):
-    """The response, or None when the object is already gone."""
-    try:
-        return request(method, f"{agents()}{path}", body)
-    except RuntimeError as e:
-        if "(404)" in str(e):
-            return None
-        raise
+KINDS = ("sessions", "deployments", "packages")
 
 
 def load(out, name):
@@ -45,14 +38,15 @@ def load(out, name):
     return json.load(open(p)) if os.path.exists(p) else {}
 
 
-def targets(serve, deliver, bundle_runs):
-    """(what, kind, id) to delete, each agent before its bundle."""
+def targets(packages, deployments_of, sessions_of):
+    """(what, kind, id) to delete, each session before its deployment and each deployment
+    before its package. `packages` is [(what, package id)]; deployments_of / sessions_of list
+    a package's deployments and a deployment's sessions."""
     out = []
-    for what, st, extra in (("serving", serve, set()), ("delivery", deliver, bundle_runs)):
-        if not st.get("bundle"):
-            continue
-        ids = {a for a in ([st.get("agent")] + list(st.get("agents", {}).values())) if a} | extra
-        out += [(what, "instances", a) for a in sorted(ids)] + [(what, "bundles", st["bundle"])]
+    for what, pkg in packages:
+        dpls = deployments_of(pkg)
+        out += [(what, "sessions", s) for d in dpls for s in sessions_of(d)]
+        out += [(what, "deployments", d) for d in dpls] + [(what, "packages", pkg)]
     return out
 
 
@@ -68,37 +62,41 @@ def main(argv=None):
         if not same_deployment(st):
             sys.exit(f"ids in {a.out} are from {st['endpoint']}, a different deployment from {root()}: "
                      f"set .env to that deployment")
-    runs = set()
-    if deliver.get("bundle"):
-        runs = {r["id"] for r in list_all(f"{agents()}/instances?bundle_id={deliver['bundle']}")}
-    todo_all = targets(serve, deliver, runs)
+        if st.get("bundle"):
+            sys.exit(f"{a.out} holds bundle ids from before packages: delete them with the bundle-era cleanup.py")
+
+    def exists(pkg):
+        try:
+            return bool(request("GET", lifecycle_url("packages", pkg)))
+        except RuntimeError as e:
+            if "(404)" in str(e):
+                return False
+            raise
+    packages = [(what, st["package"]) for what, st in (("serving", serve), ("delivery", deliver))
+                if st.get("package") and exists(st["package"])]
+    ids = lambda kind, **q: [r["id"] for r in list_all(lifecycle_url(kind) + "?" + "&".join(f"{k}={v}" for k, v in q.items()))]  # noqa: E731
+    todo_all = targets(packages, lambda p: ids("deployments", package_id=p), lambda d: ids("sessions", deployment_id=d))
     done_path = os.path.join(a.out, "cleanup_state.json")
     gone = set(load(a.out, "cleanup_state").get("deleted", []))
     todo = [t for t in todo_all if t[2] not in gone]
     for what in ("serving", "delivery"):
         mine = [t for t in todo if t[0] == what]
-        print(f"{what}: {sum(t[1] == 'instances' for t in mine)} agent(s), "
-              f"{sum(t[1] == 'bundles' for t in mine)} bundle(s) to delete")
+        print(f"{what}: " + ", ".join(f"{sum(t[1] == k for t in mine)} {k}" for k in KINDS) + " to delete")
     print(f"already deleted: {len(gone & {t[2] for t in todo_all})}")
     if test.get("blueprint"):
-        key = test["blueprint"]["key"]
-        print(f"stays: blueprint {key} (an org admin can delete it), "
-              f"and the optimizations and eval {test.get('eval', '')}".rstrip())
+        print(f"stays: blueprint {test['blueprint']['key']}, the optimizations and eval {test.get('eval', '')}, "
+              f"and the project with its copy of `ad`")
     if not a.yes:
         print("\nnothing deleted: rerun with --yes")
         return 0
 
     for k, (what, kind, obj) in enumerate(todo, 1):
-        if kind == "instances":
-            info = call("GET", f"/instances/{obj}")
-            if info and info.get("status") not in TERMINAL:
-                call("POST", f"/instances/{obj}/cancel", {})
-        call("DELETE", f"/{kind}/{obj}")
+        end(kind, obj)
         gone.add(obj)
         if k % 25 == 0 or k == len(todo):
             json.dump({"deleted": sorted(gone)}, open(done_path, "w"), indent=1)
             log(f"deleted {k}/{len(todo)}")
-    if serve.get("bundle"):
+    if serve.get("package"):
         os.remove(os.path.join(a.out, "serve_state.json"))
     log("done")
     return 0

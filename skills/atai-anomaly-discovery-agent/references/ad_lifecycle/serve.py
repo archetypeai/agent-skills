@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """Path 2, step 5: serve the promoted detector over /query, checked against the delivery.
 
-deliver.py runs the detector in batch: upload a file, run an agent, download the output.
+deliver.py runs the detector in batch: upload a file, run a session, download the output.
 Agent serving keeps an agent loaded and answers a window of samples in one round trip,
 as a live system would ask it for the latest `window_size` samples. This replays delivery
 recordings that way and checks every answer against deliver.py's batch output:
 
-  1. a bundle of the promoted blueprint, as it is, at the delivery's step (bundle values
-     override a blueprint's): the platform supplies the serving connectors when it runs a
-     bundle in serving mode;
-  2. that bundle run with {"mode": "serving"};
+  1. a package of the promoted blueprint, as it is (the delivery's step: a package has no
+     values); the platform supplies the serving connectors for a serving deployment;
+  2. that package deployed as `serving` (the agent placed on a worker and loaded), and a
+     session opened on the deployment, queried at POST /agents/sessions/{id}/query;
   3. each recording replayed one step at a time: every query holds the latest
-     `window_size` samples (--windows-per-query N sends N consecutive windows at once).
-     At step 1 that is a query per sample, as live; at a larger step (deliver.py --step,
-     for a deployment that can't deliver at step 1 in time) the windows batch scored.
+     `window_size` samples (--windows-per-query N sends N consecutive windows at once,
+     `step` apart), so the served windows are exactly the ones batch scored.
      A served agent keeps nothing between queries and numbers the samples itself, so
      recordings are replayed one by one: a window across a join would not be marked
      invalid as batch marks it;
   4. every answer against batch: `predicted_label`, and `anomaly_score` to within 1e-4
      relative (float32 noise is ~2e-5), plus each recording's first sustained alarm
      (3 consecutive anomaly windows), served and batch;
-  5. the agent cancelled and deleted, and the bundle deleted, however it ends (Ctrl-C,
-     SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
+  5. the session cancelled, the deployment stopped, and the session, deployment and package
+     deleted, however it ends (Ctrl-C, SIGTERM, SIGHUP included). Their ids stay in <out>/serve_state.json until then, so
      cleanup.py finds them after a kill -9.
 
-Needs deliver.py's output (step 1 by default; any step works). Writes
+Needs deliver.py's output. Writes
 <out>/serving/<file>_wpq<N>.csv (a row per window) and .json (the summary).
 
     python serve.py --roles roles --out out --recordings normal_48h_run43 idv05_run3
@@ -41,7 +40,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, load_dotenv, request, root, same_deployment  # noqa: E402
+from atai_http import (check_auth, create_package, deploy, end as end_one, lifecycle_url, load_dotenv,  # noqa: E402
+                       open_session, request, root, same_deployment, wait_for)
 from common import load_manifest, log  # noqa: E402
 
 MODEL = "ad"          # the name a query gives in `model`
@@ -79,20 +79,22 @@ def first_alarm(labels):
 
 
 def end(ex):
-    """Delete the agent and the bundle; an id already gone counts as done."""
-    calls = [("POST", f"/instances/{ex['agent']}/cancel", {}), ("DELETE", f"/instances/{ex['agent']}", None)]
-    for method, path, body in (calls if ex["agent"] else []) + [("DELETE", f"/bundles/{ex['bundle']}", None)]:
+    """End the session, then the deployment, then delete the package; an id already gone
+    counts as done. Each holds the next."""
+    for kind in ("sessions", "deployments", "packages"):
+        obj = ex.get(kind[:-1])
+        if not obj:
+            continue
         try:
-            request(method, f"{agents()}{path}", body)
+            end_one(kind, obj)
         except RuntimeError as e:
-            if "(404)" not in str(e):
-                log(f"cleanup: {e}; cleanup.py retries it")
-                return False
+            log(f"cleanup: {e}; cleanup.py retries it")
+            return False
     return True
 
 
 def stop(signum, _frame):
-    sys.exit(f"stopped by signal {signum}")       # so `finally` deletes the agent and bundle
+    sys.exit(f"stopped by signal {signum}")       # so `finally` ends the session and deployment
 
 
 def main(argv=None):
@@ -113,10 +115,8 @@ def main(argv=None):
     test = json.load(open(os.path.join(a.out, "test_state.json")))
     if not same_deployment(test):
         sys.exit(f"the blueprint in {a.out}/test_state.json is on {test['endpoint']}, a different deployment from {root()}")
-    deliver = json.load(open(os.path.join(a.out, "deliver_state.json")))
     bp = test["blueprint"]
-    channels, window = m["channels"], bp["values"]["window_size"]
-    step = deliver.get("values", {}).get("step_size") or bp["values"]["step_size"]
+    channels, window, step = m["channels"], bp["values"]["window_size"], bp["values"]["step_size"]
     f = next((d for d in m["delivery"] if (a.file and d["file"].endswith(a.file)) or
               (not a.file and not d.get("calibration"))), None) or sys.exit(f"no delivery file {a.file or ''}")
     data = pd.read_csv(os.path.join(a.roles, f["file"]))
@@ -137,28 +137,25 @@ def main(argv=None):
 
     sf = os.path.join(a.out, "serve_state.json")
     if os.path.exists(sf):
-        sys.exit(f"{sf} holds an earlier replay's agent and bundle: run cleanup.py first")
-    bundle = request("POST", f"{agents()}/bundles", {"blueprint": bp["key"], "name": f"{a.name} serving",
-                                                      "values": {"step_size": step}})
-    ex = {"endpoint": root(), "bundle": bundle["id"], "agent": None}
-    json.dump(ex, open(sf, "w"))
+        sys.exit(f"{sf} holds an earlier replay's session, deployment and package: run cleanup.py first")
+    ex = {"endpoint": root(), "package": None, "deployment": None, "session": None}
     served, latency = {}, []
     t0 = time.time()
     try:
-        ex["agent"] = request("POST", f"{agents()}/bundles/{ex['bundle']}/run", {"mode": "serving"})["id"]
-        json.dump(ex, open(sf, "w"))
-        log(f"bundle {ex['bundle']} · agent {ex['agent']}")
-        while (status := request("GET", f"{agents()}/instances/{ex['agent']}").get("status")) != "running":
-            if status in ("failed", "cancelled", "canceled", "completed") or time.time() - t0 > 600:
-                sys.exit(f"agent {ex['agent']} is {status}, not running")
-            time.sleep(3)
+        for kind, make in (("package", lambda: create_package(bp["id"], f"{a.name} serving")),
+                           ("deployment", lambda: deploy(ex["package"], "serving")),
+                           ("session", lambda: open_session(ex["deployment"]))):
+            ex[kind] = make()["id"]
+            json.dump(ex, open(sf, "w"))
+        log(f"package {ex['package']} · serving deployment {ex['deployment']} · session {ex['session']}")
+        wait_for("sessions", ex["session"], "running", "pending")
         for rec, first, n in segs:
             got = served[rec] = []
             for k in range(0, n, wpq):
                 count = min(wpq, n - k)
                 t = time.time()
                 chunk = X[first + k * step:first + (k + count - 1) * step + window]
-                answer = request("POST", f"{agents()}/instances/{ex['agent']}/query", query_body(chunk), idempotent=True)
+                answer = request("POST", lifecycle_url("sessions", ex["session"]) + "/query", query_body(chunk), idempotent=True)
                 latency.append(time.time() - t)
                 records = (answer.get("response") or {}).get("data")
                 if not isinstance(records, list) or len(records) != count:
@@ -168,7 +165,7 @@ def main(argv=None):
     finally:
         if end(ex):
             os.remove(sf)
-            log(f"cancelled and deleted {ex['agent']}, deleted {ex['bundle']}")
+            log(f"ended and deleted {', '.join(v for k, v in ex.items() if k != 'endpoint' and v)}")
     elapsed = time.time() - t0
 
     rows, per_rec = [], []
