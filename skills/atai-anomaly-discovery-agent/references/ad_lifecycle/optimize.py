@@ -7,6 +7,11 @@ window paired with its last row. Per trial the platform embeds every window with
 fuses per-channel features, fits normalisation, PCA and a Local Outlier Factor detector
 on the library, and reports macro-F1 on validation at the trial's threshold.
 
+The optimization searches the project's own copy of `ad` (--project, created or reused;
+the copy is keyed `<--name>-base`), so the blueprints it promotes, and their packages,
+deployments and sessions, land in that project. `output_score: true` is pinned too: a
+package runs a blueprint exactly as promoted, so the delivery's scores are switched on here.
+
 Each option takes one value (pinned in `overrides.values` for every trial) or several
 (searched, `kind: value`):
   --windows, --steps   window_size, step_size: both Optimize legs use the one step
@@ -22,7 +27,8 @@ default a grid of up to DEFAULT_TRIALS points runs in full; a bigger grid or a t
 range gets a DEFAULT_TRIALS-trial random search: with the few settings that matter, a
 dozen random points usually land close to the best. --max-trials sets the budget.
 
-Writes <out>/optimize_<optimization id>.json and <out>/optimize_state.json.
+Writes <out>/optimize_<optimization id>.json, <out>/optimize_state.json and
+<out>/project_state.json.
 
     python optimize.py --roles roles --dry-run                     # the plan: no uploads, no jobs
     python optimize.py --roles roles --out out --name ad-sample    # the default 2-trial search
@@ -37,7 +43,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import agents, check_auth, list_trials, load_dotenv, report_anomaly, request, root, same_deployment, trial_values, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
-from common import base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
+from common import base_blueprint, base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
 # The TEP quickstart's search: the full example's 24-trial winner, with k 5 and 10.
 DEFAULTS = {"windows": [48], "steps": [8], "k": [5, 10], "metrics": ["l2"], "pca": [16],
@@ -91,7 +97,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
-    ap.add_argument("--name", default="ad", help="prefixes every upload; use your own")
+    ap.add_argument("--name", default="ad", help="prefixes every upload, and keys the copy of `ad`; use your own")
+    ap.add_argument("--project", default="Anomaly Discovery", help="the project to work in (created if you have none of that name)")
     ap.add_argument("--windows", type=int, nargs="+", default=DEFAULTS["windows"])
     ap.add_argument("--steps", type=int, nargs="+", default=DEFAULTS["steps"])
     ap.add_argument("--k", type=int, nargs="+", default=DEFAULTS["k"])
@@ -135,9 +142,9 @@ def main(argv=None):
             return 0
         check_auth(log)
         ids = upload_all(lib + val, a.roles, cache_path(a.out), prefix=a.name, log=log)
-        bp = request("GET", f"{agents()}/blueprints/ad")
+        bp = base_blueprint(a.out, a.project, f"{a.name}-base", log=log)
         body = {"name": f"{a.name} {stamp()}", "blueprint_id": bp["id"], "primary": a.primary,
-                "overrides": {"values": {**base_values(m), **pinned}}, "search_space": space,
+                "overrides": {"values": {**base_values(m), **pinned, "output_score": True}}, "search_space": space,
                 "budget": {"max_trials": trials},
                 "training_examples": [example(os.path.basename(p), ids[p], training=True) for p in lib],
                 "validation_examples": [example(os.path.basename(p), ids[p]) for p in val]}

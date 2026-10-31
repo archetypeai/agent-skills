@@ -168,17 +168,19 @@ class Serving(unittest.TestCase):
 
 
 class Cleanup(unittest.TestCase):
-    def test_agents_before_their_bundle(self):
-        t = cleanup.targets({"bundle": "bnd_s", "agent": "agt_s"},
-                            {"bundle": "bnd_d", "agents": {"f1": "agt_1", "f2": "agt_2"}}, {"agt_0", "agt_1"})
-        self.assertEqual(t, [("serving", "instances", "agt_s"), ("serving", "bundles", "bnd_s"),
-                             ("delivery", "instances", "agt_0"), ("delivery", "instances", "agt_1"),
-                             ("delivery", "instances", "agt_2"), ("delivery", "bundles", "bnd_d")])
+    def test_sessions_before_deployments_before_their_package(self):
+        dpls = {"pkg_s": ["dpl_s"], "pkg_d": ["dpl_d"]}
+        sess = {"dpl_s": ["ses_s"], "dpl_d": ["ses_1", "ses_2"]}
+        t = cleanup.targets([("serving", "pkg_s"), ("delivery", "pkg_d")], dpls.get, sess.get)
+        self.assertEqual(t, [("serving", "sessions", "ses_s"), ("serving", "deployments", "dpl_s"),
+                             ("serving", "packages", "pkg_s"),
+                             ("delivery", "sessions", "ses_1"), ("delivery", "sessions", "ses_2"),
+                             ("delivery", "deployments", "dpl_d"), ("delivery", "packages", "pkg_d")])
 
     def test_nothing_recorded(self):
-        self.assertEqual(cleanup.targets({}, {"agents": {"f": "agt_1"}}, set()), [])
-        self.assertEqual(cleanup.targets({"bundle": "bnd_s", "agent": None}, {}, set()),
-                         [("serving", "bundles", "bnd_s")])
+        self.assertEqual(cleanup.targets([], lambda p: [], lambda d: []), [])
+        self.assertEqual(cleanup.targets([("serving", "pkg_s")], lambda p: [], lambda d: []),
+                         [("serving", "packages", "pkg_s")])
 
 
 class Promote(unittest.TestCase):
@@ -210,18 +212,20 @@ class Promote(unittest.TestCase):
             self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
 
 class DeliverResume(unittest.TestCase):
-    """A file whose agent failed without a complete output gets a new agent on the next run;
-    a file longer than --max-windows-per-run goes in several runs whose outputs join to its own."""
+    """A file whose session failed without a complete output gets a new session on the next run;
+    a file longer than --max-windows-per-run goes in several sessions whose outputs join to its own."""
 
     def deliver(self, status, *args):
         started = []
 
         def fake(method, url, body=None):
-            if method == "GET":
-                return {"error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
-            assert url.endswith("/run"), url
-            started.append(body)
-            return {"id": f"agt_new{len(started)}"}
+            assert method == "GET", url
+            return {"error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
+
+        def open_session(deployment, file_id):
+            assert deployment == "dpl_1", deployment
+            started.append(file_id)
+            return {"id": f"ses_new{len(started)}"}
 
         def download(agent, dst, src, ts_col):     # a batch output: a window every `step` rows of src
             if status != "completed":
@@ -233,35 +237,42 @@ class DeliverResume(unittest.TestCase):
         with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
                                  load_manifest=lambda roles: {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t"},
                                  root=lambda: "https://x", same_deployment=lambda s: True,
-                                 agents=lambda: "https://x/api/agents", request=fake,
+                                 request=fake, open_session=open_session,
+                                 lifecycle_url=lambda kind, obj="": f"https://x/api/agents/{kind}/{obj}",
                                  upload_file=lambda src, name: {"file_id": "fil_1"},
-                                 poll=lambda agent: status, download=download):
+                                 poll=lambda session: status, download=download):
             deliver.main(["--roles", self.roles, "--out", self.out, *args])
-        return started, json.load(open(os.path.join(self.out, "deliver_state.json")))["agents"]
+        return started, json.load(open(os.path.join(self.out, "deliver_state.json")))["sessions"]
 
     def setUp(self):
         self.out, self.roles = tempfile.mkdtemp(), tempfile.mkdtemp()
         os.makedirs(os.path.join(self.roles, "delivery"))
         pd.DataFrame({"t": range(100, 120), "v": range(20)}).to_csv(os.path.join(self.roles, "delivery", "d.csv"), index=False)
         # window 4, step 2: 20 rows hold 9 windows
-        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp", "values": {"window_size": 4, "step_size": 2}}}),
-                            ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1",
-                                                    "values": {"step_size": 2}, "agents": {"delivery/d.csv": "agt_dead"}})):
+        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp", "id": "blp_1", "values": {"window_size": 4, "step_size": 2}}}),
+                            ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "package": "pkg_1",
+                                                    "deployment": "dpl_1", "sessions": {"delivery/d.csv": "ses_dead"}})):
             json.dump(state, open(os.path.join(self.out, name), "w"))
 
-    def test_a_failed_agent_is_replaced_on_the_next_run(self):
+    def test_a_failed_session_is_replaced_on_the_next_run(self):
         started, runs = self.deliver("failed")
-        self.assertEqual(started, [])                       # this run only polls the dead agent
+        self.assertEqual(started, [])                       # this run only polls the dead session
         self.assertEqual(runs, {})
         started, runs = self.deliver("timeout")             # still running when this run stopped waiting
         self.assertEqual(len(started), 1)
-        self.assertEqual(runs, {"delivery/d.csv": "agt_new1"})
+        self.assertEqual(runs, {"delivery/d.csv": "ses_new1"})
 
-    def test_a_completed_or_still_running_agent_is_kept(self):
+    def test_a_completed_or_still_running_session_is_kept(self):
         for status in ("completed", "timeout"):
             os.makedirs(os.path.join(self.out, "delivery"), exist_ok=True)
             started, runs = self.deliver(status)
-            self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_dead"}))
+            self.assertEqual((started, runs), ([], {"delivery/d.csv": "ses_dead"}))
+
+    def test_a_bundle_state_is_refused(self):
+        sf = os.path.join(self.out, "deliver_state.json")
+        json.dump({"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1"}, open(sf, "w"))
+        with self.assertRaises(SystemExit):
+            self.deliver("completed")
 
     def test_pieces(self):
         self.assertEqual(deliver.pieces(20, 4, 2, 0), [(0, 20)])
@@ -274,7 +285,7 @@ class DeliverResume(unittest.TestCase):
         whole = os.path.join(self.out, "delivery", "d.csv")
         os.makedirs(os.path.dirname(whole))
         state = json.load(open(os.path.join(self.out, "deliver_state.json")))
-        state["agents"] = {}
+        state["sessions"] = {}
         json.dump(state, open(os.path.join(self.out, "deliver_state.json"), "w"))
         self.deliver("completed")
         one = pd.read_csv(whole)
@@ -310,7 +321,7 @@ class QueryRetry(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k"}), \
                 mock.patch.object(atai_http.urllib.request, "urlopen", urlopen), \
                 mock.patch.object(atai_http.time, "sleep", lambda s: None):
-            return atai_http.request("POST", "https://x/api/agents/instances/a/query", {"data": []}, **kw), calls
+            return atai_http.request("POST", "https://x/api/agents/sessions/s/query", {"data": []}, **kw), calls
 
     def test_an_idempotent_post_is_retried(self):
         answer, calls = self.run_request(idempotent=True)
