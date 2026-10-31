@@ -84,6 +84,54 @@ class Scoring(unittest.TestCase):
         self.assertEqual(r["false_alarms"], 0)
         self.assertEqual(r["normal_windows"], 30)
 
+    def test_sustained_resets_at_a_gap(self):
+        self.assertIsNone(score.sustained([True, True, True], 3, pieces=[0, 0, 1]))
+        self.assertEqual(score.sustained([True, True, True, True], 3, pieces=[0, 1, 1, 1]), 3)
+        self.assertEqual(score.sustained([True, True, True], 3), 2)
+
+    def _paired(self, invalid_at=()):
+        """A delivery file of one incident, 1-minute samples, window 4, step 1, with a one-day gap
+        after row 10. Onset at row 8; scores high from row 9. Batch abstains on the 3 windows
+        across the gap, and on any row in `invalid_at`."""
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "out", "delivery"))
+        os.makedirs(os.path.join(d, "roles", "labels"))
+        ts = np.r_[np.arange(11) * 60.0, 86400.0 + np.arange(9) * 60.0]
+        lab = ["normal"] * 8 + ["anomaly"] * 12
+        pd.DataFrame({"timestamp": ts, "label": lab, "recording": "r", "type": "t"}).to_csv(
+            os.path.join(d, "roles", "labels", "f.csv"), index=False)
+        rows = []
+        for end in range(3, 20):
+            inv = (ts[end] - ts[end - 3] > 3 * 60) or end in invalid_at
+            rows.append({"finish_timestamp": ts[end], "invalid": str(inv).lower(),
+                         "anomaly_score": 3.0 if end >= 9 else 1.0})
+        pd.DataFrame(rows).to_csv(os.path.join(d, "out", "delivery", "f.csv"), index=False)
+        return score.pair(os.path.join(d, "roles"), os.path.join(d, "out"),
+                          {"file": "delivery/f.csv", "labels": "labels/f.csv"})
+
+    def test_pair_marks_pieces_and_operating_time(self):
+        j, invalid, _ = self._paired()
+        self.assertEqual(invalid, 3)                                        # the windows across the gap
+        self.assertEqual(j.piece.tolist(), [0] * 8 + [1] * 6)
+        self.assertEqual(j.op_ms.iloc[8] - j.op_ms.iloc[7], 4 * 60_000)    # rows 10 -> 14: the gap counts as one sample
+
+    def test_a_run_does_not_span_a_gap_and_the_delay_skips_it(self):
+        # rows 9 and 10 cross before the gap: 2 windows, not a run of 3; the run completes on row 16
+        r = score.evaluate(self._paired()[0], 2.0, 3, 60_000)["by_type"]["t"]
+        self.assertEqual(r["detected"], 1)
+        # onset window ends on row 8; the run ends on row 16: 8 samples of operation, the gap one of them
+        self.assertAlmostEqual(r["median_delay_h"], 8 * 60 / 3600)
+        np.testing.assert_allclose(serve.operating_s(np.r_[np.arange(11) * 60.0, 86400.0 + np.arange(9) * 60.0])[16]
+                                   - serve.operating_s(np.r_[np.arange(11) * 60.0, 86400.0 + np.arange(9) * 60.0])[8],
+                                   8 * 60)                                  # the same as serve.py at step 1
+
+    def test_an_invalid_window_inside_a_piece_does_not_split_it(self):
+        # a window rejected for another reason (row 16) is dropped, as before; the run still completes
+        j, _, _ = self._paired(invalid_at=(16,))
+        self.assertEqual(j.piece.nunique(), 2)
+        r = score.evaluate(j, 2.0, 3, 60_000)["by_type"]["t"]
+        self.assertAlmostEqual(r["median_delay_h"], 9 * 60 / 3600)          # rows 14, 15, 17
+
 
 class PredictionCheck(unittest.TestCase):
     def setUp(self):
