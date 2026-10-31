@@ -51,7 +51,8 @@ def built(tmp_path):
         rows.append((f"{role}_n", f"{role}_n.csv", role, f"g{k}", "normal"))
         k += 1
         for f in ("f1", "f2"):
-            recording(tmp_path / f"{role}_{f}.csv", 1_700_000_000 + k * 86400, 300, onset=100, seed=k)
+            gap = 200 if (role, f) == ("test", "f1") else None     # a gap inside a scored recording
+            recording(tmp_path / f"{role}_{f}.csv", 1_700_000_000 + k * 86400, 300, onset=100, gap_at=gap, seed=k)
             rows.append((f"{role}_{f}", f"{role}_{f}.csv", role, f"g{k}", f))
             k += 1
     pd.DataFrame(rows, columns=["recording", "file", "role", "group", "type"]).to_csv(tmp_path / "recordings.csv", index=False)
@@ -131,6 +132,8 @@ def test_breaks(built):
         ("label in a library file", lib_file, lambda d: d.assign(label="normal")),
         ("label in a delivery file", deliv["file"], lambda d: d.assign(label="normal")),
         ("a jump inside a library file", lib_file,
+         lambda d: d.assign(timestamp=[f"{float(t) + (7200 if i > 20 else 0):.3f}" for i, t in enumerate(d.timestamp)])),
+        ("a jump inside a scored file", test_file,
          lambda d: d.assign(timestamp=[f"{float(t) + (7200 if i > 20 else 0):.3f}" for i, t in enumerate(d.timestamp)])),
         ("bad timestamp format", test_file, lambda d: d.assign(timestamp=d.timestamp.str.replace(r"\.\d+$", "", regex=True))),
         ("label disagrees with sidecar", test_file, lambda d: d.assign(label="normal")),

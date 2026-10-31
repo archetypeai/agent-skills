@@ -178,8 +178,9 @@ delivery    2 files from 12 recordings, 6,720 normal / 4,800 anomaly rows  (labe
   across each boundary would be lost; separate, each recording stays identifiable.
 - **Validation / test:** the role's normal-only recordings joined into `<role>_normal.csv`,
   its incidents into `<role>_incidents_NN.csv` (`--per-file`, default 21), with a `label`
-  column and a one-day gap (`--seam-s`) between recordings: the platform abstains on the
-  windows across it instead of mixing two recordings.
+  column and a one-day gap (`--seam-s`) between recordings, and between the segments of a
+  recording split at a gap: the platform abstains on the windows across it instead of
+  mixing two recordings or bridging a gap.
 - **Delivery:** the role's recordings as they would arrive, no label column, plus
   `calibration.csv` (validation's normal-only file again, unlabelled): the deployed agent
   scores it, and the scorer sets a false-alarm-rate threshold from those scores.
@@ -192,7 +193,7 @@ python preflight_roles.py --roles roles --prepared prepared --index $S --window 
 ```
 
 Per file: manifest vs disk, header, timestamp format, finite values, an exact grid inside
-each recording and a rejected gap between joined ones, labels against their sidecar row
+each recording segment and a rejected gap between joined ones, labels against their sidecar row
 for row, no label in library or delivery. Per role: both classes in validation and test,
 no recording in two roles (calibration excepted), the z-score from the library only; with
 `--index`, no group in two roles; with `--prepared`, every library row normal; with

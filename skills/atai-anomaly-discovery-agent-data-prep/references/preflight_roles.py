@@ -76,9 +76,12 @@ def check_file(roles, m, role, entry, rep, problems):
         problems.append(f"{entry['labels']}: labels other than {list(LABELS)}")
     if "label" in d and not (d.label.to_numpy() == side.label.to_numpy()).all():
         problems.append(f"{entry['file']}: `label` disagrees with its sidecar")
-    boundary = np.r_[False, side.recording.to_numpy()[1:] != side.recording.to_numpy()[:-1]]
     steps = np.diff(t)
-    inside, seams = steps[~boundary[1:]], steps[boundary[1:]]
+    # a boundary is a change of recording, or the exact seam build_roles.py puts between the
+    # segments of one recording that prepare.py split at a gap
+    seam_ms = round(m["seam_s"] * 1000)
+    boundary = (side.recording.to_numpy()[1:] != side.recording.to_numpy()[:-1]) | (steps == seam_ms)
+    inside, seams = steps[~boundary], steps[boundary]
     if not (inside == m["step_ms"]).all():
         problems.append(f"{entry['file']}: not an exact {m['step_ms']} ms grid inside a recording")
     if (seams <= 1.05 * m["step_ms"]).any():
