@@ -691,8 +691,10 @@ python score.py --roles $R --out out
 Each window is paired with the held-back label of its last row; windows the platform marked
 invalid are left out and counted. At the trial's threshold, and at one set to a 1%
 false-alarm rate on the calibration file's scores, per incident type: **window detection**,
-**detected** (3 consecutive windows over the threshold at or after onset), **delay** to that
-detection, and **AUROC** against every normal window; overall, the **false-alarm rate**.
+**detected** (3 consecutive windows over the threshold at or after onset, never across a gap
+in the recording), **delay** to that detection in operating hours (a gap counts as one
+sample, as in `serve.py`), and **AUROC** against every normal window; overall, the
+**false-alarm rate**.
 
 ```
 delivery: 1 files, 6,391 windows scored; left out: 470 invalid, 0 with no label at finish time

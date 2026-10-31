@@ -10,8 +10,10 @@ the calibration file's scores (known-normal data, delivered for this) — it rep
   per incident type (the sidecar's `type`, else each recording):
     window detection   the share of post-onset windows over the threshold
     detected           recordings with a sustained crossing: --sustain consecutive windows
-                       over the threshold at or after onset (one spike does not count)
-    delay              hours from onset to that first sustained crossing
+                       over the threshold at or after onset (one spike does not count), all
+                       within one gap-free piece of the recording
+    delay              operating hours from onset to that first sustained crossing, a gap
+                       counted as one sample (as serve.py counts it)
     AUROC              the type's anomaly windows against every normal window: threshold-free
   overall:
     the false-alarm rate on normal windows, and the mean window detection over types
@@ -31,13 +33,21 @@ from common import load_manifest  # noqa: E402
 
 
 def pair(roles, out, f):
-    """The output joined to its sidecar on the window's last row, invalid windows dropped."""
+    """The output joined to its sidecar on the window's last row, invalid windows dropped.
+    Each window also gets its last row's gap-free `piece` and `op_ms`, operating time since the
+    file's first row with a gap counted as one sample: found in the samples' timestamps, so a
+    window dropped for another reason doesn't split a piece."""
     o = pd.read_csv(os.path.join(out, "delivery", os.path.basename(f["file"])))
     s = pd.read_csv(os.path.join(roles, f["labels"]), dtype={"type": str}).fillna({"type": ""})
     o["ms"] = (o.finish_timestamp * 1000).round().astype(np.int64)
     s["ms"] = (s.timestamp * 1000).round().astype(np.int64)
+    dt = np.diff(s.ms.to_numpy())
+    interval = np.median(dt) if len(dt) else 0
+    gap = dt > 1.05 * interval
+    s["piece"] = np.r_[0, np.cumsum(gap)]
+    s["op_ms"] = np.r_[0, np.cumsum(np.where(gap, interval, dt))].astype(np.int64)
     invalid = o.invalid.astype(str).str.lower() == "true"
-    j = o[~invalid].merge(s[["ms", "label", "recording", "type"]], on="ms", how="left")
+    j = o[~invalid].merge(s[["ms", "label", "recording", "type", "piece", "op_ms"]], on="ms", how="left")
     return j, int(invalid.sum()), int(j.label.isna().sum())
 
 
@@ -48,10 +58,13 @@ def auroc(pos, neg):
     return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
 
 
-def sustained(over, n):
-    """Index of the first window that completes n consecutive crossings, or None."""
+def sustained(over, n, pieces=None):
+    """Index of the first window that completes n consecutive crossings, or None. With
+    `pieces`, the count restarts where the piece changes: no run spans a gap."""
     run = 0
     for i, v in enumerate(over):
+        if pieces is not None and i and pieces[i] != pieces[i - 1]:
+            run = 0
         run = run + 1 if v else 0
         if run >= n:
             return i
@@ -65,10 +78,12 @@ def evaluate(windows, threshold, sustain, step_ms):
         if not (g.label == "anomaly").any():
             continue
         g = g.sort_values("ms")
+        if "op_ms" not in g:                                  # no sidecar timing: one gap-free piece
+            g = g.assign(piece=0, op_ms=g.ms)
         onset = g.ms[g.label == "anomaly"].min()
         post = g[g.ms >= onset]
-        hit = sustained((post.anomaly_score > threshold).to_numpy(), sustain)
-        delay = (post.ms.iloc[hit] - onset) / 3.6e6 if hit is not None else None
+        hit = sustained((post.anomaly_score > threshold).to_numpy(), sustain, post.piece.to_numpy())
+        delay = (post.op_ms.iloc[hit] - post.op_ms.iloc[0]) / 3.6e6 if hit is not None else None
         r = rows.setdefault(typ or rec, {"windows": 0, "flagged": 0, "recordings": 0, "detected": 0, "delays": [],
                                          "scores": []})
         r["windows"] += len(post)
