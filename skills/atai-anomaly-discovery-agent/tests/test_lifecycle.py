@@ -162,6 +162,67 @@ class Serving(unittest.TestCase):
         # at step 3 the windows start on rows 0, 3, 6, ...: "f" (rows 10-15) holds only the one at 12
         self.assertEqual(serve.segments(labels, 4, 3), [("n", 0, 3), ("f", 12, 1)])
 
+    def test_segments_split_at_a_gap_inside_a_recording(self):
+        # "n" rows 0-9 and "f" rows 10-21, f with a one-day seam after its 6th row (a gap prepare.py split at):
+        # batch marks the windows across it invalid, so the replay must not send them either
+        labels = pd.DataFrame({"recording": ["n"] * 10 + ["f"] * 12})
+        ts = np.r_[np.arange(16.0), 86415.0 + np.arange(6.0)]
+        self.assertEqual(serve.segments(labels, 4, 1, ts), [("n", 0, 7), ("f", 10, 3), ("f", 16, 3)])
+        self.assertEqual(serve.segments(labels, 4, 3, ts), [("n", 0, 3), ("f", 12, 1), ("f", 18, 1)])
+        self.assertEqual(serve.segments(labels, 4, 1, np.arange(22.0)), [("n", 0, 7), ("f", 10, 9)])
+
+    def test_operating_time_skips_a_gap(self):
+        op = serve.operating_s(np.r_[np.arange(5.0) * 60, 86400.0 + np.arange(5.0) * 60])
+        self.assertEqual(op.tolist(), [0, 60, 120, 180, 240, 300, 360, 420, 480, 540])   # the seam counts as one step
+
+    def test_replay_of_a_recording_with_a_gap(self):
+        """A mocked serving agent scores what it is sent; batch abstains across the gap. The replay
+        must send only gap-free windows, so every answer matches batch and none is spliced."""
+        window, step, gap_after = 4, 1, 8
+        ts = np.r_[np.arange(gap_after) * 60.0, 86400.0 + np.arange(12 - gap_after) * 60.0]
+        x = np.r_[np.zeros(gap_after), np.full(12 - gap_after, 10.0)]          # a level change across the gap
+        lab = ["normal"] * 10 + ["anomaly"] * 2
+        score = lambda w: 1.0 + float(np.ptp(w))                                # spliced windows would score 11
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "roles", "delivery"))
+            os.makedirs(os.path.join(d, "roles", "labels"))
+            os.makedirs(os.path.join(d, "out", "delivery"))
+            pd.DataFrame({"timestamp": ts, "a": x}).to_csv(os.path.join(d, "roles", "delivery", "f.csv"), index=False)
+            pd.DataFrame({"timestamp": ts, "label": lab, "recording": "r", "type": "t"}).to_csv(
+                os.path.join(d, "roles", "labels", "f.csv"), index=False)
+            batch = []
+            for i in range(len(ts) - window + 1):
+                inv = bool(np.diff(ts[i:i + window]).max() > 61)
+                batch.append({"finish_timestamp": ts[i + window - 1], "predicted_label": "normal",
+                              "invalid": str(inv).lower(), "anomaly_score": score(x[i:i + window])})
+            pd.DataFrame(batch).to_csv(os.path.join(d, "out", "delivery", "f.csv"), index=False)
+            json.dump({"contract": "ad-role-files/v1", "timestamp_column": "timestamp", "channels": ["a"],
+                       "delivery": [{"file": "delivery/f.csv", "labels": "labels/f.csv"}]},
+                      open(os.path.join(d, "roles", "manifest.json"), "w"))
+            json.dump({"endpoint": "x", "blueprint": {"key": "bp", "values": {"window_size": window, "step_size": step}}},
+                      open(os.path.join(d, "out", "test_state.json"), "w"))
+            json.dump({"values": {"step_size": step}}, open(os.path.join(d, "out", "deliver_state.json"), "w"))
+            sent = []
+
+            def request(method, url, body=None, **_):
+                if url.endswith("/query"):
+                    chunk = np.array(body["events"][0]["event_data"]["contents"]).T
+                    sent.append(chunk[:, 0].tolist())
+                    return {"response": {"data": [{"anomaly_score": score(chunk[:, 0]), "predicted_label": "normal",
+                                                   "invalid": "false"}]}}
+                return {"id": "bnd" if url.endswith("/bundles") else "agt", "status": "running"}
+
+            with mock.patch.object(serve, "request", request), mock.patch.object(serve, "load_dotenv"), \
+                    mock.patch.object(serve, "check_auth"), mock.patch.object(serve, "same_deployment", return_value=True), \
+                    mock.patch.object(serve, "end", return_value=True), mock.patch.object(serve, "log"):
+                rc = serve.main(["--roles", os.path.join(d, "roles"), "--out", os.path.join(d, "out")])
+            summary = json.load(open(os.path.join(d, "out", "serving", "f_wpq1.json")))
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(sent), 5 + 1)                     # 5 windows before the gap, 1 after; 3 across it skipped
+        self.assertTrue(all(np.ptp(w) == 0 for w in sent))    # no window splices the two sides
+        self.assertEqual((summary["windows"], summary["same_score"]), (6, 6))
+        self.assertEqual(summary["recordings"][0]["pieces"], 2)
+
     def test_first_alarm(self):
         self.assertEqual(serve.first_alarm(["normal", "anomaly", "anomaly", "anomaly"]), 3)
         self.assertIsNone(serve.first_alarm(["anomaly", "anomaly", "normal", "anomaly"]))

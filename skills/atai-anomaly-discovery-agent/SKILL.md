@@ -774,9 +774,12 @@ For stored data, deliver in batch.
 
 - **A query must hold the whole window.** The agent keeps nothing between queries: rows 1–48
   of a run, sent alone, answer exactly as batch's second window. Keep the buffer client-side.
-- **Replay one recording at a time.** The served agent numbers the samples itself and can't
-  see a time gap, so a window across two joined recordings is scored as if it were
-  continuous, where batch marks it invalid.
+- **Replay one recording at a time, and one gap-free piece at a time.** The served agent
+  numbers the samples itself and can't see a time gap, so a window across two joined
+  recordings, or across a gap inside one recording, is scored as if it were continuous,
+  where batch marks it invalid. `serve.py` splits each recording wherever a step exceeds the
+  sample interval by more than 5%, starts a fresh window buffer after each gap, and measures
+  alarm times in operating hours, with the gap counted as one sample.
 - **An idle agent is released** after 20 minutes without a query, and a query to it answers
   409: start a new one.
 

@@ -15,7 +15,8 @@ recordings that way and checks every answer against deliver.py's batch output:
      At step 1 that is a query per sample, as live; at a larger step (deliver.py --step,
      for a deployment that can't deliver at step 1 in time) the windows batch scored.
      A served agent keeps nothing between queries and numbers the samples itself, so
-     recordings are replayed one by one: a window across a join would not be marked
+     recordings are replayed one by one, and a recording with a gap (a segment seam) one
+     gap-free piece at a time: a window across a join or a gap would not be marked
      invalid as batch marks it;
   4. every answer against batch: `predicted_label`, and `anomaly_score` to within 1e-4
      relative (float32 noise is ~2e-5), plus each recording's first sustained alarm
@@ -55,16 +56,35 @@ def query_body(chunk, model=MODEL):
             "event_data": {"contents": [chunk[:, c].tolist() for c in range(chunk.shape[1])]}}]}
 
 
-def segments(labels, window, step=1):
-    """(recording, first window's first row, windows) for each recording of a delivery file:
-    the windows batch scored inside it (they tile the file from row 0 at `step`)."""
+def gaps(ts):
+    """True where a row follows a gap: a step more than 5% over the file's sample interval, as
+    the platform's sampling-rate check sees it (the seam between joined recordings, or between
+    the segments of one recording that prepare.py split at a gap)."""
+    dt = np.diff(ts)
+    return np.r_[False, dt > 1.05 * np.median(dt)]
+
+
+def operating_s(ts):
+    """Seconds of operation since the first row, a gap counted as one sample interval."""
+    dt = np.diff(ts)
+    return np.r_[0.0, np.cumsum(np.where(dt > 1.05 * np.median(dt), np.median(dt), dt))]
+
+
+def segments(labels, window, step=1, ts=None):
+    """(recording, first window's first row, windows) for each gap-free piece of each recording
+    of a delivery file: the windows batch scored inside it (they tile the file from row 0 at
+    `step`). A window across a gap is invalid in batch, and a served agent can't see the gap,
+    so each piece is replayed on its own."""
+    cut = gaps(ts) if ts is not None else np.zeros(len(labels), bool)
     out = []
     for rec, rows in labels.groupby("recording", sort=False):
         lo, hi = int(rows.index[0]), int(rows.index[0]) + len(rows)
-        first = -(-lo // step) * step
-        n = (hi - window - first) // step + 1
-        if n > 0:
-            out.append((rec, first, n))
+        starts = [lo, *(i for i in range(lo + 1, hi) if cut[i])]
+        for a, b in zip(starts, [*starts[1:], hi]):
+            first = -(-a // step) * step
+            n = (b - window - first) // step + 1
+            if n > 0:
+                out.append((rec, first, n))
     return out
 
 
@@ -125,15 +145,16 @@ def main(argv=None):
     if len(batch) != (len(data) - window) // step + 1:
         sys.exit(f"{f['file']}: the delivery output has {len(batch)} windows, expected "
                  f"{(len(data) - window) // step + 1} at step {step}")
-    segs = [s for s in segments(labels, window, step) if not a.recordings or s[0] in a.recordings]
+    X = data[channels].to_numpy(dtype=float)
+    ts = data[m["timestamp_column"]].to_numpy(dtype=float)
+    segs = [s for s in segments(labels, window, step, ts) if not a.recordings or s[0] in a.recordings]
     if not segs:
         sys.exit(f"none of {a.recordings} in {f['file']}")
     segs = [(rec, first, min(n, a.max_windows or n)) for rec, first, n in segs]
     wpq = max(1, min(a.windows_per_query, MAX_WPQ))
-    X = data[channels].to_numpy(dtype=float)
-    ts = data[m["timestamp_column"]].to_numpy(dtype=float)
-    log(f"{f['file']}: {len(segs)} recording(s), {sum(s[2] for s in segs):,} windows, {wpq} per query, step {step}; "
-        f"model {bp['key']}")
+    recs = list(dict.fromkeys(s[0] for s in segs))
+    log(f"{f['file']}: {len(recs)} recording(s) in {len(segs)} gap-free piece(s), {sum(s[2] for s in segs):,} windows, "
+        f"{wpq} per query, step {step}; model {bp['key']}")
 
     sf = os.path.join(a.out, "serve_state.json")
     if os.path.exists(sf):
@@ -152,8 +173,8 @@ def main(argv=None):
             if status in ("failed", "cancelled", "canceled", "completed") or time.time() - t0 > 600:
                 sys.exit(f"agent {ex['agent']} is {status}, not running")
             time.sleep(3)
-        for rec, first, n in segs:
-            got = served[rec] = []
+        for j, (rec, first, n) in enumerate(segs):
+            got = served[j] = []
             for k in range(0, n, wpq):
                 count = min(wpq, n - k)
                 t = time.time()
@@ -171,28 +192,40 @@ def main(argv=None):
             log(f"cancelled and deleted {ex['agent']}, deleted {ex['bundle']}")
     elapsed = time.time() - t0
 
-    rows, per_rec = [], []
-    for rec, first, n in segs:
-        ref, got = batch.iloc[first // step:first // step + n], served[rec]
+    rows, alarm_rows, windows = [], {rec: {} for rec in recs}, dict.fromkeys(recs, 0)
+    for j, (rec, first, n) in enumerate(segs):
+        ref, got = batch.iloc[first // step:first // step + n], served[j]
         for k, (s, b) in enumerate(zip(got, ref.itertuples())):
-            rows.append({"recording": rec, "window": k, "finish_timestamp": ts[first + k * step + window - 1],
+            rows.append({"recording": rec, "window": windows[rec] + k, "finish_timestamp": ts[first + k * step + window - 1],
                          "batch_label": b.predicted_label, "served_label": s["predicted_label"],
                          "batch_score": b.anomaly_score, "served_score": float(s["anomaly_score"]),
                          "served_invalid": str(s["invalid"]).lower() == "true",
                          "same_label": s["predicted_label"] == b.predicted_label,
                          "same_score": abs(float(s["anomaly_score"]) / b.anomaly_score - 1) < 1e-4})
-        lab = labels.label.to_numpy()[first:first + (n - 1) * step + window]
-        onset = int(np.argmax(lab == "anomaly")) if (lab == "anomaly").any() else None
-        alarm = {}
+        windows[rec] += n
+        # an alarm is sustained within a piece: batch abstains across a gap, so no run spans one
         for who, labs in (("served", [s["predicted_label"] for s in got]), ("batch", ref.predicted_label.tolist())):
             i = first_alarm(labs)
-            if i is None:
+            if i is not None and who not in alarm_rows[rec]:
+                alarm_rows[rec][who] = first + i * step + window - 1
+
+    op, lab = operating_s(ts), labels.label.to_numpy()
+    per_rec = []
+    for rec in recs:
+        pieces = [(first, n) for r, first, n in segs if r == rec]
+        lo, hi = pieces[0][0], pieces[-1][0] + (pieces[-1][1] - 1) * step + window
+        onset = lo + int(np.argmax(lab[lo:hi] == "anomaly")) if (lab[lo:hi] == "anomaly").any() else None
+        alarm = {}
+        for who in ("served", "batch"):
+            row = alarm_rows[rec].get(who)
+            if row is None:
                 alarm[who] = None
-            elif onset is None or i * step + window - 1 < onset:
-                alarm[who] = f"a false alarm {(ts[first + i * step + window - 1] - ts[first]) / 3600:.2f} h in"
+            elif onset is None or row < onset:
+                alarm[who] = f"a false alarm {(op[row] - op[lo]) / 3600:.2f} h in"
             else:
-                alarm[who] = f"{(ts[first + i * step + window - 1] - ts[first + onset]) / 3600:.2f} h after onset"
-        per_rec.append({"recording": rec, "windows": n, "first_alarm": alarm})
+                alarm[who] = f"{(op[row] - op[onset]) / 3600:.2f} h after onset"
+        per_rec.append({"recording": rec, "pieces": len(pieces), "windows": sum(n for _, n in pieces),
+                        "first_alarm": alarm})
 
     df = pd.DataFrame(rows)
     sdir = os.path.join(a.out, "serving")
@@ -210,7 +243,7 @@ def main(argv=None):
                "replay_s": round(elapsed)}
     json.dump(summary, open(stem + ".json", "w"), indent=1)
 
-    print(f"\nserved {len(df):,} windows of {len(segs)} recording(s) in {len(latency):,} queries, {elapsed:.0f} s")
+    print(f"\nserved {len(df):,} windows of {len(recs)} recording(s) in {len(latency):,} queries, {elapsed:.0f} s")
     print(f"  against the delivery (batch): predicted_label identical {summary['same_label']:,}/{len(df):,}, "
           f"anomaly_score within 1e-4 {summary['same_score']:,}/{len(df):,} "
           f"(max relative difference {summary['max_score_rel_diff']:.1e}); invalid {summary['invalid']}")
