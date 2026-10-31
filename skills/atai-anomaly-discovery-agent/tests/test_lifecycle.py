@@ -171,6 +171,12 @@ class Serving(unittest.TestCase):
         self.assertEqual(serve.segments(labels, 4, 3, ts), [("n", 0, 3), ("f", 12, 1), ("f", 18, 1)])
         self.assertEqual(serve.segments(labels, 4, 1, np.arange(22.0)), [("n", 0, 7), ("f", 10, 9)])
 
+    def test_max_windows_caps_each_recording_not_each_piece(self):
+        segs = [("r", 0, 5), ("r", 10, 5), ("q", 20, 5)]
+        self.assertEqual(serve.cap(segs, 3), [("r", 0, 3), ("q", 20, 3)])            # stops in piece 1 of r
+        self.assertEqual(serve.cap(segs, 7), [("r", 0, 5), ("r", 10, 2), ("q", 20, 5)])
+        self.assertEqual(serve.cap(segs, None), segs)
+
     def test_operating_time_skips_a_gap(self):
         op = serve.operating_s(np.r_[np.arange(5.0) * 60, 86400.0 + np.arange(5.0) * 60])
         self.assertEqual(op.tolist(), [0, 60, 120, 180, 240, 300, 360, 420, 480, 540])   # the seam counts as one step
@@ -212,7 +218,9 @@ class Serving(unittest.TestCase):
                                                    "invalid": "false"}]}}
                 return {"id": "bnd" if url.endswith("/bundles") else "agt", "status": "running"}
 
-            with mock.patch.object(serve, "request", request), mock.patch.object(serve, "load_dotenv"), \
+            env = {"ATAI_API_ENDPOINT": "https://x/api", "ATAI_API_KEY": "k"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(serve, "request", request), \
+                    mock.patch.object(serve, "load_dotenv"), \
                     mock.patch.object(serve, "check_auth"), mock.patch.object(serve, "same_deployment", return_value=True), \
                     mock.patch.object(serve, "end", return_value=True), mock.patch.object(serve, "log"):
                 rc = serve.main(["--roles", os.path.join(d, "roles"), "--out", os.path.join(d, "out")])

@@ -79,12 +79,26 @@ def segments(labels, window, step=1, ts=None):
     out = []
     for rec, rows in labels.groupby("recording", sort=False):
         lo, hi = int(rows.index[0]), int(rows.index[0]) + len(rows)
-        starts = [lo, *(i for i in range(lo + 1, hi) if cut[i])]
+        starts = [lo, *(lo + 1 + np.flatnonzero(cut[lo + 1:hi]))]
         for a, b in zip(starts, [*starts[1:], hi]):
             first = -(-a // step) * step
             n = (b - window - first) // step + 1
             if n > 0:
-                out.append((rec, first, n))
+                out.append((rec, int(first), int(n)))
+    return out
+
+
+def cap(segs, max_windows):
+    """The first `max_windows` windows of each recording, across its pieces in order: a
+    recording stops where its count runs out, so no later piece is replayed after a cut one."""
+    if not max_windows:
+        return segs
+    left, out = {}, []
+    for rec, first, n in segs:
+        k = min(n, left.setdefault(rec, max_windows))
+        if k > 0:
+            out.append((rec, first, k))
+            left[rec] -= k
     return out
 
 
@@ -125,7 +139,7 @@ def main(argv=None):
     ap.add_argument("--file", help="a delivery file (default: the first one that isn't calibration)")
     ap.add_argument("--recordings", nargs="+", help="the file's recordings to replay (default: all)")
     ap.add_argument("--windows-per-query", type=int, default=1, help=f"1 = live, one window per sample; up to {MAX_WPQ}")
-    ap.add_argument("--max-windows", type=int, help="replay only the first N windows of each recording")
+    ap.add_argument("--max-windows", type=int, help="replay only the first N windows of each recording (across its gap-free pieces)")
     a = ap.parse_args(argv)
     load_dotenv()
     check_auth(log)
@@ -150,7 +164,7 @@ def main(argv=None):
     segs = [s for s in segments(labels, window, step, ts) if not a.recordings or s[0] in a.recordings]
     if not segs:
         sys.exit(f"none of {a.recordings} in {f['file']}")
-    segs = [(rec, first, min(n, a.max_windows or n)) for rec, first, n in segs]
+    segs = cap(segs, a.max_windows)
     wpq = max(1, min(a.windows_per_query, MAX_WPQ))
     recs = list(dict.fromkeys(s[0] for s in segs))
     log(f"{f['file']}: {len(recs)} recording(s) in {len(segs)} gap-free piece(s), {sum(s[2] for s in segs):,} windows, "
