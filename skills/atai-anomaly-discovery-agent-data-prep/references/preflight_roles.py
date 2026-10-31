@@ -79,7 +79,7 @@ def check_file(roles, m, role, entry, rep, problems):
     steps = np.diff(t)
     # a boundary is a change of recording, or the exact seam build_roles.py puts between the
     # segments of one recording that prepare.py split at a gap
-    seam_ms = round(m["seam_s"] * 1000)
+    seam_ms = int(m["seam_s"] * 1000)                 # as build_roles.py computes it
     boundary = (side.recording.to_numpy()[1:] != side.recording.to_numpy()[:-1]) | (steps == seam_ms)
     inside, seams = steps[~boundary], steps[boundary]
     if not (inside == m["step_ms"]).all():

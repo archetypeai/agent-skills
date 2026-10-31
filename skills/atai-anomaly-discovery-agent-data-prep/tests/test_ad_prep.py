@@ -111,6 +111,14 @@ def test_baseline_warns_on_drift(tmp_path, capsys):
     assert "WARN  stability" in out and "l0:" in out
 
 
+def test_fractional_seam(built):
+    # 86400.0007 s is 86,400,000.7 ms: build_roles truncates it, and the preflight must match
+    _, idx, prep, _ = built
+    roles = os.path.join(os.path.dirname(prep), "roles_frac")
+    build_roles.main(["--index", idx, "--prepared", prep, "--out", roles, "--per-file", "2", "--seam-s", "86400.0007"])
+    assert preflight(roles) == 0
+
+
 def test_coverage_fails_when_library_is_thin(built):
     _, idx, prep, roles = built
     assert preflight(roles, "--window", "200", "--step", "200", "--k", "20", "--pca", "20") == 1
