@@ -51,7 +51,8 @@ def built(tmp_path):
         rows.append((f"{role}_n", f"{role}_n.csv", role, f"g{k}", "normal"))
         k += 1
         for f in ("f1", "f2"):
-            recording(tmp_path / f"{role}_{f}.csv", 1_700_000_000 + k * 86400, 300, onset=100, seed=k)
+            gap = 200 if (role, f) == ("test", "f1") else None     # a gap inside a scored recording
+            recording(tmp_path / f"{role}_{f}.csv", 1_700_000_000 + k * 86400, 300, onset=100, gap_at=gap, seed=k)
             rows.append((f"{role}_{f}", f"{role}_{f}.csv", role, f"g{k}", f))
             k += 1
     pd.DataFrame(rows, columns=["recording", "file", "role", "group", "type"]).to_csv(tmp_path / "recordings.csv", index=False)
@@ -110,6 +111,14 @@ def test_baseline_warns_on_drift(tmp_path, capsys):
     assert "WARN  stability" in out and "l0:" in out
 
 
+def test_fractional_seam(built):
+    # 86400.0007 s is 86,400,000.7 ms: build_roles truncates it, and the preflight must match
+    _, idx, prep, _ = built
+    roles = os.path.join(os.path.dirname(prep), "roles_frac")
+    build_roles.main(["--index", idx, "--prepared", prep, "--out", roles, "--per-file", "2", "--seam-s", "86400.0007"])
+    assert preflight(roles) == 0
+
+
 def test_coverage_fails_when_library_is_thin(built):
     _, idx, prep, roles = built
     assert preflight(roles, "--window", "200", "--step", "200", "--k", "20", "--pca", "20") == 1
@@ -131,6 +140,8 @@ def test_breaks(built):
         ("label in a library file", lib_file, lambda d: d.assign(label="normal")),
         ("label in a delivery file", deliv["file"], lambda d: d.assign(label="normal")),
         ("a jump inside a library file", lib_file,
+         lambda d: d.assign(timestamp=[f"{float(t) + (7200 if i > 20 else 0):.3f}" for i, t in enumerate(d.timestamp)])),
+        ("a jump inside a scored file", test_file,
          lambda d: d.assign(timestamp=[f"{float(t) + (7200 if i > 20 else 0):.3f}" for i, t in enumerate(d.timestamp)])),
         ("bad timestamp format", test_file, lambda d: d.assign(timestamp=d.timestamp.str.replace(r"\.\d+$", "", regex=True))),
         ("label disagrees with sidecar", test_file, lambda d: d.assign(label="normal")),
