@@ -534,6 +534,8 @@ role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals
                  validation
                                                                                  └──► 5 serve (/query, Dev): a window per
                                                                                       query, checked against step 3
+                                                                                 └──► 6 library view: the fit's windows
+                                                                                      embedded again, for a live app
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
@@ -674,10 +676,9 @@ network outage is waited out instead of failing every file. **Expect, on the sam
 - **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works
   on a promoted blueprint too: per channel, an `embedding_<channel>` column (768-d) and an
   `embedding_<channel>_features` column (one value per feature), each cell a JSON list in the
-  CSV. Nothing else returns embeddings: a trial, an eval (predictions only) and the promoted
-  detector (`aar_…`, no download route) don't. To plot where the fit's normal sits, run the
-  library files through the promoted blueprint in batch at the trial's `step_size` with
-  `output_embeddings: true`: the same windows and encoder as the fit, so the same embeddings.
+  CSV. A serving agent's answers carry them too (Step 5). A trial, an eval (predictions only)
+  and the promoted detector (`aar_…`, no download route) don't. To plot where the fit's normal
+  sits, recompute the library's: Step 6.
 - **At scale, the bundle lists its own runs.** `deliver_state.json` keeps each file's last
   attempt; `GET /agents/instances?bundle_id=<bnd_…>` also finds the attempts a rerun
   replaced (734 agents behind the TEP full example's 714 files). `cleanup.py` uses both.
@@ -734,6 +735,10 @@ stopped; free-trial accounts serve on CPU only, so answers can be slower than be
    a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
    No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
    supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
+   **With `"output_embeddings": true` in those values**, each answer also carries
+   `embedding_<channel>` (768 values per channel): what a live app needs to place each window
+   among the library's (Step 6). SKAB's app (8 channels, free trial, 2026-10-31) got all 8 in
+   every answer at a 0.25 s median.
 2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
@@ -784,6 +789,48 @@ For stored data, deliver in batch.
   alarm times in operating hours, with the gap counted as one sample.
 - **An idle agent is released** after 20 minutes without a query, and a query to it answers
   409: start a new one.
+
+## Step 6 — The library view, for a live app
+
+```sh
+python library_embeddings.py --roles $R --out out                     # batch: one run per library file
+python library_embeddings.py --roles $R --out out --serving           # or a serving agent, a query per window
+python library_embeddings.py --roles $R --out out --serving --agent agt_…   # one already running (a live app's)
+python library_embeddings.py --roles $R --out out --view --view-dir ../my-app/static
+```
+
+A live app is easier to read with the detector's normal behind each answer: where this window
+sits among the windows the detector was fitted on. **They can't be read back** (the promoted
+detector has no download route) **but can be recomputed** on the promoted blueprint with
+`output_embeddings: true`, a bundle value: no new optimization or blueprint, the same encoder
+on the same windows (the trial's window and step, tiled from each library file's row 0).
+
+**Two routes, the same points.** On SKAB (free trial, 2026-10-31), the whole library both
+ways: 1,950/1,950 windows from 11 files with the same start timestamps, embeddings within
+4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' points within 5×10⁻⁷.
+- **Batch (the default):** a bundle at the trial's `step_size`, one run per library file. The
+  platform cuts the windows and the outputs are files; each run takes a job slot (40 runs for
+  the TEP quickstart's library).
+- **`--serving`:** one serving agent, the windows cut client-side exactly as the platform cuts
+  them and sent one per query, 4 at a time. No job slots or queue, and on the free trial no
+  2-hour cap. SKAB's 1,950 windows took 5.6 min served, against 11.6 min for its 11
+  batch runs, 3 at a time. With `--agent` it uses an agent already running the promoted
+  blueprint with embeddings on, and leaves it running; otherwise it starts one and deletes it.
+  Better when an app's agent is up, or on the trial; batch is better for a library of tens of
+  thousands of windows.
+
+The script checks each file's window count against the tiling and prints the library's score
+range: they are the windows the detector was fitted on, so they should sit under the
+threshold (SKAB: 0.928–1.377, median 1.003, none over 1.604).
+
+**The view is PCA 1–2** of the embeddings (every channel's 768 values, concatenated in the
+manifest's order), each axis at unit spread: `library-view.bin` (float32: each window's 2-D
+point and score, the mean and the two projection rows) and `library-view.json` (the layout). A
+served answer lands in the same coordinates: `(e − mean) · row`. Not LDA, as in the OSM skill:
+the library is one class, normal. It is a recomputed drawing, not the detector: the detector's
+own PCA is in the registry artifact, and it scores in more dimensions, with the per-channel
+features too. The trail leaving the cloud is evidence; the trail staying in it is not evidence
+of nothing.
 
 ## Path 2 pitfalls
 
@@ -849,8 +896,9 @@ skills/atai-anomaly-discovery-agent/
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: detection, delay, AUROC, false alarms, at two thresholds
 │       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
-│       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
-│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py)
+│       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a PCA 1-2 view for an app
+│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6, from the ids in out/
+│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py, library_embeddings.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
     └── test_lifecycle.py     ← Path 2: network-free unit tests
