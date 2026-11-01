@@ -11,6 +11,8 @@ adds only one prediction per row (--step to change). Then POST
 deployment that caps a run's time (the free trial: 2 hours). Each run's rows overlap the
 next by window - step, so every window lies whole in one run; the runs' outputs are joined
 into the file's, the same windows as one run gives. Off by default: a run per file.
+A rerun at another N names its runs' files by row range, so it never reuses
+another split's; that split's runs are forgotten, any still going cancelled first.
 
 Each output is downloaded again every 15 s until its last window reaches the input's last
 timestamp: a run can report `completed` while its output is still being written. A
@@ -61,6 +63,24 @@ def pieces(rows, window, step, max_windows):
         return [(0, rows)]
     return [(k * step, min(rows, (k + max_windows - 1) * step + window)) for k in range(0, n, max_windows)]
 
+
+
+def retire_other_splits(state, save, planned, names):
+    """Forget the runs of another split of a file delivered now: a rerun at another
+    --max-windows-per-run cuts it differently and never reads them. One still going would
+    hold a job slot until it ends (2 hours on the free trial), so it is cancelled first;
+    cleanup.py deletes them with the bundle."""
+    runs = state.get("agents", {})
+    for name in [n for n in runs if n not in names and n.split(" rows ")[0] in planned]:
+        agent = runs[name]
+        try:
+            if request("GET", f"{agents()}/instances/{agent}").get("status") not in TERMINAL:
+                request("POST", f"{agents()}/instances/{agent}/cancel", {})
+                log(f"{name}: cancelled agent {agent}, a run of another split")
+        except RuntimeError as e:
+            log(f"{name}: agent {agent}: {e}; cleanup.py deletes it")
+        del runs[name]
+    save()
 
 def join(parts, dst, window, step):
     """Concatenate the runs' outputs into dst; exit unless each run gave its windows, in order."""
@@ -223,12 +243,13 @@ def main(argv=None):
                 log(f"{job[0]}: {text}; rerun to retry")
                 return None
 
-    jobs, split = [], {}            # split: a file's output -> [((first, end), the run's output)]
+    jobs, split, planned = [], {}, set()            # split: a file's output -> [((first, end), the run's output)]
     for f in m["delivery"]:
         src = os.path.join(a.roles, f["file"])
         dst = os.path.join(out_dir, os.path.basename(f["file"]))
         if os.path.exists(dst):
             continue
+        planned.add(f["file"])
         with open(src) as fh:
             header, *lines = fh.readlines()
         parts = pieces(len(lines), window, step, a.max_windows_per_run)
@@ -239,14 +260,15 @@ def main(argv=None):
         os.makedirs(pdir, exist_ok=True)
         stem = os.path.basename(f["file"])[:-4]
         split[dst] = []
-        for i, (first, end) in enumerate(parts):
-            psrc = os.path.join(pdir, f"{stem}_run{i + 1:02d}.csv")
+        for first, end in parts:      # named by row range: another split's files never collide
+            psrc = os.path.join(pdir, f"{stem}_rows{first}-{end}.csv")
             if not os.path.exists(psrc):
                 with open(psrc, "w") as fh:
                     fh.writelines([header] + lines[first:end])
             jobs.append((f"{f['file']} rows {first}-{end}", psrc, psrc[:-4] + "_out.csv"))
             split[dst].append(((first, end), psrc[:-4] + "_out.csv"))
         log(f"{f['file']}: {len(parts)} runs of at most {a.max_windows_per_run:,} windows")
+    retire_other_splits(state, save, planned, {name for name, _, _ in jobs})
     with ThreadPoolExecutor(a.parallel) as pool:
         list(pool.map(safe, jobs))
     for dst, parts in split.items():

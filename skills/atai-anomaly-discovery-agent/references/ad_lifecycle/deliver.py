@@ -14,6 +14,8 @@ into the file's, the same windows as one run gives. Off by default (a run per fi
 on the free trial: there a file too long to finish well inside the cap is split from the start
 (see trial_max_windows), not after a run has spent 2 hours and died. --max-windows-per-run 0
 turns that off.
+A rerun at another N names its runs' files by row range, so it never reuses
+another split's; that split's runs are forgotten, any still going cancelled first.
 
 Each output is downloaded again every 15 s until its last window reaches the input's last
 timestamp: a run can report `completed` while its output is still being written. A
@@ -76,6 +78,24 @@ def pieces(rows, window, step, max_windows):
         return [(0, rows)]
     return [(k * step, min(rows, (k + max_windows - 1) * step + window)) for k in range(0, n, max_windows)]
 
+
+
+def retire_other_splits(state, save, planned, names):
+    """Forget the runs of another split of a file delivered now: a rerun at another
+    --max-windows-per-run cuts it differently and never reads them. One still going would
+    hold a job slot until it ends (2 hours on the free trial), so it is cancelled first;
+    cleanup.py deletes them with the bundle."""
+    runs = state.get("agents", {})
+    for name in [n for n in runs if n not in names and n.split(" rows ")[0] in planned]:
+        agent = runs[name]
+        try:
+            if request("GET", f"{agents()}/instances/{agent}").get("status") not in TERMINAL:
+                request("POST", f"{agents()}/instances/{agent}/cancel", {})
+                log(f"{name}: cancelled agent {agent}, a run of another split")
+        except RuntimeError as e:
+            log(f"{name}: agent {agent}: {e}; cleanup.py deletes it")
+        del runs[name]
+    save()
 
 def join(parts, dst, window, step):
     """Concatenate the runs' outputs into dst; exit unless each run gave its windows, in order."""
@@ -249,12 +269,13 @@ def main(argv=None):
                 log(f"{job[0]}: {text}; rerun to retry")
                 return None
 
-    jobs, split = [], {}            # split: a file's output -> [((first, end), the run's output)]
+    jobs, split, planned = [], {}, set()            # split: a file's output -> [((first, end), the run's output)]
     for f in m["delivery"]:
         src = os.path.join(a.roles, f["file"])
         dst = os.path.join(out_dir, os.path.basename(f["file"]))
         if os.path.exists(dst):
             continue
+        planned.add(f["file"])
         with open(src) as fh:
             header, *lines = fh.readlines()
         if max_windows and a.max_windows_per_run is None and f["file"] in state.get("agents", {}):
@@ -278,6 +299,7 @@ def main(argv=None):
         log(f"{f['file']}: {len(parts)} runs of at most {max_windows:,} windows"
             + ("" if a.max_windows_per_run else " (the free trial stops a run at 2 hours; "
                "--max-windows-per-run 0 to deliver in one run)"))
+    retire_other_splits(state, save, planned, {name for name, _, _ in jobs})
     with ThreadPoolExecutor(a.parallel) as pool:
         list(pool.map(safe, jobs))
     for dst, parts in split.items():

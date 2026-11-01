@@ -667,9 +667,9 @@ network outage is waited out instead of failing every file. **Expect, on the sam
     to 40–60 min a run at the rates below: 38,400 ÷ channels windows (4,800 at 8 channels,
     1,100 at 33), so a long file is split before it starts, not after a run has spent 2 hours
     and died. Split runs' files are named by row range, so a rerun at another size never
-    reuses a different split's files. It doesn't cancel the earlier split's agents either:
-    they run until they finish or hit 2 hours, holding free-trial job slots meanwhile, and
-    `cleanup.py` finds them through the bundle's listing.
+    reuses a different split's files. The earlier split's runs are forgotten, and any still
+    going is cancelled first, so it doesn't hold a free-trial job slot for up to 2 hours;
+    `cleanup.py` deletes them with the bundle.
     `--max-windows-per-run 0` turns it off; elsewhere it is off unless you set it.
   - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
     measured in steps of 8 samples.
