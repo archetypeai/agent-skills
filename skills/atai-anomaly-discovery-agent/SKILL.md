@@ -662,8 +662,10 @@ network outage is waited out instead of failing every file. **Expect, on the sam
   - `--max-windows-per-run N`: the same windows, in runs of at most N. Each run starts on a
     multiple of the step and overlaps the next by window − step rows, and the outputs are
     joined, so the scores equal one run's. **On the free trial it is on by default**, sized
-    to about an hour a run: 38,400 ÷ channels windows (4,800 at 8 channels, 1,100 at 33), so a
-    long file is split before it starts, not after a run has spent 2 hours and died.
+    to 40–60 min a run at the rates below: 38,400 ÷ channels windows (4,800 at 8 channels,
+    1,100 at 33), so a long file is split before it starts, not after a run has spent 2 hours
+    and died. Split runs' files are named by row range, so a rerun at another size never
+    reuses a different split's files.
     `--max-windows-per-run 0` turns it off; elsewhere it is off unless you set it.
   - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
     measured in steps of 8 samples.

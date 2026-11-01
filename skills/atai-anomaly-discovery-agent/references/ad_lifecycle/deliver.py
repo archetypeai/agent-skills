@@ -45,9 +45,9 @@ CHECKPOINTING_OFF = {"checkpointing": {"trigger_after_input_byte_size": 0, "trig
 NETWORK_WAIT_S, NETWORK_RETRIES = 60, 60
 lock = threading.Lock()
 TRIAL = "try.archetypeai.app"
-# Channel-windows a free-trial run gets through in about an hour, half its 2-hour cap. Measured
-# there (CPU): SKAB, 8 channels, ~80 windows a minute a run (640 channel-windows); the TEP
-# sample, 33 channels, 1,000 windows in 24-34 min (~1,000-1,400). The slower one, for an hour.
+# Channel-windows a free-trial run gets through in well under its 2-hour cap. Measured there
+# (CPU): SKAB, 8 channels, ~80 windows a minute a run (640 channel-windows); the TEP sample,
+# 33 channels, 1,000 windows in 24-34 min (~1,000-1,400). 38,400 is 40-60 min across those.
 TRIAL_CHANNEL_WINDOWS_PER_RUN = 38_400
 
 
@@ -268,8 +268,8 @@ def main(argv=None):
         os.makedirs(pdir, exist_ok=True)
         stem = os.path.basename(f["file"])[:-4]
         split[dst] = []
-        for i, (first, end) in enumerate(parts):
-            psrc = os.path.join(pdir, f"{stem}_run{i + 1:02d}.csv")
+        for first, end in parts:      # named by row range: another split's files never collide
+            psrc = os.path.join(pdir, f"{stem}_rows{first}-{end}.csv")
             if not os.path.exists(psrc):
                 with open(psrc, "w") as fh:
                     fh.writelines([header] + lines[first:end])
