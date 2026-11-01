@@ -11,7 +11,7 @@ generalised. Platform behaviour behind the rules was measured on the dev deploym
 ```
 roles/
 ├── manifest.json                 every file below, the channels and settings
-├── zscore_stats.json             per-channel mean / std, from the library only
+├── zscore_stats.json             per-channel mean / std, from the library only (per condition with --scale-by)
 ├── library/<recording>__seg<N>.csv          one per recording segment, all normal, no label column
 ├── validation/validation_normal.csv         the role's normal-only recordings, joined, with `label`
 ├── validation/validation_incidents_NN.csv   its incident recordings, joined, with `label`
@@ -58,6 +58,7 @@ recordings.
   "decimals": 4,
   "seam_s": 86400,
   "zscore_stats": "zscore_stats.json",
+  "scale_by": null,
   "library":    [{"file": "library/normal_25h_run01__seg0.csv", "recording": "normal_25h_run01", "segment": 0, "rows": 500}],
   "validation": [{"file": "validation/validation_normal.csv", "labels": "labels/validation_normal_labels.csv",
                   "recordings": ["normal_48h_run41", "…"], "rows": 4800, "normal": 4800, "anomaly": 0}],

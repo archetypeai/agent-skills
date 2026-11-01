@@ -3,7 +3,10 @@
 
 From the prepared recordings (prepare.py) and the index's roles:
 
-  zscore_stats.json   per-channel mean / std over the LIBRARY recordings only
+  zscore_stats.json   per-channel mean / std over the LIBRARY recordings only; with
+                      --scale-by COLUMN, one mean / std per value of that index column (an
+                      operating condition: a flow set-point, a product, a mode), each from the
+                      library recordings in that condition, and every recording scaled by its own
   library/            one file per recording segment, original timestamps, no label column:
                       Optimize labels every training row `normal` by a constant. One file
                       per segment keeps every window: joined, the windows across each
@@ -24,6 +27,7 @@ Every CSV: `timestamp` (epoch seconds, 3 decimals), the channels z-scored (--dec
 then `label` where the role has one.
 
     python build_roles.py --index recordings.csv --prepared prepared --out roles
+    python build_roles.py --index recordings.csv --prepared prepared --out roles --scale-by level
 """
 from __future__ import annotations
 
@@ -52,6 +56,26 @@ def zscore_stats(prepared, library):
     std[std < 1e-12] = 1.0                       # a constant channel stays 0, never NaN
     return {"channels": channels, "mean": mean.round(8).tolist(), "std": std.round(8).tolist(), "rows": int(n),
             "from": "all rows of the library recordings", "recordings": sorted(library)}
+
+
+def condition_stats(prepared, idx, library, by):
+    """zscore_stats per value of the index column `by`, each from the library recordings in it.
+    Every recording in a role needs a value, and every value a library recording."""
+    if by not in idx:
+        raise SystemExit(f"--scale-by {by}: the index has no '{by}' column")
+    cond = dict(zip(idx.recording, idx[by]))
+    if missing := sorted(r for r, c in cond.items() if c == ""):
+        raise SystemExit(f"--scale-by {by}: no value for {missing[:5]}")
+    groups = {c: [r for r in library if cond[r] == c] for c in sorted(set(cond.values()))}
+    if bare := sorted(c for c, recs in groups.items() if not recs):
+        raise SystemExit(f"--scale-by {by}: no library recording in {bare}: those recordings would be scaled "
+                         f"by statistics of normal operation the detector never saw")
+    per = {c: zscore_stats(prepared, recs) for c, recs in groups.items()}
+    channels = next(iter(per.values()))["channels"]
+    return {"channels": channels, "by": by,
+            "conditions": {c: {k: v[k] for k in ("mean", "std", "rows", "recordings")} for c, v in per.items()},
+            "condition_of": cond, "rows": sum(v["rows"] for v in per.values()),
+            "from": f"all rows of the library recordings, per '{by}'", "recordings": sorted(library)}
 
 
 def write_csv(d, path, channels, mean, std, label, decimals):
@@ -87,6 +111,9 @@ def main(argv=None):
     ap.add_argument("--per-file", type=int, default=21, help="incident recordings per scored file")
     ap.add_argument("--seam-s", type=float, default=86400, help="timestamp gap between joined recordings")
     ap.add_argument("--decimals", type=int, default=4)
+    ap.add_argument("--scale-by", metavar="COLUMN",
+                    help="z-score per value of this index column (an operating condition known at run "
+                         "time), each from that condition's library recordings")
     a = ap.parse_args(argv)
     idx = read_index(a.index)
     by_role = {r: list(idx.recording[idx.role == r]) for r in ("library", "validation", "test", "delivery")}
@@ -99,21 +126,39 @@ def main(argv=None):
     for d in ("library", "validation", "test", "delivery", "labels"):
         shutil.rmtree(os.path.join(a.out, d), ignore_errors=True)
         os.makedirs(os.path.join(a.out, d))
-    stats = zscore_stats(a.prepared, by_role["library"])
-    channels, mean, std = stats["channels"], np.array(stats["mean"]), np.array(stats["std"])
+    if a.scale_by:
+        stats = condition_stats(a.prepared, idx, by_role["library"], a.scale_by)
+        scale = {c: (np.array(v["mean"]), np.array(v["std"])) for c, v in stats["conditions"].items()}
+
+        def mean_std(recs):
+            """Mean and std for rows of these recordings, each by its recording's condition."""
+            pairs = [scale[stats["condition_of"][r]] for r in recs]
+            return np.stack([m for m, _ in pairs]), np.stack([s for _, s in pairs])
+    else:
+        stats = zscore_stats(a.prepared, by_role["library"])
+        g_mean, g_std = np.array(stats["mean"]), np.array(stats["std"])
+
+        def mean_std(recs):
+            return g_mean, g_std
+    channels = stats["channels"]
     with open(os.path.join(a.out, "zscore_stats.json"), "w") as f:
         json.dump(stats, f, indent=1)
+    if a.scale_by:
+        print(f"z-score     per '{a.scale_by}': " + ", ".join(
+            f"{c} ({len(v['recordings'])} library recordings)" for c, v in stats["conditions"].items()))
 
     manifest = {"contract": "ad-role-files/v1", "step_ms": report["step_ms"], "channels": channels,
                 "timestamp_column": "timestamp", "label_column": "label", "labels": ["normal", "anomaly"],
                 "timestamp_format": "epoch seconds, 3 decimals", "decimals": a.decimals, "seam_s": a.seam_s,
-                "zscore_stats": "zscore_stats.json", "library": [], "validation": [], "test": [], "delivery": []}
+                "zscore_stats": "zscore_stats.json", "scale_by": a.scale_by,
+                "library": [], "validation": [], "test": [], "delivery": []}
     for rec in by_role["library"]:
         df = load_prepared(a.prepared, rec)
         if (df.label != "normal").any():
             raise SystemExit(f"library recording {rec} has non-normal rows: the detector would fit them as normal")
         for seg, part in df.groupby("segment", sort=True):
             fname = f"{stem(rec)}__seg{int(seg)}.csv"
+            mean, std = mean_std([rec])
             write_csv(part, os.path.join(a.out, "library", fname), channels, mean, std, False, a.decimals)
             manifest["library"].append({"file": f"library/{fname}", "recording": rec, "segment": int(seg),
                                         "rows": len(part)})
@@ -123,6 +168,7 @@ def main(argv=None):
     def write_scored(role, name, recs, labelled, calibration=False):
         d = joined(a.prepared, recs, types, seam_ms)
         fname = f"{name}.csv"
+        mean, std = mean_std(list(d.recording))
         write_csv(d, os.path.join(a.out, role, fname), channels, mean, std, labelled, a.decimals)
         lab = f"labels/{name}_labels.csv"
         pd.DataFrame({"timestamp": timestamp_strings(d.timestamp.to_numpy()), "label": d.label.astype(str),
