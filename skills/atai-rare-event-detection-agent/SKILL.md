@@ -595,13 +595,25 @@ output is still being written).
 - **Embeddings from your own classifier.** `output_embeddings: true` in a bundle's values
   works on a promoted blueprint too: per channel, an `embedding_<channel>` column (10 × 768
   on the pump's 10 channels) and an `embedding_<channel>_features` column, each cell a JSON
-  list in the CSV. Nothing else returns embeddings: a trial, an eval (predictions only) and
-  the promoted classifier (`aar_…`, no download route) don't, and neither can its
-  prototypes be read. To plot the training windows and the two classes, run the training
-  files through the promoted blueprint in batch with `output_embeddings: true`; each class's
+  list in the CSV. A serving agent's answers carry them too (Step 5). A trial, an eval
+  (predictions only) and the promoted classifier (`aar_…`, no download route) don't, and
+  neither can its prototypes be read. To plot the training windows and the two classes,
+  recompute them: run the training files through the promoted blueprint in batch with
+  `output_embeddings: true` (or through a serving agent, below); each class's
   mean stands in for its prototype (the head is `strategy: centroid`). On the pump, at step 4
   (3,016 of 12,059 windows, a quarter of the download), PC 1–2 and the class means came out
   as those of a local encoder's.
+  **A serving agent gives the same embeddings.** `output_embeddings` is a bundle value, not a
+  new blueprint, so a serving bundle of the promoted blueprint with it on (what a live monitor
+  runs, Step 5) returns them in every `/query` answer. Sending it the training windows, one per
+  query, cut as the platform cuts them (each file from row 0 at the blueprint's step), gives
+  the same points with one agent instead of a batch run per file: no job slots or queue, and
+  on the free trial no 2-hour cap. Batch stays the default: the platform cuts its windows and
+  its outputs are files; with serving, check the window count against the tiling. Measured on
+  the AD skill's SKAB library (free trial, 2026-10-31): all 1,950 windows both ways, the same
+  timestamps, embeddings within 4.0×10⁻⁶. The AD and OSM skills' `library_embeddings.py
+  --serving` do it for their libraries; RED has no such script yet, and the route is not yet
+  measured on a RED blueprint.
 - **The bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>` finds every
   attempt, including the ones a rerun replaced; `deliver_state.json` keeps only the last
   per file. `cleanup.py` uses both.
