@@ -71,6 +71,12 @@ timestamp,back.x,back.y,back.z,...,label
 
 - **Timestamps:** epoch seconds, epoch milliseconds or ISO 8601 — any rate, jitter and
   gaps are fine; step 1 fixes them.
+- **No timestamps** (a fixed-rate recording, common in lab and public datasets): write
+  them from the row number, `base + i * 1000/hz` ms, with a base per recording far enough
+  apart that no two recordings overlap in time. Do it **before** dropping any rows, so a
+  dropped stretch leaves a real gap that step 1 splits at, not a seam it can't see.
+- **Labels as intervals** (start and end rows, or times, in a separate file): expand them
+  to a label per row and leave rows outside every interval empty, then drop those rows.
 - **Labels:** turning your source's annotations into one state per row is the
   dataset-specific part, and it's yours. (In LARCO, the washing machine's own spin,
   water-flow and heater labels become fill / wash / spin / drain by a priority rule —
@@ -259,6 +265,16 @@ The ones that fail silently or expensively:
 - **Labels at a lower rate than the signal** (LARCO: 1 Hz labels, 200 Hz vibration): label
   each sample by the label period it falls in, and drop samples outside any labelled period
   before step 1 — the sample data was built that way.
+- **A state shorter than a window can't be learned.** Every library and scored window holds
+  one state at its last row, so a state that never lasts a window (HAPT's posture
+  transitions, sit-to-stand and the like: 1.5–10 s, median 3.6 s, against 5 s windows) has
+  no clean windows to learn from and only blurs its neighbours. Drop its rows and let step 1
+  split the recording there; don't relabel them as a neighbour.
+- **Dropped rows can leave a gap shorter than `--max-gap-s`.** Step 1 splits only at gaps
+  over `--max-gap-s` (default 1 s) and interpolates across shorter ones. On fixed-rate data,
+  where any missing row is a real gap, set it to just over one sample period
+  (`--max-gap-s 0.03` at 50 Hz). In HAPT, 5 of 795 gaps between labelled stretches were
+  under 1 s (the shortest 0.12 s) and were bridged at the default.
 - **Don't renumber timestamps to hide gaps.** A window across a faked seam silently mixes two
   unrelated moments. Split instead; the library's real-timestamp pieces are the one place
   jumps are allowed, because training skips the windows that cross them.
