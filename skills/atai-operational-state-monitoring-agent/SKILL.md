@@ -260,6 +260,14 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > Steps 5–6 (agent serving and the library view) are verified on production (2026-10-29), on
 > the sample below and on the LARCO quickstart; first built on Dev (2026-10-16 to 10-18) and
 > Staging (2026-10-24).
+> Steps 0–6 also ran unchanged on the free trial (`try.archetypeai.app`, 2026-10-31) on a
+> second, non-machine dataset: UCI HAPT human activity (a waist-worn phone, 6 channels at 50 Hz,
+> 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
+> delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
+> `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
+> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
+> queued job already reports `running`, so with large library files that wait counts against
+> the trial's 2-hour job limit.
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -581,6 +589,21 @@ replayer and a bridge) taught, for any app that streams a machine's windows to a
 - **Draw the library first:** a dot per window and a density per state, in the state's colour,
   a label on each cloud, then the trail of the latest answers on top. The view ships with the
   app; rebuild it (`--view`) only after promoting another model.
+- **Match the view's states by name.** `library-view.json` lists the states in the
+  manifest's order (alphabetical unless `build_roles.py` was given `--states`), and each
+  window's state in `library-view.bin` is an index into that list. An app that shows its
+  states in another order must map them by name, or every cloud is drawn in a neighbour's
+  colour.
+- **Replay a recording's segments in order, a window at a time within each.** A recording
+  split at gaps (or at dropped states) becomes several delivery files, some only a few
+  windows long. Play them back to back as one session, but cut windows per file, so no window
+  spans a seam the agent never saw in training.
+- **Publish each window's channel means for the page, not only its level (RMS about the
+  mean), when states are postures.** This is what the bridge publishes for the page to draw;
+  the agent gets the raw window and already tells the postures apart. The level shows moving
+  from still, but not sitting from standing from lying. The direction of gravity, the
+  accelerometer's mean, does, and it's what a viewer needs to see why the agent called a
+  still state (on HAPT, a phone drawn turned by the mean).
 
 ## Path 2 pitfalls
 
