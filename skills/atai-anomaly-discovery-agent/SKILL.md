@@ -657,18 +657,27 @@ each output is downloaded again until its last window reaches the input's end, a
 network outage is waited out instead of failing every file. **Expect, on the sample**
 (~13 min): `2 of 2 delivery files have complete outputs`.
 
-- **If a run hits a time limit** (`DeadlineExceeded`: the free trial stops a run after 2
-  hours, with no output), a plain rerun hits it again. Two ways through, both resumable:
+- **A run's time limit** (`DeadlineExceeded`: the free trial stops a run after 2 hours, with
+  no output). A plain rerun hits it again. Two ways through, both resumable:
   - `--max-windows-per-run N`: the same windows, in runs of at most N. Each run starts on a
     multiple of the step and overlaps the next by window − step rows, and the outputs are
-    joined, so the scores equal one run's. Off by default; production needs it only for
-    recordings far longer than the sample's.
+    joined, so the scores equal one run's. **On the free trial it is on by default**, sized
+    to 40–60 min a run at the rates below: 38,400 ÷ channels windows (4,800 at 8 channels,
+    1,100 at 33), so a long file is split before it starts, not after a run has spent 2 hours
+    and died. Split runs' files are named by row range, so a rerun at another size never
+    reuses a different split's files. It doesn't cancel the earlier split's agents either:
+    they run until they finish or hit 2 hours, holding free-trial job slots meanwhile, and
+    `cleanup.py` finds them through the bundle's listing.
+    `--max-windows-per-run 0` turns it off; elsewhere it is off unless you set it.
   - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
     measured in steps of 8 samples.
 
-  **On the free trial** (2026-10-30, CPU, 3 runs at once): the sample at step 1 stopped at 2 h
-  on both files. With `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min
-  in all, and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min.
+  **On the free trial** (CPU): a run gets through roughly 640–1,400 channel-windows a minute.
+  On 2026-10-30, 3 runs at once, the sample (33 channels) at step 1 stopped at 2 h on both
+  files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min in all,
+  and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min. On
+  2026-10-31, SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped
+  at 2 h, and in 4 runs of at most 3,000 (37 min each, 2 at a time) it finished in 75 min.
   Queued runs report `running` too; whether queue time counts toward the limit is not known,
   so keep `--parallel` at 3.
 - **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works

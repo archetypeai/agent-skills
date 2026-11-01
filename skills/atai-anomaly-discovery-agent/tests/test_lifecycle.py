@@ -402,6 +402,73 @@ class DeliverResume(unittest.TestCase):
         pd.testing.assert_frame_equal(pd.read_csv(whole), one)
         self.assertEqual(len(one), 9)
 
+    def test_trial_run_size_scales_with_channels(self):
+        self.assertEqual(deliver.trial_max_windows(8), 4_800)      # SKAB: ~60 min at ~80 windows a minute
+        self.assertEqual(deliver.trial_max_windows(33), 1_100)     # TEP: its sample ran 1,000 in 24-34 min
+        self.assertEqual(deliver.trial_max_windows(10_000), 100)
+
+    def on_trial(self, *args, running=None, completed=False, keep_state=False):
+        """deliver on the free trial: 249 windows (window 4, step 2), at most 100 a run."""
+        pd.DataFrame({"t": range(1000, 1500), "v": range(500)}).to_csv(
+            os.path.join(self.roles, "delivery", "d.csv"), index=False)
+        sf = os.path.join(self.out, "deliver_state.json")
+        state = json.load(open(sf))
+        if not keep_state:
+            state["agents"] = {"delivery/d.csv": running} if running else {}
+        json.dump(state, open(sf, "w"))
+
+        def download(agent, dst, src, ts_col):     # a batch output: a window every 2 rows of src
+            if not completed:
+                return None
+            ts = pd.read_csv(src)["t"].tolist()
+            pd.DataFrame([(ts[s + 3], ts[s]) for s in range(0, len(ts) - 3, 2)],
+                         columns=["finish_timestamp", "start_timestamp"]).to_csv(dst, index=False)
+            return dst
+        started = []
+
+        def fake(method, url, body=None):
+            if method == "GET":
+                return {}
+            started.append(body)
+            return {"id": f"agt_new{len(started)}"}
+        manifest = {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t", "channels": ["v"]}
+        with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, root=lambda: "https://try.archetypeai.app",
+                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake,
+                                 upload_file=lambda src, name: {"file_id": "fil_1"},
+                                 poll=lambda agent: "completed" if completed else "timeout",
+                                 download=download, TRIAL_CHANNEL_WINDOWS_PER_RUN=100):
+            deliver.main(["--roles", self.roles, "--out", self.out, *args])
+        return started, json.load(open(sf))["agents"]
+
+    def test_the_free_trial_splits_a_long_file_from_the_start(self):
+        started, runs = self.on_trial()
+        self.assertEqual(len(started), 3)
+        self.assertEqual(sorted(runs), ["delivery/d.csv rows 0-202", "delivery/d.csv rows 200-402",
+                                        "delivery/d.csv rows 400-500"])
+
+    def test_a_rerun_with_another_split_does_not_reuse_its_files(self):
+        # an earlier run split at 50 windows and stopped waiting; a plain rerun splits at 100
+        self.on_trial("--max-windows-per-run", "50")
+        started, runs = self.on_trial(completed=True, keep_state=True)
+        self.assertEqual(len(started), 2)            # rows 0-202 and 200-402; 400-500 is the same run in both
+        whole = pd.read_csv(os.path.join(self.out, "delivery", "d.csv"))
+        self.assertEqual(len(whole), 249)
+        self.assertEqual(list(whole.start_timestamp), list(range(1000, 1497, 2)))
+
+    def test_zero_turns_the_trial_split_off(self):
+        started, runs = self.on_trial("--max-windows-per-run", "0")
+        self.assertEqual((len(started), list(runs)), (1, ["delivery/d.csv"]))
+
+    def test_a_whole_file_run_already_started_is_kept(self):
+        started, runs = self.on_trial(running="agt_running")
+        self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_running"}))
+
+    def test_other_deployments_are_not_split(self):
+        with mock.patch.object(deliver, "deployment", lambda e: "u1.archetypeai.app"):
+            started, runs = self.on_trial()
+        self.assertEqual(list(runs), ["delivery/d.csv"])
+
 
 class QueryRetry(unittest.TestCase):
     """A serving query is retried after a timeout; any other POST is not (it could duplicate)."""
