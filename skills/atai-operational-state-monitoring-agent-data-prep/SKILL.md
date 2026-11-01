@@ -73,8 +73,10 @@ timestamp,back.x,back.y,back.z,...,label
   gaps are fine; step 1 fixes them.
 - **No timestamps** (a fixed-rate recording, common in lab and public datasets): write
   them from the row number, `base + i * 1000/hz` ms, with a base per recording far enough
-  apart that no two recordings overlap in time. Do it **before** dropping any rows, so a
-  dropped stretch leaves a real gap that step 1 splits at, not a seam it can't see.
+  apart that no two recordings overlap in time (step 4 builds each state's library file from
+  pieces of several recordings sorted by start time, so overlapping ones would interleave).
+  Do it **before** dropping any rows, so a dropped stretch leaves a real gap that step 1
+  splits at, not a seam it can't see.
 - **Labels as intervals** (start and end rows, or times, in a separate file): expand them
   to a label per row and leave rows outside every interval empty, then drop those rows.
 - **Labels:** turning your source's annotations into one state per row is the
