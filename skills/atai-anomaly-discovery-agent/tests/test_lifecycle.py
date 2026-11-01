@@ -350,11 +350,15 @@ class DeliverResume(unittest.TestCase):
     a file longer than --max-windows-per-run goes in several runs whose outputs join to its own."""
 
     def deliver(self, status, *args):
-        started = []
+        started, self.cancelled = [], []
 
         def fake(method, url, body=None):
             if method == "GET":
-                return {"error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
+                return {"status": "completed" if status == "completed" else "running",
+                        "error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
+            if url.endswith("/cancel"):
+                self.cancelled.append(url.split("/")[-2])
+                return {}
             assert url.endswith("/run"), url
             started.append(body)
             return {"id": f"agt_new{len(started)}"}
@@ -417,7 +421,9 @@ class DeliverResume(unittest.TestCase):
         os.remove(whole)
         started, runs = self.deliver("completed", "--max-windows-per-run", "4")
         self.assertEqual(len(started), 3)
-        self.assertEqual(sorted(r for r in runs if " rows " in r), ["delivery/d.csv rows 0-10", "delivery/d.csv rows 16-20", "delivery/d.csv rows 8-18"])
+        # the whole file's run (completed) is forgotten, not cancelled: this split never reads it
+        self.assertEqual((sorted(runs), self.cancelled),
+                         (["delivery/d.csv rows 0-10", "delivery/d.csv rows 16-20", "delivery/d.csv rows 8-18"], []))
         pd.testing.assert_frame_equal(pd.read_csv(whole), one)
         self.assertEqual(len(one), 9)
 
@@ -443,10 +449,13 @@ class DeliverResume(unittest.TestCase):
             pd.DataFrame([(ts[s + 3], ts[s]) for s in range(0, len(ts) - 3, 2)],
                          columns=["finish_timestamp", "start_timestamp"]).to_csv(dst, index=False)
             return dst
-        started = []
+        started, self.cancelled = [], []
 
         def fake(method, url, body=None):
             if method == "GET":
+                return {"status": "running"}               # the earlier split's agents are still going
+            if url.endswith("/cancel"):
+                self.cancelled.append(url.split("/")[-2])
                 return {}
             started.append(body)
             return {"id": f"agt_new{len(started)}"}
@@ -471,6 +480,10 @@ class DeliverResume(unittest.TestCase):
         self.on_trial("--max-windows-per-run", "50")
         started, runs = self.on_trial(completed=True, keep_state=True)
         self.assertEqual(len(started), 2)            # rows 0-202 and 200-402; 400-500 is the same run in both
+        # the 50-window split's other 4 runs are cancelled, not left holding job slots
+        self.assertEqual(sorted(self.cancelled), ["agt_new1", "agt_new2", "agt_new3", "agt_new4"])
+        self.assertEqual(sorted(runs), ["delivery/d.csv rows 0-202", "delivery/d.csv rows 200-402",
+                                        "delivery/d.csv rows 400-500"])
         whole = pd.read_csv(os.path.join(self.out, "delivery", "d.csv"))
         self.assertEqual(len(whole), 249)
         self.assertEqual(list(whole.start_timestamp), list(range(1000, 1497, 2)))

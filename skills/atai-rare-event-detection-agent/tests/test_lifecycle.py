@@ -221,11 +221,16 @@ class DeliverResume(unittest.TestCase):
     a file longer than --max-windows-per-run goes in several runs whose outputs join to its own."""
 
     def deliver(self, status, *args):
-        started = []
+        started, self.cancelled = [], []
 
         def fake(method, url, body=None):
             if method == "GET":
-                return {"error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
+                running = status != "completed" or url.split("/")[-1] in getattr(self, "still_running", ())
+                return {"status": "running" if running else "completed",
+                        "error": "DeadlineExceeded: stopped after reaching the platform's maximum runtime of 2 hours."}
+            if url.endswith("/cancel"):
+                self.cancelled.append(url.split("/")[-2])
+                return {}
             assert url.endswith("/run"), url
             started.append(body)
             return {"id": f"agt_new{len(started)}"}
@@ -288,9 +293,25 @@ class DeliverResume(unittest.TestCase):
         os.remove(whole)
         started, runs = self.deliver("completed", "--max-windows-per-run", "4")
         self.assertEqual(len(started), 3)
-        self.assertEqual(sorted(r for r in runs if " rows " in r), ["delivery/d.csv rows 0-10", "delivery/d.csv rows 16-20", "delivery/d.csv rows 8-18"])
+        # the whole file's run (completed) is forgotten, not cancelled: this split never reads it
+        self.assertEqual((sorted(runs), self.cancelled),
+                         (["delivery/d.csv rows 0-10", "delivery/d.csv rows 16-20", "delivery/d.csv rows 8-18"], []))
         pd.testing.assert_frame_equal(pd.read_csv(whole), one)
         self.assertEqual(len(one), 9)
+
+    def test_a_rerun_at_another_split_cancels_the_old_runs_and_reuses_no_file(self):
+        state = json.load(open(os.path.join(self.out, "deliver_state.json")))
+        state["agents"] = {}
+        json.dump(state, open(os.path.join(self.out, "deliver_state.json"), "w"))
+        self.deliver("timeout", "--max-windows-per-run", "4")     # rows 0-10, 8-18, 16-20, still going
+        os.makedirs(os.path.join(self.out, "delivery"), exist_ok=True)
+        self.still_running = {"agt_new1", "agt_new2", "agt_new3"}
+        started, runs = self.deliver("completed", "--max-windows-per-run", "3")
+        self.assertEqual(sorted(self.cancelled), ["agt_new1", "agt_new2", "agt_new3"])
+        self.assertEqual(sorted(runs), ["delivery/d.csv rows 0-8", "delivery/d.csv rows 12-20",
+                                        "delivery/d.csv rows 6-14"])
+        whole = pd.read_csv(os.path.join(self.out, "delivery", "d.csv"))
+        self.assertEqual(list(whole.start_timestamp), list(range(100, 117, 2)))   # 9 windows, none twice
 
 
 class QueryRetry(unittest.TestCase):

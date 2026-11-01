@@ -609,6 +609,9 @@ output is still being written).
   hours, with no output), a plain rerun hits it again. `--max-windows-per-run N` delivers the
   same windows in runs of at most N: each starts on a multiple of the step and overlaps the
   next by window − step rows, and the outputs are joined, so the result equals one run's.
+  Split runs' files are named by row range, so a rerun at another N never reuses another
+  split's files; that split's runs are forgotten, and any still going is cancelled first, so
+  it doesn't hold a job slot for up to 2 hours (`cleanup.py` deletes them with the bundle).
   Off by default. The sample (2,654 rows) took 28 min on the free trial, so it doesn't need
   it; at that rate a recording past ~10,000 rows at step 1 would. A larger `--step` also
   fits, at a coarser delay.
