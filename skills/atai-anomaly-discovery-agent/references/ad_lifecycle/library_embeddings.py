@@ -12,15 +12,16 @@ no download route, so those windows' embeddings can't be read back. They can be 
 the promoted blueprint with `output_embeddings: true`, a bundle value: no new blueprint, the
 same encoder on the same windows (the trial's window and step, tiled from each file's row 0).
 
-Two routes, the same points (SKAB, 2026-10-31: 143 windows both ways, embeddings within
-2.6e-6, scores within 2e-7):
+Two routes, the same points (SKAB, 2026-10-31: 1,950 windows both ways, embeddings within
+4.0e-6, scores within 2e-7):
   batch (default)  a bundle at the trial's step, one run per library file. The platform cuts
                    the windows, the outputs are files. Each run takes a job slot.
   --serving        a serving agent, one window per /query, cut here exactly as the platform
                    cuts them. One agent for the whole library: no job slots or queue, and on
                    the free trial no 2-hour cap. With --agent, an agent of the promoted
                    blueprint already running with output_embeddings (a live app's) is used
-                   and left running; otherwise one is started and deleted at the end.
+                   and left running; otherwise one is started and deleted at the end, however
+                   the run ends (its ids in <out>/library_serving_state.json until then).
 
 The view is PCA 1-2 of the library's embeddings (the channels' 768 values each, concatenated
 in the manifest's order), each axis at unit spread. A served window lands in the same
@@ -29,12 +30,14 @@ dimensions, with its own PCA and the per-channel features.
 
 Writes <out>/library_embeddings/<file>.csv (a row per window: timestamps, score, embeddings),
 <out>/library_embeddings.json (the summary) and <view-dir>/library-view.{json,bin} (default
-<out>). Ids go to <out>/library_state.json, so a rerun resumes and cleanup.py deletes them.
+<out>). Batch ids go to <out>/library_state.json, so a rerun resumes and cleanup.py deletes
+them; a rerun for another blueprint stops rather than mixing two detectors' windows.
 """
 import argparse
 import csv
 import json
 import os
+import signal
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -46,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import agents, check_auth, load_dotenv, request, root, same_deployment, upload_file  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 from deliver import CHECKPOINTING_OFF, download, poll  # noqa: E402
-from serve import MODEL, query_body  # noqa: E402
+from serve import MODEL, end, query_body, stop  # noqa: E402
 
 WORKERS = 4
 
@@ -93,35 +96,22 @@ def run_batch(a, files, key, window, step, state, save):
         return all(pool.map(one, files))
 
 
-def start_serving(a, key, state, save):
-    """A serving agent of the promoted blueprint with embeddings on, once it is running."""
-    b = request("POST", f"{agents()}/bundles", {"blueprint": key, "name": f"{a.name} library serving",
-                                                "values": {"output_embeddings": True}})["id"]
-    state["serving"] = {"bundle": b, "agent": None}
-    save()
-    state["serving"]["agent"] = request("POST", f"{agents()}/bundles/{b}/run", {"mode": "serving"})["id"]
-    save()
+def serving_agent(a, key, sp):
+    """A serving agent of the promoted blueprint with embeddings on, once running. Its ids are
+    in `sp` from the moment it exists, so a kill leaves them for cleanup.py."""
+    ex = {"endpoint": root(), "agent": None, "bundle": None}
+    ex["bundle"] = request("POST", f"{agents()}/bundles", {"blueprint": key, "name": f"{a.name} library serving",
+                                                           "values": {"output_embeddings": True}})["id"]
+    json.dump(ex, open(sp, "w"), indent=1)
+    ex["agent"] = request("POST", f"{agents()}/bundles/{ex['bundle']}/run", {"mode": "serving"})["id"]
+    json.dump(ex, open(sp, "w"), indent=1)
     t0 = time.time()
-    while (s := request("GET", f"{agents()}/instances/{state['serving']['agent']}").get("status")) != "running":
+    while (s := request("GET", f"{agents()}/instances/{ex['agent']}").get("status")) != "running":
         if s in ("failed", "cancelled", "canceled", "completed") or time.time() - t0 > 900:
-            sys.exit(f"serving agent {state['serving']['agent']} is {s}, not running")
+            sys.exit(f"serving agent {ex['agent']} is {s}, not running")
         time.sleep(3)
-    log(f"serving agent {state['serving']['agent']} running")
-    return state["serving"]["agent"]
-
-
-def stop_serving(state, save):
-    sv = state.get("serving") or {}
-    calls = [("POST", f"/instances/{sv['agent']}/cancel"), ("DELETE", f"/instances/{sv['agent']}")] if sv.get("agent") else []
-    calls += [("DELETE", f"/bundles/{sv['bundle']}")] if sv.get("bundle") else []
-    for method, path in calls:
-        try:
-            request(method, f"{agents()}{path}", {} if method == "POST" else None)
-        except RuntimeError as e:          # already cancelled or gone
-            if not any(c in str(e) for c in ("(404)", "(409)")):
-                raise
-    state.pop("serving", None)
-    save()
+    log(f"serving agent {ex['agent']} running")
+    return ex
 
 
 def run_serving(a, files, agent, window, step, channels):
@@ -262,18 +252,33 @@ def main(argv=None):
     state = json.load(open(sp)) if os.path.exists(sp) else {}
     if not same_deployment(state):
         sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: move it aside")
+    if state.get("blueprint", key) != key:
+        sys.exit(f"{sp} and <out>/library_embeddings/ are for {state['blueprint']}, not the promoted {key}: "
+                 f"move them aside (cleanup.py deletes its runs) so the view holds one detector's windows")
     state.update({"endpoint": root(), "blueprint": key})
 
     def save():
         json.dump(state, open(sp, "w"), indent=1)
+    save()
     os.makedirs(os.path.join(a.out, "library_embeddings"), exist_ok=True)
     if a.serving:
-        agent = a.agent or start_serving(a, key, state, save)
+        ssp = os.path.join(a.out, "library_serving_state.json")
+        if os.path.exists(ssp):
+            sys.exit(f"{ssp} exists: an earlier run's serving agent may still be up; run cleanup.py --yes first")
+        if a.agent and (b := request("GET", f"{agents()}/instances/{a.agent}").get("blueprint")) != key:
+            sys.exit(f"agent {a.agent} runs {b}, not the promoted {key}")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, stop)
+        ex = None
         try:
+            agent = a.agent or (ex := serving_agent(a, key, ssp))["agent"]
             run_serving(a, m["library"], agent, meta["window_size"], meta["step_size"], m["channels"])
         finally:
-            if not a.agent:
-                stop_serving(state, save)
+            if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
+                ex = json.load(open(ssp))
+            if ex and end(ex):
+                os.remove(ssp)
+                log(f"deleted serving agent {ex['agent']} and bundle {ex['bundle']}")
     elif not run_batch(a, m["library"], key, meta["window_size"], meta["step_size"], state, save):
         sys.exit("not every library file has a complete output: rerun to resume")
     write_view(a, m, meta, t0)

@@ -815,7 +815,9 @@ ways: 1,950/1,950 windows from 11 files with the same start timestamps, embeddin
   them and sent one per query, 4 at a time. No job slots or queue, and on the free trial no
   2-hour cap. SKAB's 1,950 windows took 5.6 min served, against 11.6 min for its 11
   batch runs, 3 at a time. With `--agent` it uses an agent already running the promoted
-  blueprint with embeddings on, and leaves it running; otherwise it starts one and deletes it.
+  blueprint with embeddings on (it checks the blueprint), and leaves it running; otherwise it
+  starts one and deletes it however the run ends, signals included (its ids stay in
+  `out/library_serving_state.json` until then, for `cleanup.py`).
   Better when an app's agent is up, or on the trial; batch is better for a library of tens of
   thousands of windows.
 
