@@ -167,3 +167,35 @@ def test_two_event_classes(tmp_path):
     shutil.rmtree(tmp_path / "roles")
     assert check_events.main(["--prepared", str(tmp_path / "prepared"), "--training", "1,3",
                               "--validation", "2,4", "--test", "5,6"]) == 1        # slip has no training incident
+
+
+def _prepared_with_gap(tmp_path, gap_at):
+    recording(tmp_path / "rec.csv", gap_at=gap_at)
+    prepare.main(["--input", str(tmp_path / "rec.csv"), "--label-col", "status", "--classes", *CLASSES,
+                  "--out", str(tmp_path / "prepared")])
+    return tmp_path
+
+
+def test_normal_run_split_at_a_gap(tmp_path):
+    tmp = _prepared_with_gap(tmp_path, 3_500)          # the only normal stretch long enough has a gap in it
+    assert build(tmp, "--normal-rows", "1400") == 0
+    m = json.load(open(tmp / "roles" / "manifest.json"))
+    assert m["training"][0]["rows"] == [3_500, 4_900]                               # after the gap, not across it
+    assert preflight_roles.main(["--roles", str(tmp / "roles")]) == 0
+
+
+def test_slice_clipped_to_its_segment(tmp_path):
+    tmp = _prepared_with_gap(tmp_path, 5_600)          # inside validation #3's context
+    assert build(tmp) == 0
+    m = json.load(open(tmp / "roles" / "manifest.json"))
+    assert m["validation"][0]["rows"][0] == 5_600 == m["build_end_row"]
+    assert preflight_roles.main(["--roles", str(tmp / "roles")]) == 0               # no jump inside a file
+
+
+def test_every_normal_run(prepared):
+    assert build(prepared, "--every-normal-run") == 0
+    m = json.load(open(prepared / "roles" / "manifest.json"))
+    normal = [f for f in m["training"] if f["class"] == "normal"]
+    assert [f["file"] for f in normal] == ["training/normal_01.csv", "training/normal_02.csv"]
+    assert [f["rows"] for f in normal] == [[200, 1_000], [4_200, 5_000]]           # each run's last 800 rows
+    assert preflight_roles.main(["--roles", str(prepared / "roles")]) == 0

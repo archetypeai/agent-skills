@@ -9,8 +9,11 @@ From the prepared recording and the incident roles you chose (check_events.py fi
   values      short missing runs interpolated (longer ones were triaged out), every
               channel z-scored with the build-time normal rows' mean and standard deviation;
   training    one file of normal operation (the first --normal-rows of a normal run before
-              any held-out incident) and one file per training incident: each a single
-              class, set in the Optimize request, so no label column;
+              any held-out incident; a run never crosses a gap) and one file per training
+              incident: each a single class, set in the Optimize request, so no label
+              column. --every-normal-run writes one normal file per such run instead, its
+              last --normal-rows: one per operating point when the set point changes
+              between runs;
   validation, one file per incident: the incident with --context normal rows either side,
   test        cut at the midpoint where two incidents are closer than that (so no row is in
               two incidents' files), with a `label` column;
@@ -53,6 +56,8 @@ def main(argv=None):
     ap.add_argument("--context", type=int, default=4096)
     ap.add_argument("--delivery-context", type=int, default=1024)
     ap.add_argument("--normal-rows", type=int, default=8192)
+    ap.add_argument("--every-normal-run", action="store_true",
+                    help="one normal file per run of --normal-rows before the first held-out incident (its last rows)")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--channels", nargs="+", help="use exactly these channels (no triage or selection)")
     ap.add_argument("--max-nan-fraction", type=float, default=0.01)
@@ -125,22 +130,29 @@ def main(argv=None):
          "source": rep["source"], "build_end_row": int(end), "zscore": stats,
          "training": [], "validation": [], "test": [], "delivery": []}
 
-    normal_runs = [(lo, hi) for lo, hi in runs((~event_mask)[:end])
-                   if hi - lo >= a.normal_rows and len(np.unique(seg[lo:hi])) == 1]
+    normal_runs = []                                   # split at gaps, so a run never crosses one
+    for lo, hi in runs((~event_mask)[:end]):
+        cuts = [lo, *(lo + 1 + np.flatnonzero(np.diff(seg[lo:hi]))), hi]
+        normal_runs += [(int(p), int(q)) for p, q in zip(cuts, cuts[1:]) if q - p >= a.normal_rows]
     if not normal_runs:
         longest = max((hi - lo for lo, hi in runs((~event_mask)[:end])), default=0)
         raise SystemExit(f"no normal run of {a.normal_rows} rows before row {end} (longest: {longest}); "
                          "lower --normal-rows")
-    lo = normal_runs[0][0]
-    m["training"].append({**write(f"training/{background}.csv", lo, lo + a.normal_rows, False),
-                          "class": background})
+    if a.every_normal_run:  # one file per run (e.g. per set point), its settled tail
+        for k, (lo, hi) in enumerate(normal_runs, 1):
+            m["training"].append({**write(f"training/{background}_{k:02d}.csv", hi - a.normal_rows, hi, False),
+                                  "class": background})
+    else:
+        lo = normal_runs[0][0]
+        m["training"].append({**write(f"training/{background}.csv", lo, lo + a.normal_rows, False),
+                              "class": background})
     for inc in incidents:
         if roles.get(inc["id"]) == "training":
             lo, hi = inc["rows"]
             m["training"].append({**write(f"training/{inc['class']}_inc{inc['id']:02d}.csv", lo, hi, False),
                                   "class": inc["class"], "incident": inc["id"]})
 
-    bounds = slice_bounds(incidents, n, a.context)
+    bounds = slice_bounds(incidents, n, a.context, rep.get("segments"))
     for inc in incidents:
         role = roles.get(inc["id"])
         if role in ("validation", "test"):
