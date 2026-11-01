@@ -84,6 +84,14 @@ class Scoring(unittest.TestCase):
         self.assertEqual(r["false_alarms"], 0)
         self.assertEqual(r["normal_windows"], 30)
 
+    def test_calibration_note_when_delivery_normal_is_unlike_calibration(self):
+        # SKAB, 2026-10-31: set for 1%, the delivery's normal windows crossed 4.94% (360 / 7,288)
+        self.assertIn("4.94%", score.calibration_note({"false_alarm_rate": 360 / 7288, "false_alarms": 360}, 0.01))
+        # TEP sample: 0.38% (6 / 1,591), under the target
+        self.assertIsNone(score.calibration_note({"false_alarm_rate": 6 / 1591, "false_alarms": 6}, 0.01))
+        # over twice the target but too few windows to say
+        self.assertIsNone(score.calibration_note({"false_alarm_rate": 0.05, "false_alarms": 5}, 0.01))
+
     def test_sustained_resets_at_a_gap(self):
         self.assertIsNone(score.sustained([True, True, True], 3, pieces=[0, 0, 1]))
         self.assertEqual(score.sustained([True, True, True, True], 3, pieces=[0, 1, 1, 1]), 3)

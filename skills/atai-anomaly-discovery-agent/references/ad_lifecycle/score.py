@@ -18,6 +18,10 @@ the calibration file's scores (known-normal data, delivered for this) — it rep
   overall:
     the false-alarm rate on normal windows, and the mean window detection over types
 
+The calibrated threshold means --far only on data like the calibration file (validation's
+normal-only recordings). If the delivery's own normal windows cross it far more often, the
+calibration file is not typical of the delivery's normal operation, and a note says so.
+
     python score.py --roles roles --out out
 """
 import argparse
@@ -106,6 +110,18 @@ def evaluate(windows, threshold, sustain, step_ms):
             "macro_auroc": float(np.nanmean([v["auroc"] for v in out.values()])) if out else None}
 
 
+def calibration_note(calibrated, far, factor=2, min_alarms=10):
+    """A note when the delivery's normal windows cross the calibrated threshold well over --far
+    (factor times, and at least min_alarms windows), else None."""
+    rate = calibrated["false_alarm_rate"]
+    if rate <= factor * far or calibrated["false_alarms"] < min_alarms:
+        return None
+    return (f"note: the delivery's normal windows cross the calibrated threshold {rate:.2%} of the time, "
+            f"not the {far:.0%} it was set for. The calibration file (validation's normal-only recordings) is "
+            f"not typical of the delivery's normal operation: check that it covers every operating condition "
+            f"the delivery has. Until it does, the calibrated threshold is not a {far:.0%} operating point.")
+
+
 def show(name, r):
     print(f"\n=== {name}: threshold {r['threshold']:.3f}, sustain {SUSTAIN} ===")
     print(f"  {'type':<14} {'window det':>10} {'detected':>9} {'delay h':>8} {'AUROC':>7}")
@@ -149,6 +165,10 @@ def main(argv=None):
     show("the trial's threshold", results["trial"])
     if "calibrated" in results:
         show(f"calibrated to {a.far:.0%} false alarms on known-normal data", results["calibrated"])
+        results["calibrated"]["target_false_alarm_rate"] = a.far
+        if note := calibration_note(results["calibrated"], a.far):
+            print("\n" + note)
+            results["calibrated"]["note"] = note
     json.dump(results, open(os.path.join(a.out, "delivery", "scores.json"), "w"), indent=1, default=float)
     return 0
 
