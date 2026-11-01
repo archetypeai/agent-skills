@@ -267,7 +267,7 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
 > at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
 > queued job already reports `running`, so with large library files that wait counts against
-> the trial's 2-hour job limit.
+> the trial's 2-hour job limit; `--serving` takes one serving agent instead.
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -529,6 +529,7 @@ production with every state as batch's and a 448 ms median.
 
 ```sh
 python library_embeddings.py --roles $R --out out                       # one batch run per library file, then the view
+python library_embeddings.py --roles $R --out out --serving             # or through a serving agent, a query per window
 python library_embeddings.py --roles $R --out out --view                # the view again, no platform calls
 python library_embeddings.py --roles $R --out out --view-dir ../my-app/static
 ```
@@ -541,6 +542,25 @@ embeddings. **It can be recomputed:** a bundle on the promoted blueprint with
 the same windows (the blueprint's window and step) and adds an `embedding_<channel>` column
 per channel (768 values, a JSON list in the CSV). One run per library file, so each output's
 state is its file's.
+
+**Batch is the default; a serving agent gives the same points.** `output_embeddings` is a
+bundle value, so a serving agent of the same promoted blueprint returns the same
+`embedding_<channel>` lists in every `/query` answer (what a live app draws each answer with).
+`--serving` sends it the library's windows one per query, cut here as the platform cuts them:
+from each file's row 0 at the blueprint's step, leaving out windows that cross a join between
+the file's pieces. With `--agent agt_…` it uses an agent already running with embeddings on
+(a live app's; it checks the blueprint) and leaves it running; otherwise it starts one and
+deletes it however the run ends, signals included, with its ids in
+`out/library_serving_state.json` until then for `cleanup.py`.
+- **Batch:** the platform cuts the windows, the outputs are files you can rebuild the view from,
+  and runs are byte-identical run to run. Each file is a run, holding a job slot.
+- **Serving:** one agent for the whole library, so no job slots, no queue and, on the free
+  trial, no 2-hour cap. 4 queries at a time, SKAB's 1,950 windows took about 5 minutes. The
+  cutting is the client's: when it matters, check the window count against one batch run.
+- **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
+  windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. Not yet measured on an OSM
+  blueprint.
 
 **Draw the two directions that separate the states, not the two largest.** The two largest
 directions of spread (PCA 1–2) follow the data's variance, which needn't be the states': on
@@ -708,7 +728,7 @@ skills/atai-operational-state-monitoring-agent/
 │       ├── deliver.py          Step 3: bundle from the blueprint → runs → outputs matched by time
 │       ├── score.py            Step 4: last-record pairing against the held-back labels
 │       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
-│       ├── library_embeddings.py Step 6: the library's embeddings in batch → a 2-D discriminant view
+│       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a 2-D discriminant view
 │       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6 (and a serving app's), from the ids in out/
 │       └── requirements.txt    numpy, pandas, pyarrow (score.py, serve.py, library_embeddings.py)
 └── tests/

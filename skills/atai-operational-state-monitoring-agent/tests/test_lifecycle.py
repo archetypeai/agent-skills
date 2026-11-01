@@ -25,6 +25,7 @@ Run:
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -451,6 +452,98 @@ class QueryRetry(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_request()
 
+@unittest.skipIf(library_embeddings is None, "numpy not installed")
+class TestLibraryServing(unittest.TestCase):
+    """--serving cuts the library's windows as the platform does and saves them in batch's shape."""
+
+    def test_windows_skip_the_joins_between_pieces(self):
+        self.assertEqual(library_embeddings.firsts(12, 4, 2), [0, 2, 4, 6, 8])
+        # two pieces of 6 rows: the window at row 4 crosses the join at row 6 and is left out
+        pieces = [{"row": 0, "rows": 6}, {"row": 6, "rows": 6}]
+        self.assertEqual(library_embeddings.firsts(12, 4, 2, pieces), [0, 2, 6, 8])
+
+    def serve(self, *args, out=None, agent_bp="bp", answer=None, failing_query=False):
+        """main --serving against a fake platform; returns out, the windows asked, the other calls."""
+        roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "library"))
+        manifest = {"channels": ["x", "y"], "states": ["a", "b"], "library": {"files": []}}
+        for state, rows in (("a", 8), ("b", 8)):
+            with open(os.path.join(roles, "library", f"{state}.csv"), "w") as fh:
+                fh.write("timestamp,x,y\n" + "".join(f"{100 + i * 0.02:.3f},{i},{-i}\n" for i in range(rows)))
+            manifest["library"]["files"].append({"file": f"library/{state}.csv", "state": state, "rows": rows})
+        asked, calls = [], []
+
+        def fake(method, url, body=None, idempotent=None):
+            if url.endswith("/query"):
+                if failing_query:
+                    raise RuntimeError("POST /query failed (500)")
+                asked.append(body["events"][0]["event_data"]["contents"])
+                if answer:
+                    return {"response": {"data": [answer]}}
+                x0 = body["events"][0]["event_data"]["contents"][0][0]
+                vec = list(np.random.default_rng(int(x0) + len(asked)).normal(size=6))
+                return {"response": {"data": [{"invalid": "false", "embedding_x": vec[:3], "embedding_y": vec[3:]}]}}
+            calls.append((method, url.split("/api/agents")[1]))
+            if "/blueprints/" in url:
+                return {"document": {"values": {"window_size": 4, "step_size": 4}}}
+            if url.endswith("/bundles"):
+                return {"id": "bnd_s"}
+            if url.endswith("/run"):
+                return {"id": "agt_s"}
+            if method == "GET":
+                return {"status": "running", "blueprint": agent_bp}
+            return {}
+        json.dump({"blueprint": {"key": "bp"}}, open(os.path.join(out, "test_state.json"), "w"))
+        with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, agents=lambda: "https://x/api/agents",
+                                 root=lambda: "https://x", request=fake), \
+                mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
+            library_embeddings.main(["--roles", roles, "--out", out, "--serving", *args])
+        return out, asked, calls
+
+    def test_serving_route_writes_what_the_view_reads(self):
+        out, asked, _ = self.serve("--agent", "agt_app")
+        self.assertIn([[4.0, 5.0, 6.0, 7.0], [-4.0, -5.0, -6.0, -7.0]], asked)   # queries run 4 at a time
+        with open(os.path.join(out, "library_embeddings", "a.csv")) as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual([(r["start_timestamp"], r["finish_timestamp"]) for r in rows],
+                         [("100.000", "100.060"), ("100.080", "100.140")])
+        summary = json.load(open(os.path.join(out, "library_embeddings.json")))
+        self.assertEqual((summary["windows"], summary["per_state"]), (4, {"a": 2, "b": 2}))
+        self.assertEqual(summary["route"], "through a serving agent")
+        # rerun with every output already there: the route stays the one that made them
+        summary["route"] = "in batch"
+        json.dump(summary, open(os.path.join(out, "library_embeddings.json"), "w"))
+        self.serve("--agent", "agt_app", out=out)
+        self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"], "in batch")
+
+    def test_its_own_agent_is_deleted_however_the_run_ends(self):
+        out, _, calls = self.serve()
+        self.assertIn(("DELETE", "/instances/agt_s"), calls)
+        self.assertIn(("DELETE", "/bundles/bnd_s"), calls)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+        out = tempfile.mkdtemp()                          # a query fails: the agent is deleted all the same
+        with self.assertRaises(RuntimeError):
+            self.serve(out=out, failing_query=True)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+
+    def test_a_left_serving_agent_or_another_blueprint_stops_it(self):
+        out = tempfile.mkdtemp()
+        json.dump({"bundle": "bnd_old", "agent": "agt_old"}, open(os.path.join(out, "library_serving_state.json"), "w"))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(out=out)
+        self.assertIn("cleanup.py", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.serve("--agent", "agt_other", agent_bp="another-bp")
+        self.assertIn("not the promoted bp", str(e.exception))
+
+    def test_an_agent_without_embeddings_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.serve("--agent", "agt_app", answer={"predicted_state": "a"})
+        self.assertIn("output_embeddings", str(e.exception))
+
+
 
 if __name__ == "__main__":
     unittest.main()
+
