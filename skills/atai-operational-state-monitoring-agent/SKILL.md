@@ -562,6 +562,12 @@ deletes it however the run ends, signals included, with its ids in
   2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. Not yet measured on an OSM
   blueprint.
 
+**A rerun resumes,** and starts nothing when every file already has its output: it only
+redraws the view, keeping the route the outputs were made by. **For another blueprint it
+stops** rather than mix two models' windows in one view: it checks `out/library_state.json`
+and, because `cleanup.py` deletes that, `out/library_embeddings.json` too. Move both, and
+`out/library_embeddings/`, aside first.
+
 **Draw the two directions that separate the states, not the two largest.** The two largest
 directions of spread (PCA 1–2) follow the data's variance, which needn't be the states': on
 LARCO they mixed fill and wash. The script draws the **linear discriminants** instead: each

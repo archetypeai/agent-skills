@@ -462,8 +462,8 @@ class TestLibraryServing(unittest.TestCase):
         pieces = [{"row": 0, "rows": 6}, {"row": 6, "rows": 6}]
         self.assertEqual(library_embeddings.firsts(12, 4, 2, pieces), [0, 2, 6, 8])
 
-    def serve(self, *args, out=None, agent_bp="bp", answer=None, failing_query=False):
-        """main --serving against a fake platform; returns out, the windows asked, the other calls."""
+    def serve(self, *args, out=None, agent_bp="bp", answer=None, failing_query=False, key="bp", serving=True):
+        """main (--serving unless serving=False) against a fake platform; returns out, the windows asked, the other calls."""
         roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
         os.makedirs(os.path.join(roles, "library"))
         manifest = {"channels": ["x", "y"], "states": ["a", "b"], "library": {"files": []}}
@@ -493,12 +493,12 @@ class TestLibraryServing(unittest.TestCase):
             if method == "GET":
                 return {"status": "running", "blueprint": agent_bp}
             return {}
-        json.dump({"blueprint": {"key": "bp"}}, open(os.path.join(out, "test_state.json"), "w"))
+        json.dump({"blueprint": {"key": key}}, open(os.path.join(out, "test_state.json"), "w"))
         with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
                                  load_manifest=lambda roles: manifest, agents=lambda: "https://x/api/agents",
                                  root=lambda: "https://x", request=fake), \
                 mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
-            library_embeddings.main(["--roles", roles, "--out", out, "--serving", *args])
+            library_embeddings.main(["--roles", roles, "--out", out, *(["--serving"] if serving else []), *args])
         return out, asked, calls
 
     def test_serving_route_writes_what_the_view_reads(self):
@@ -541,6 +541,26 @@ class TestLibraryServing(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             self.serve("--agent", "agt_app", answer={"predicted_state": "a"})
         self.assertIn("output_embeddings", str(e.exception))
+
+    def test_another_blueprints_outputs_stop_it_even_after_cleanup(self):
+        out, _, _ = self.serve("--agent", "agt_app")
+        with self.assertRaises(SystemExit) as e:           # cleanup.py left the outputs and their summary
+            self.serve("--agent", "agt_app", out=out, key="new-bp")
+        self.assertIn("library_embeddings.json", str(e.exception))
+        out = tempfile.mkdtemp()                             # a batch run under way for another blueprint
+        json.dump({"blueprint": "old-bp", "bundle": "bnd_l", "runs": {}}, open(os.path.join(out, "library_state.json"), "w"))
+        for serving in (True, False):
+            with self.assertRaises(SystemExit) as e:
+                self.serve("--agent", "agt_app", out=out, serving=serving)
+            self.assertIn("old-bp", str(e.exception))
+
+    def test_a_rerun_with_nothing_to_embed_starts_nothing_and_keeps_the_route(self):
+        out, _, _ = self.serve("--agent", "agt_app")
+        for serving in (True, False):                       # --serving without --agent, then batch
+            _, asked, calls = self.serve(out=out, serving=serving)
+            self.assertEqual((asked, [c for c in calls if c[0] != "GET"]), ([], []))
+            self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"],
+                             "through a serving agent")
 
 
 

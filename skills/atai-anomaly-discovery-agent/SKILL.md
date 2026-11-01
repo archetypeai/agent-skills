@@ -844,6 +844,12 @@ The script checks each file's window count against the tiling and prints the lib
 range: they are the windows the detector was fitted on, so they should sit under the
 threshold (SKAB: 0.928–1.377, median 1.003, none over 1.604).
 
+**A rerun resumes,** and starts nothing when every file already has its output: it only
+redraws the view, keeping the route the outputs were made by. **For another blueprint or step
+it stops** rather than mix two detectors' windows in one view: it checks `out/library_state.json`
+and, because `cleanup.py` deletes that, `out/library_embeddings.json` too. Move both, and
+`out/library_embeddings/`, aside first.
+
 **The view is PCA 1–2** of the embeddings (every channel's 768 values, concatenated in the
 manifest's order), each axis at unit spread: `library-view.bin` (float32: each window's 2-D
 point and score, the mean and the two projection rows) and `library-view.json` (the layout). A

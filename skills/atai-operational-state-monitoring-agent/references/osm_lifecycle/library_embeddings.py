@@ -32,7 +32,10 @@ kNN decides in every dimension.
 
 Writes <out>/library_embeddings/<state>.csv (the batch outputs, large), <out>/library_embeddings.json
 (the summary) and <view-dir>/library-view.{json,bin} (default <out>). Ids go to
-<out>/library_state.json, so a rerun resumes and cleanup.py deletes them.
+<out>/library_state.json, so a rerun resumes and cleanup.py deletes them. A rerun for another
+blueprint stops rather than mixing two models' windows: it checks library_state.json and,
+because cleanup.py deletes that, library_embeddings.json too. A rerun with nothing new to
+embed starts no agent or run, and keeps the route the outputs were made by.
 """
 import argparse
 import csv
@@ -91,7 +94,7 @@ def run_serving(args, files, agent, window, step, channels):
         if missing := [c for c in channels if f"embedding_{c}" not in rec]:
             sys.exit(f"the agent's answer has no embedding_{missing[0]}: its bundle needs output_embeddings: true")
         return rec
-    t0, n, written = time.time(), 0, 0
+    t0, n = time.time(), 0
     with ThreadPoolExecutor(WORKERS) as pool:
         for f in files:
             dst = os.path.join(out_dir, f"{f['state']}.csv")
@@ -109,10 +112,9 @@ def run_serving(args, files, agent, window, step, channels):
                     w.writerow([rows[i]["timestamp"], rows[i + window - 1]["timestamp"], str(r.get("invalid", False)).lower(),
                                 *[json.dumps(r[f"embedding_{c}"]) for c in channels]])
             os.replace(dst + ".part", dst)
-            n, written = n + len(first), written + 1
+            n += len(first)
             log(f"  {f['state']}: {len(first):,} windows")
     log(f"served {n:,} windows in {time.time() - t0:.0f} s")
-    return written
 
 
 def outputs(agent):
@@ -289,6 +291,22 @@ def main(argv=None):
     values = request("GET", f"{agents()}/blueprints/{key}")["document"]["values"]
     meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"],
             "route": "through a serving agent" if args.serving else "in batch"}
+    # cleanup.py deletes library_state.json but leaves the outputs and their summary
+    summary = os.path.join(args.out, "library_embeddings.json")
+    made = json.load(open(summary)) if os.path.exists(summary) else {}
+    sp = os.path.join(args.out, "library_state.json")
+    state = json.load(open(sp)) if os.path.exists(sp) else {}
+    for what, bp, step in ((summary, made.get("blueprint"), made.get("step_size")),
+                           (sp, state.get("blueprint"), meta["step_size"])):
+        if bp and (bp, step) != (key, meta["step_size"]):
+            sys.exit(f"{what} and {args.out}/library_embeddings/ are for {bp} at step {step}, not the promoted "
+                     f"{key} at step {meta['step_size']}: move them aside (cleanup.py deletes the runs) so the "
+                     f"view holds one model's windows")
+    out_dir = os.path.join(args.out, "library_embeddings")
+    if all(os.path.exists(os.path.join(out_dir, f"{f['state']}.csv")) for f in manifest["library"]["files"]):
+        log("every library file has its embeddings: no agent or run started")
+        meta["route"] = made.get("route", meta["route"])         # keep how they were made
+        return write_view(args, manifest, meta, t0)
 
     if args.serving:
         ssp = os.path.join(args.out, "library_serving_state.json")
@@ -301,21 +319,16 @@ def main(argv=None):
         ex = None
         try:
             agent = args.agent or (ex := start_serving(args, key, manifest["channels"], ssp))["agent"]
-            written = run_serving(args, manifest["library"]["files"], agent, meta["window_size"],
-                                  meta["step_size"], manifest["channels"])
+            run_serving(args, manifest["library"]["files"], agent, meta["window_size"],
+                        meta["step_size"], manifest["channels"])
         finally:
             if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
                 ex = json.load(open(ssp))
             if ex and end(ex):
                 os.remove(ssp)
                 log(f"deleted serving agent {ex['agent']} and bundle {ex['bundle']}")
-        summary = os.path.join(args.out, "library_embeddings.json")
-        if not written and os.path.exists(summary):     # every output was already there: keep how it was made
-            meta["route"] = json.load(open(summary)).get("route", "in batch")
         return write_view(args, manifest, meta, t0)
 
-    sp = os.path.join(args.out, "library_state.json")
-    state = json.load(open(sp)) if os.path.exists(sp) else {}
     if not same_deployment(state):
         sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: "
                  f"move it aside, or set .env to that deployment")
