@@ -31,7 +31,10 @@ dimensions, with its own PCA and the per-channel features.
 Writes <out>/library_embeddings/<file>.csv (a row per window: timestamps, score, embeddings),
 <out>/library_embeddings.json (the summary) and <view-dir>/library-view.{json,bin} (default
 <out>). Batch ids go to <out>/library_state.json, so a rerun resumes and cleanup.py deletes
-them; a rerun for another blueprint stops rather than mixing two detectors' windows.
+them. A rerun for another blueprint or step stops rather than mixing two detectors' windows:
+it checks library_state.json and, because cleanup.py deletes that, library_embeddings.json
+too. A rerun with nothing new to embed starts no agent or run, and keeps the route the
+outputs were made by.
 """
 import argparse
 import csv
@@ -248,6 +251,13 @@ def main(argv=None):
     key, values = test["blueprint"]["key"], test["blueprint"]["values"]
     meta = {"blueprint": key, "route": "serving" if a.serving else "batch", "window_size": values["window_size"],
             "step_size": values["step_size"], "threshold": float(values["threshold"])}
+    # cleanup.py deletes library_state.json but leaves the outputs and their summary
+    summary = os.path.join(a.out, "library_embeddings.json")
+    made = json.load(open(summary)) if os.path.exists(summary) else {}
+    if made and (made.get("blueprint"), made.get("step_size")) != (key, meta["step_size"]):
+        sys.exit(f"{summary} and <out>/library_embeddings/ are for {made.get('blueprint')} at step "
+                 f"{made.get('step_size')}, not the promoted {key} at step {meta['step_size']}: move them aside "
+                 f"so the view holds one detector's windows")
     sp = os.path.join(a.out, "library_state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
     if not same_deployment(state):
@@ -261,7 +271,10 @@ def main(argv=None):
         json.dump(state, open(sp, "w"), indent=1)
     save()
     os.makedirs(os.path.join(a.out, "library_embeddings"), exist_ok=True)
-    if a.serving:
+    if all(os.path.exists(out_path(a.out, f)) for f in m["library"]):
+        log("every library file has its embeddings: no agent or run started")
+        meta["route"] = made.get("route", meta["route"])         # keep how they were made
+    elif a.serving:
         ssp = os.path.join(a.out, "library_serving_state.json")
         if os.path.exists(ssp):
             sys.exit(f"{ssp} exists: an earlier run's serving agent may still be up; run cleanup.py --yes first")

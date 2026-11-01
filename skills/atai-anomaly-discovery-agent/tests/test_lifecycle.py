@@ -542,8 +542,8 @@ class LibraryEmbeddings(unittest.TestCase):
             np.testing.assert_allclose(ref.std(axis=0, ddof=1), [1, 1], rtol=1e-6)
             self.assertGreater(explained[0], explained[1])
 
-    def serve(self, rec, *args, agent_bp="bp", out=None, failing_query=False):
-        """main --serving against a fake platform; returns out, the windows asked, the other calls."""
+    def serve(self, rec, *args, agent_bp="bp", out=None, failing_query=False, key="bp", serving=True):
+        """main (--serving unless serving=False) against a fake platform; returns out, the windows asked, the other calls."""
         roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
         os.makedirs(os.path.join(roles, "library"))
         manifest = {"timestamp_column": "timestamp", "channels": ["a", "b"], "library": []}
@@ -551,7 +551,7 @@ class LibraryEmbeddings(unittest.TestCase):
             pd.DataFrame({"timestamp": np.arange(rows) * 1.0, "a": np.arange(rows), "b": -np.arange(rows)}).to_csv(
                 os.path.join(roles, "library", f"{name}.csv"), index=False)
             manifest["library"].append({"file": f"library/{name}.csv", "rows": rows})
-        json.dump({"endpoint": "https://x", "blueprint": {"key": "bp", "values": {
+        json.dump({"endpoint": "https://x", "blueprint": {"key": key, "values": {
             "window_size": 4, "step_size": 2, "threshold": 1.5}}}, open(os.path.join(out, "test_state.json"), "w"))
         asked, calls = [], []
 
@@ -573,7 +573,7 @@ class LibraryEmbeddings(unittest.TestCase):
                                  load_manifest=lambda roles: manifest, root=lambda: "https://x",
                                  same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake), \
                 mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
-            library_embeddings.main(["--roles", roles, "--out", out, "--serving", *args])
+            library_embeddings.main(["--roles", roles, "--out", out, *(["--serving"] if serving else []), *args])
         return out, asked, calls
 
     def test_serving_route_writes_the_batch_shape_and_the_view(self):
@@ -622,6 +622,20 @@ class LibraryEmbeddings(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             self.serve(lambda first: {"anomaly_score": 1.0}, "--agent", "agt_app")
         self.assertIn("output_embeddings", str(e.exception))
+
+    def test_after_cleanup_another_blueprint_still_stops_it(self):
+        out, _, _ = self.serve(self.rec, "--agent", "agt_app")
+        os.remove(os.path.join(out, "library_state.json"))    # what cleanup.py deletes; the outputs stay
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, "--agent", "agt_app", out=out, key="new-bp")
+        self.assertIn("library_embeddings.json", str(e.exception))
+
+    def test_a_rerun_with_nothing_to_embed_starts_nothing_and_keeps_the_route(self):
+        out, _, _ = self.serve(self.rec, "--agent", "agt_app")
+        for serving in (True, False):                       # --serving without --agent, then batch
+            _, asked, calls = self.serve(self.rec, out=out, serving=serving)
+            self.assertEqual((asked, calls), ([], []))
+            self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"], "serving")
 
 if __name__ == "__main__":
     unittest.main()
