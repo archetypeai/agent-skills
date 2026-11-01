@@ -248,6 +248,21 @@ Chunking also bounds how much each job has to describe: a 20-step manual over 5 
 - **Step from each chunk's actual start, not from `i × stride`.** Snapping to keyframes moves the boundaries; a fixed grid then eats the overlap (15 s → 10 s on our first attempt).
 - **One run per chunk, or one run with `source` as an array.** The array form loads the model once instead of per chunk, which is the dominant cost — but results come back **out of order** and every timestamp is **chunk-local**. Tag each input and add the chunk's start offset before merging, or the manual is silently scrambled.
 - **Dedupe the overlap conservatively.** Two steps may be merged only if they came from *different* chunks *and* their time spans actually overlap. A similarity-only rule deletes real repeated actions — three genuine "Click on the OK button" steps collapsed into one before we added the time test.
+- **Tell every chunk after the first that it comes from the middle — and don't tell the first.** Asked as if it were a whole video, a later chunk invents an introduction and a conclusion (*"Wait for the logo to appear on the screen"*). Asked as if it came from the middle, the *first* chunk loses the clock: on two of 11 videos (agent serving, dev, 2026-10-27) every step came back at 0.0–0.0 s, which empties the first 75 s of the manual. What worked, prepended to the prompt for chunks 2 onward only:
+
+  ```
+  This video is one segment taken from the middle of a longer recording of a single
+  continuous procedure. List only the steps performed within this segment. Do not
+  summarise, introduce, or conclude the overall procedure, and do not describe the
+  segment as beginning or ending anything — the steps before and after it are covered
+  elsewhere. Work at a fine grain: a single button press, acknowledging a dialog,
+  reading a value, or watching an indicator each count as their own step, and steps
+  only seconds apart are expected.
+  ```
+
+  On the same 11 opening chunks, the plain prompt also dropped intro padding (22 *"View the sugar"*, *"View the ladle"*… steps on one cooking video) and lifted the 173 s tire video from 2/11 to 5/11 reference steps at IoU ≥ 0.5. The exception was a **silent** opening chunk: with neither narration nor the preamble to anchor it, it wrote a generic procedure at an even 8 s per step. One example; watch for it.
+- **Fold a short tail into the chunk before it.** A last chunk that adds less new footage than the overlap is mostly an end card, and the model describes it as steps — *"Press the 'Enter' key."* eleven times on a 20 s tail.
+- **Drop a chunk that loops or has lost its clock, and a step past its chunk's end.** A chunk with 6+ steps of which under a third are distinct (*"Cut a piece of wood using a table saw."* ×17), or whose every step is zero-length, is noise: drop it whole and report the hole rather than keep its steps. Drop, don't clamp, a step that ends more than ~5 s past its chunk: the model has lost track of the video.
 
 A `pipeline execution failed: Newton generation event stream closed without a terminal event` at 138–175 s of runtime, on inputs that are well under the ceiling, is a **platform-side** failure and not something to fix by shortening further — retry the chunk.
 
@@ -411,7 +426,48 @@ Measured on production, 2026-10-27, four runs of a 173 s video:
 | Processing | ~1.1× realtime (173 s video → ~3 min 15 s) |
 | **Total** | **~10 min for a 3-minute video** (610–618 s) |
 
-**Cold start is ~7 min on every run and is never cached.** Budget accordingly: a sweep of six configurations is ~40 minutes of pure model loading before any inference. (In Aug 2026, with `whisper:large-v3`, a run took ~15 min and processing ran ~2.5× realtime.)
+**Cold start is ~7 min on every run and is never cached.** Budget accordingly: a sweep of six configurations is ~40 minutes of pure model loading before any inference. (In Aug 2026, with `whisper:large-v3`, a run took ~15 min and processing ran ~2.5× realtime.) [Agent serving](#agent-serving--load-once-query-many-preview-dev-only) pays the load once for many videos, but is not on production yet.
+
+## Agent serving — load once, query many (preview, dev only)
+
+> **Not on production.** As of 2026-10-28 agent serving runs only on Archetype AI's
+> dev deployment. Everything below was measured there, on 2026-10-27 and -28, and
+> will change before it ships. On production, use the batch run above.
+
+A batch run downloads and loads the model for **every** video. A serving agent runs the same `mga` bundle, loads once, and then answers one request per video in seconds:
+
+```
+POST {endpoint}/agents/bundles/{bundle_id}/run      {"mode": "serving"}   → {"id": "agt_…"}
+GET  {endpoint}/agents/instances/{agent_id}         poll until "status": "running"
+POST {endpoint}/agents/instances/{agent_id}/query
+     {"model": "mga", "query": "<prompt>", "file_ids": ["base64:<the mp4's bytes>"]}
+→ 200 {"response": {"data": [{"step": 0, "instruction": "…", "frame_start": …,
+                              "frame_end": …, "timestamp_start": …, "timestamp_end": …}, …]}}
+POST {endpoint}/agents/instances/{agent_id}/cancel
+```
+
+No upload and no connectors: the video travels inline in the request. The bundle is created exactly as in Step 3 (`max_frames`, `max_new_tokens`, `prompt`); `query` carries the prompt for that one request, which is how each chunk gets its own (see [chunking](#longer-videos-chunk-them)). The rows are batch's rows, but under `response.data`, not `{"id", "results"}`.
+
+**What it costs.** Thirteen videos (80 s to 10 min, 46 chunk queries of 90 s) on dev:
+
+| | wall clock |
+|---|---|
+| load, once per agent | **664–760 s** across nine agents (10 min 48 s – 12 min 7 s of it loading newton-fusion, none downloading) |
+| one query | **3–11 s** typically; a few 20–28 s |
+| a video under 4 min (1–3 chunks) | 7–21 s |
+| a 10-minute video (8 chunks) | 45–57 s |
+| all thirteen on one agent | **~16–18 min**, against ~2.2 h as thirteen batch runs |
+
+**Limits, as of 2026-10-28:**
+
+- **One GPU agent at a time.** A second fails within a minute with *"no worker is free"*. Cancel yours when done, Ctrl-C included.
+- **The whole request is capped at 2 MiB** — about 1.57 MB of video after base64. Re-encode to fit; frames are resized to 224 px anyway, so give up resolution and frame rate first (360p at 8–15 fps, or 240p at 5 fps, CRF 30–32). **Keep the audio** (mono AAC, 24–32 kbit/s): whisper's transcript is half the input.
+- **Each query has a 58 s budget**, then `504 query_timeout`. Retry it: 2 of ~150 chunk queries timed out and both answered on the retry. Also set a client-side timeout (~120 s): one query in a run on an unstable day hung for 857 s with no answer at all.
+- **An agent with no query for 20 minutes is released**, and every later query gets a `409` (since 2026-10-27 it should read `… is no longer running: released after 20 minutes without a query; run the agent again`; not yet seen here). Stop on a 409 and start a new agent. A hung request is not activity, which is the other reason for the client timeout.
+- **A bad video fails only its own query** — `400 … probe failed: no video stream` for an audio-only mp4, `400 … decode failed` for garbage — and the agent answers the next one. A 35-frame clip is answered.
+- **`/logs` shows the load as it happens**: *"Using locally available newton-fusion-1-0 model"*, then *"Still loading newton-fusion-1-0 model after 4min0s"* once a minute, then the warm-up. The log is gone once the agent is cancelled. Unlike batch, the `status` field was reliable here: wait for `running`.
+- **A fresh agent can answer differently, at temperature 0.** Two queries to one agent gave identical steps, and a rerun on a new agent reproduced six videos byte for byte — but four of seven others came back different, two of them in step count (an opening chunk went from 3 steps to 12). Treat one serving run's step counts as a sample.
+- **To delete the bundle afterwards, delete the agent first.** `DELETE /agents/bundles/{id}` returns `409 … still referenced by existing runs` while the run exists; `DELETE /agents/instances/{id}` (which removes the run — see [Cleanup](#cleanup)) then the bundle both return 204.
 
 ## Common Pitfalls
 
