@@ -726,6 +726,16 @@ calibration: 4,565 known-normal windows; 1.51% over the trial's threshold; thres
 - **Step changes are caught within an hour, slow faults in hours** (IDV 13's drift 2.35 h).
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
+- **The calibrated threshold is a 1% operating point only on data like the calibration
+  file.** That file is validation's normal-only recordings, so it inherits their operating
+  conditions. On SKAB (2026-10-31) they covered one of the pump's three flow levels: 0.70% of
+  calibration windows crossed the trial's 1.604, so "calibrating" lowered the threshold to
+  1.562, and the delivery's own normal windows then crossed it **4.94%** of the time (3.47% at
+  the trial's). On TEP, whose validation normal covers the plant's one operating point, the
+  calibrated threshold held: 0.38%. `score.py` prints a note when the delivery's normal windows
+  cross the calibrated threshold more than twice as often as `--far` (at least 10 windows).
+  The fix is in the role files: give validation normal-only recordings from every operating
+  condition the delivery will see.
 
 ## Step 5 — Serve it
 
@@ -803,7 +813,8 @@ For stored data, deliver in batch.
 - **`threshold` as a list of floats is a 422**; use one value or `{"type": "float_range", "min", "max"}`.
 - **The eval number and the delivery number measure different things.** Evals scores windows
   at the trial's threshold and stride; the delivery is scored per incident, with a delay, at
-  stride 1 and a calibrated threshold. Report both.
+  stride 1 and a calibrated threshold. Report both, and the calibrated threshold's false-alarm
+  rate on the delivery's normal windows next to the rate it was set for.
 - **Don't trust `completed` for the output, or `failed` for the run**: `deliver.py` downloads
   until the output reaches the input's end, and a run reported failed can still have one.
 - **A key exported in your shell beats `.env`**; keys are per deployment. The helper checks the

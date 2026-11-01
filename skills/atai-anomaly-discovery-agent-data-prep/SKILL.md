@@ -183,7 +183,9 @@ delivery    2 files from 12 recordings, 6,720 normal / 4,800 anomaly rows  (labe
   mixing two recordings or bridging a gap.
 - **Delivery:** the role's recordings as they would arrive, no label column, plus
   `calibration.csv` (validation's normal-only file again, unlabelled): the deployed agent
-  scores it, and the scorer sets a false-alarm-rate threshold from those scores.
+  scores it, and the scorer sets a false-alarm-rate threshold from those scores. That
+  threshold means its rate only on normal operation like the calibration file's, so give
+  validation normal-only recordings from every operating condition the delivery has.
 - **`labels/`:** every scored file's sidecar (timestamp, label, recording, type).
 
 ### 4. `preflight_roles.py` — check every rule
