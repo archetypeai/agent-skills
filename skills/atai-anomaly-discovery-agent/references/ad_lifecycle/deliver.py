@@ -10,7 +10,10 @@ detector). Then POST /agents/bundles/{id}/run per delivery file, --parallel at a
 --max-windows-per-run N splits a longer file into runs of at most N windows, for a
 deployment that caps a run's time (the free trial: 2 hours). Each run's rows overlap the
 next by window - step, so every window lies whole in one run; the runs' outputs are joined
-into the file's, the same windows as one run gives. Off by default: a run per file.
+into the file's, the same windows as one run gives. Off by default (a run per file), except
+on the free trial: there a file too long to finish well inside the cap is split from the start
+(see trial_max_windows), not after a run has spent 2 hours and died. --max-windows-per-run 0
+turns that off.
 
 Each output is downloaded again every 15 s until its last window reaches the input's last
 timestamp: a run can report `completed` while its output is still being written. A
@@ -33,13 +36,24 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, files_url, load_dotenv, request, root, same_deployment, upload_file  # noqa: E402
+from atai_http import (TERMINAL, agents, check_auth, deployment, files_url, load_dotenv, request, root,  # noqa: E402
+                       same_deployment, upload_file)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 
 CHECKPOINTING_OFF = {"checkpointing": {"trigger_after_input_byte_size": 0, "trigger_after_delay_ms": 0}}
 NETWORK_WAIT_S, NETWORK_RETRIES = 60, 60
 lock = threading.Lock()
+TRIAL = "try.archetypeai.app"
+# Channel-windows a free-trial run gets through in about an hour, half its 2-hour cap. Measured
+# there (CPU): SKAB, 8 channels, ~80 windows a minute a run (640 channel-windows); the TEP
+# sample, 33 channels, 1,000 windows in 24-34 min (~1,000-1,400). The slower one, for an hour.
+TRIAL_CHANNEL_WINDOWS_PER_RUN = 38_400
+
+
+def trial_max_windows(n_channels):
+    """Windows a free-trial run should hold so it ends well inside the 2-hour cap (in 100s)."""
+    return max(100, TRIAL_CHANNEL_WINDOWS_PER_RUN // max(1, n_channels) // 100 * 100)
 
 
 def last_ts(path, col):
@@ -145,8 +159,9 @@ def main(argv=None):
     ap.add_argument("--name", default="ad")
     ap.add_argument("--step", type=int, default=1, help="step_size for delivery (the trial's, if 0)")
     ap.add_argument("--threshold", type=float, help="label windows at this threshold instead of the trial's")
-    ap.add_argument("--max-windows-per-run", type=int, default=0, metavar="N",
-                    help="split a longer file into runs of at most N windows (default 0: a run per file)")
+    ap.add_argument("--max-windows-per-run", type=int, default=None, metavar="N",
+                    help="split a longer file into runs of at most N windows (default: a run per file; on the "
+                         "free trial, sized to finish well inside its 2-hour cap); 0 never splits")
     ap.add_argument("--parallel", type=int, default=3)
     add_background_flag(ap, "{out}/deliver.log")
     a = ap.parse_args(argv)
@@ -187,6 +202,11 @@ def main(argv=None):
     os.makedirs(out_dir, exist_ok=True)
     window = test["blueprint"]["values"]["window_size"]
     step = state["values"].get("step_size") or test["blueprint"]["values"]["step_size"]
+    max_windows = a.max_windows_per_run
+    if max_windows is None:
+        max_windows = 0
+        if deployment(root()) == TRIAL and m.get("channels"):
+            max_windows = trial_max_windows(len(m["channels"]))
 
     def one(job):
         """One agent run: job's source to its output (resume: a finished output is kept)."""
@@ -237,7 +257,10 @@ def main(argv=None):
             continue
         with open(src) as fh:
             header, *lines = fh.readlines()
-        parts = pieces(len(lines), window, step, a.max_windows_per_run)
+        if max_windows and a.max_windows_per_run is None and f["file"] in state.get("agents", {}):
+            parts = [(0, len(lines))]      # a run already started on the whole file: keep it
+        else:
+            parts = pieces(len(lines), window, step, max_windows)
         if len(parts) == 1:
             jobs.append((f["file"], src, dst))
             continue
@@ -252,7 +275,9 @@ def main(argv=None):
                     fh.writelines([header] + lines[first:end])
             jobs.append((f"{f['file']} rows {first}-{end}", psrc, psrc[:-4] + "_out.csv"))
             split[dst].append(((first, end), psrc[:-4] + "_out.csv"))
-        log(f"{f['file']}: {len(parts)} runs of at most {a.max_windows_per_run:,} windows")
+        log(f"{f['file']}: {len(parts)} runs of at most {max_windows:,} windows"
+            + ("" if a.max_windows_per_run else " (the free trial stops a run at 2 hours; "
+               "--max-windows-per-run 0 to deliver in one run)"))
     with ThreadPoolExecutor(a.parallel) as pool:
         list(pool.map(safe, jobs))
     for dst, parts in split.items():

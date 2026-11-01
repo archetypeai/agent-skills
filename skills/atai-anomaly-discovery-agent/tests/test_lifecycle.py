@@ -402,6 +402,54 @@ class DeliverResume(unittest.TestCase):
         pd.testing.assert_frame_equal(pd.read_csv(whole), one)
         self.assertEqual(len(one), 9)
 
+    def test_trial_run_size_scales_with_channels(self):
+        self.assertEqual(deliver.trial_max_windows(8), 4_800)      # SKAB: ~60 min at ~80 windows a minute
+        self.assertEqual(deliver.trial_max_windows(33), 1_100)     # TEP: its sample ran 1,000 in 24-34 min
+        self.assertEqual(deliver.trial_max_windows(10_000), 100)
+
+    def on_trial(self, *args, running=None):
+        """deliver on the free trial: 249 windows (window 4, step 2), at most 100 a run."""
+        pd.DataFrame({"t": range(1000, 1500), "v": range(500)}).to_csv(
+            os.path.join(self.roles, "delivery", "d.csv"), index=False)
+        sf = os.path.join(self.out, "deliver_state.json")
+        state = json.load(open(sf))
+        state["agents"] = {"delivery/d.csv": running} if running else {}
+        json.dump(state, open(sf, "w"))
+        started = []
+
+        def fake(method, url, body=None):
+            if method == "GET":
+                return {}
+            started.append(body)
+            return {"id": f"agt_new{len(started)}"}
+        manifest = {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t", "channels": ["v"]}
+        with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, root=lambda: "https://try.archetypeai.app",
+                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake,
+                                 upload_file=lambda src, name: {"file_id": "fil_1"}, poll=lambda agent: "timeout",
+                                 download=lambda *a: None, TRIAL_CHANNEL_WINDOWS_PER_RUN=100):
+            deliver.main(["--roles", self.roles, "--out", self.out, *args])
+        return started, json.load(open(sf))["agents"]
+
+    def test_the_free_trial_splits_a_long_file_from_the_start(self):
+        started, runs = self.on_trial()
+        self.assertEqual(len(started), 3)
+        self.assertEqual(sorted(runs), ["delivery/d.csv rows 0-202", "delivery/d.csv rows 200-402",
+                                        "delivery/d.csv rows 400-500"])
+
+    def test_zero_turns_the_trial_split_off(self):
+        started, runs = self.on_trial("--max-windows-per-run", "0")
+        self.assertEqual((len(started), list(runs)), (1, ["delivery/d.csv"]))
+
+    def test_a_whole_file_run_already_started_is_kept(self):
+        started, runs = self.on_trial(running="agt_running")
+        self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_running"}))
+
+    def test_other_deployments_are_not_split(self):
+        with mock.patch.object(deliver, "deployment", lambda e: "u1.archetypeai.app"):
+            started, runs = self.on_trial()
+        self.assertEqual(list(runs), ["delivery/d.csv"])
+
 
 class QueryRetry(unittest.TestCase):
     """A serving query is retried after a timeout; any other POST is not (it could duplicate)."""
