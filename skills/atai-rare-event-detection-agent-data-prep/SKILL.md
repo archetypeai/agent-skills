@@ -165,7 +165,9 @@ z-scored with the build-time normal rows; then:
   held-out incident; a run is split at a gap, never taken across one) and one file per
   training incident, each one class, no label column. `--every-normal-run` writes
   `normal_01.csv`, `normal_02.csv`, … instead: the last `--normal-rows` of every such run,
-  for a recording whose set point changes between runs (see Pitfalls);
+  for a recording whose set point changes between runs (see Pitfalls). Those rows sit away
+  from a set-point change at the run's start but can end at the next incident's onset,
+  where any pre-fault behaviour would show: check the incidents' lead-in first;
 - **validation, test:** one file per incident with `--context 4096` normal rows either
   side, cut at the midpoint where incidents are closer and at the incident's segment (a
   gap), with a `label` column;

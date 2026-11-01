@@ -580,10 +580,18 @@ the test number optimistic.
   windows that overlap by window − step rows (as `deliver.py --max-windows-per-run` cuts
   them, so every window lies whole in one piece), one eval per piece, `--parallel 3` at a
   time. The pieces' predictions are joined per file and checked as one eval's; the
-  platform's confusion matrix is their sum, and the F1s are recomputed from it. Off by
-  default. Measured on the free trial (2026-10-31, CARE to Compare wind-turbine SCADA,
-  window 128, 10 channels): one eval over three test files (16,323 rows) failed at 2 hours;
-  `--max-windows 2700` ran 7 pieces of about 25 minutes each.
+  platform's confusion matrix is their sum, and the F1s, accuracy and detection
+  precision/recall are recomputed from it. Off by default. The plan is saved with its N: a
+  rerun at another N cuts a new plan and keeps only the evals whose file and rows are
+  unchanged, so after a piece fails, a smaller N is a real retry. Measured on the free trial
+  (2026-10-31, CARE to Compare wind-turbine SCADA, window 128, 10 channels): one eval over
+  three test files (16,323 rows) failed at 2 hours; `--max-windows 2700` ran 7 pieces of
+  about 25 minutes each.
+  **Choosing N:** an eval's time grows with windows × channels. CARE's pieces ran at about
+  1,080 windows × channels a minute, faster than the 690–950 measured elsewhere, so size
+  from the slow end: at ~700 a minute, a piece of an hour is about 42,000 windows ×
+  channels (N ≈ 42,000 / channels: 4,200 on 10 channels). An hour leaves room for a queued
+  job already on the clock.
 
 ## Step 3 — Deliver
 
@@ -746,8 +754,12 @@ the two projection rows, so a served window lands in the same coordinates:
 `(e − mean) · row`. Written to `<view-dir>/red-embedding-landscape.json` (default `out/`),
 the format the pump quickstart's `app-serving/` reads from its `static/`; `--view` rebuilds
 it from the saved outputs with no platform calls. A rerun for another blueprint or step
-stops rather than mixing two classifiers' windows. It is a drawing, not the classifier: the
-prototypes are compared in every dimension.
+stops rather than mixing two classifiers' windows (it checks `library_embeddings.json` as
+well as the batch ids, which `cleanup.py` deletes); a rerun that embeds nothing new starts
+no agent or bundle and keeps the route the outputs were made by. If a batch run hits
+`DeadlineExceeded`, a plain rerun hits it again: rerun with a larger `--step`, or
+`--serving`. It is a drawing, not the classifier: the prototypes are compared in every
+dimension.
 
 **Measured on a RED blueprint** (free trial, 2026-10-31; PRONTO's air-leak agent, window
 512, dot, 8 channels, 4 training files at step 4), the serving route through a live app's

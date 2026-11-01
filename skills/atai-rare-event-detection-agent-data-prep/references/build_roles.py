@@ -13,7 +13,8 @@ From the prepared recording and the incident roles you chose (check_events.py fi
               incident: each a single class, set in the Optimize request, so no label
               column. --every-normal-run writes one normal file per such run instead, its
               last --normal-rows: one per operating point when the set point changes
-              between runs;
+              between runs. Those rows can end at the next incident's onset, where any
+              pre-fault behaviour would show: check the incident's lead-in first;
   validation, one file per incident: the incident with --context normal rows either side,
   test        cut at the midpoint where two incidents are closer than that (so no row is in
               two incidents' files), with a `label` column;
@@ -130,15 +131,18 @@ def main(argv=None):
          "source": rep["source"], "build_end_row": int(end), "zscore": stats,
          "training": [], "validation": [], "test": [], "delivery": []}
 
-    normal_runs = []                                   # split at gaps, so a run never crosses one
+    stretches = []                                     # normal runs split at gaps, so none crosses one
     for lo, hi in runs((~event_mask)[:end]):
         cuts = [lo, *(lo + 1 + np.flatnonzero(np.diff(seg[lo:hi]))), hi]
-        normal_runs += [(int(p), int(q)) for p, q in zip(cuts, cuts[1:]) if q - p >= a.normal_rows]
+        stretches += [(int(p), int(q)) for p, q in zip(cuts, cuts[1:])]
+    normal_runs = [(lo, hi) for lo, hi in stretches if hi - lo >= a.normal_rows]
     if not normal_runs:
-        longest = max((hi - lo for lo, hi in runs((~event_mask)[:end])), default=0)
-        raise SystemExit(f"no normal run of {a.normal_rows} rows before row {end} (longest: {longest}); "
-                         "lower --normal-rows")
-    if a.every_normal_run:  # one file per run (e.g. per set point), its settled tail
+        longest = max((hi - lo for lo, hi in stretches), default=0)
+        raise SystemExit(f"no normal run of {a.normal_rows} rows before row {end} (longest without a gap: "
+                         f"{longest}); lower --normal-rows")
+    # one file per run (e.g. per set point): its last rows, away from a set-point change at its start,
+    # but they can end at the next incident's onset, where pre-fault behaviour would show
+    if a.every_normal_run:
         for k, (lo, hi) in enumerate(normal_runs, 1):
             m["training"].append({**write(f"training/{background}_{k:02d}.csv", hi - a.normal_rows, hi, False),
                                   "class": background})

@@ -36,8 +36,13 @@ Writes <out>/library_embeddings/<file>.csv (a row per window: timestamps, predic
 embeddings), <out>/library_embeddings.json (the summary) and
 <view-dir>/red-embedding-landscape.json (default <out>; the format the pump quickstart's
 app-serving/ reads from its static/). Batch ids go to <out>/library_state.json, so a rerun
-resumes and cleanup.py deletes them; a rerun for another blueprint stops rather than mixing
-two classifiers' windows.
+resumes and cleanup.py deletes them. A rerun for another blueprint or step stops rather than
+mixing two classifiers' windows: it checks library_state.json and, because cleanup.py deletes
+that, library_embeddings.json as well. A rerun that embeds nothing new starts no agent or
+bundle and keeps the route the outputs were made by.
+
+If a batch run hits a time limit (DeadlineExceeded: the free trial stops a job after 2 hours),
+a plain rerun hits it again: rerun with a larger --step (fewer windows), or --serving.
 """
 import argparse
 import csv
@@ -45,6 +50,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,7 +80,11 @@ def out_path(out, f):
 
 
 def run_batch(a, files, key, step, state, save):
-    """One batch run per training file, --parallel at a time; each output saved once complete."""
+    """One batch run per training file, --parallel at a time; each output saved once complete.
+    Returns (every file complete, files embedded now)."""
+    todo = [f for f in files if not os.path.exists(out_path(a.out, f))]
+    if not todo:
+        return True, 0
     if not state.get("bundle"):
         values = {"output_embeddings": True, "step_size": step, "runner_config": CHECKPOINTING_OFF}
         state["bundle"] = request("POST", f"{agents()}/bundles", {
@@ -82,28 +92,34 @@ def run_batch(a, files, key, step, state, save):
         save()
         log(f"bundle {state['bundle']} on {key} (step {step}, embeddings on)")
     runs = state.setdefault("runs", {})
+    lock = threading.Lock()
 
     def one(f):
         src, dst = os.path.join(a.roles, f["file"]), out_path(a.out, f)
-        if os.path.exists(dst):
-            return True
         if f["file"] not in runs:
             fid = upload_file(src, f"{a.name}-lib-{os.path.basename(src)[:-4]}-{stamp()}.csv")["file_id"]
-            runs[f["file"]] = request("POST", f"{agents()}/bundles/{state['bundle']}/run",
-                                      {"connectors": {"source": [{"type": "file", "id": fid, "format": "csv"}]}})["id"]
-            save()
-            log(f"  {f['file']}: run {runs[f['file']]}")
+            agent = request("POST", f"{agents()}/bundles/{state['bundle']}/run",
+                            {"connectors": {"source": [{"type": "file", "id": fid, "format": "csv"}]}})["id"]
+            with lock:
+                runs[f["file"]] = agent
+                save()
+            log(f"  {f['file']}: run {agent}")
         status = poll(runs[f["file"]])
         if download(runs[f["file"]], dst, src, a.timestamp_column):
             log(f"  {f['file']}: complete")
             return True
         log(f"  {f['file']}: {status}, no complete output; rerun to retry")
         if status in ("failed", "canceled", "cancelled"):
-            runs.pop(f["file"])
-            save()
+            error = str(request("GET", f"{agents()}/instances/{runs[f['file']]}").get("error") or "")
+            if "DeadlineExceeded" in error:
+                log(f"  {f['file']}: {error[:200]} A plain rerun hits it again: rerun with a larger --step "
+                    f"(fewer windows) or --serving (no job time limit)")
+            with lock:
+                runs.pop(f["file"])
+                save()
         return False
     with ThreadPoolExecutor(a.parallel) as pool:
-        return all(pool.map(one, files))
+        return all(pool.map(one, todo)), len(todo)
 
 
 def serving_agent(a, key, sp):
@@ -133,7 +149,7 @@ def run_serving(a, files, agent, window, step, channels):
         if missing:
             sys.exit(f"the agent's answer has no embedding_{missing[0]}: its bundle needs output_embeddings: true")
         return rec
-    t0, n = time.time(), 0
+    t0, n, written = time.time(), 0, 0
     with ThreadPoolExecutor(WORKERS) as pool:
         for f in files:
             dst = out_path(a.out, f)
@@ -149,9 +165,10 @@ def run_serving(a, files, agent, window, step, channels):
                     for i, r in zip(first, recs)]
             pd.DataFrame(rows).to_csv(dst + ".part", index=False)
             os.replace(dst + ".part", dst)
-            n += len(rows)
+            n, written = n + len(rows), written + 1
             log(f"  {f['file']}: {len(rows):,} windows")
     log(f"served {n:,} windows in {time.time() - t0:.0f} s")
+    return written
 
 
 def read_embeddings(path, channels):
@@ -214,7 +231,7 @@ def write_view(a, m, meta, t0):
             by_class.setdefault(f["class"], []).append(v)
         per_file[f["file"]] = len(v)
         want = len(starts(f["n_rows"], window, step))
-        n_fitted += max(0, f["n_rows"] - window + 1)
+        n_fitted += len(starts(f["n_rows"], window, meta.get("trial_step", 1)))   # the windows the prototypes averaged
         if len(v) != want:
             short.append(f"{f['file']} {len(v)}/{want}")
     if not by_class:
@@ -236,7 +253,8 @@ def write_view(a, m, meta, t0):
           f"window {window}, step {step} ({meta['route']})")
     print(f"  PCA 1-2 explain {ev[0]:.1%} and {ev[1]:.1%} -> {os.path.join(view_dir, VIEW)}")
     if short:
-        print(f"  windows short of the tiling (invalid, or an output cut short): {', '.join(short[:5])}")
+        print(f"  windows off the tiling, got/expected (invalid windows, an output cut short, or another "
+              f"step's outputs): {', '.join(short[:5])}")
     return 0
 
 
@@ -258,7 +276,8 @@ def main(argv=None):
     t0 = time.time()
     if a.view:
         meta = json.load(open(os.path.join(a.out, "library_embeddings.json")))
-        return write_view(a, m, {k: meta[k] for k in ("blueprint", "route", "window_size", "step_size")}, t0)
+        return write_view(a, m, {k: meta[k] for k in ("blueprint", "route", "window_size", "step_size", "trial_step")
+                                 if k in meta}, t0)
     load_dotenv()
     check_auth(log)
     ts_path = os.path.join(a.out, "test_state.json")
@@ -267,9 +286,15 @@ def main(argv=None):
     test = json.load(open(ts_path))
     if not same_deployment(test):
         sys.exit(f"the blueprint in {ts_path} is on {test['endpoint']}, a different deployment from {root()}")
-    key = test["blueprint"]["key"]
-    meta = {"blueprint": key, "route": "serving" if a.serving else "batch",
-            "window_size": test["blueprint"]["values"]["window_size"], "step_size": a.step}
+    key, values = test["blueprint"]["key"], test["blueprint"]["values"]
+    meta = {"blueprint": key, "route": "serving" if a.serving else "batch", "window_size": values["window_size"],
+            "step_size": a.step, "trial_step": values.get("step_size", 1)}
+    summary_path = os.path.join(a.out, "library_embeddings.json")
+    made = json.load(open(summary_path)) if os.path.exists(summary_path) else {}
+    if made and (made.get("blueprint"), made.get("step_size")) != (key, a.step):
+        sys.exit(f"{summary_path} and {a.out}/library_embeddings/ are for {made.get('blueprint')} at step "
+                 f"{made.get('step_size')}, not {key} at step {a.step}: move them aside so the map holds "
+                 f"one classifier's windows")
     sp = os.path.join(a.out, "library_state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
     if not same_deployment(state):
@@ -284,7 +309,10 @@ def main(argv=None):
         json.dump(state, open(sp, "w"), indent=1)
     save()
     os.makedirs(os.path.join(a.out, "library_embeddings"), exist_ok=True)
-    if a.serving:
+    pending = [f for f in m["training"] if not os.path.exists(out_path(a.out, f))]
+    if a.serving and not pending:
+        written = 0
+    elif a.serving:
         ssp = os.path.join(a.out, "library_serving_state.json")
         if os.path.exists(ssp):
             sys.exit(f"{ssp} exists: an earlier run's serving agent may still be up; run cleanup.py --yes first")
@@ -295,15 +323,19 @@ def main(argv=None):
         ex = None
         try:
             agent = a.agent or (ex := serving_agent(a, key, ssp))["agent"]
-            run_serving(a, m["training"], agent, meta["window_size"], a.step, m["channels"])
+            written = run_serving(a, m["training"], agent, meta["window_size"], a.step, m["channels"])
         finally:
             if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
                 ex = json.load(open(ssp))
             if ex and end(ex):
                 os.remove(ssp)
                 log(f"deleted serving agent {ex['agent']} and bundle {ex['bundle']}")
-    elif not run_batch(a, m["training"], key, a.step, state, save):
-        sys.exit("not every training file has a complete output: rerun to resume")
+    else:
+        complete, written = run_batch(a, m["training"], key, a.step, state, save)
+        if not complete:
+            sys.exit("not every training file has a complete output: rerun to resume")
+    if not written and made.get("route"):         # nothing new: keep how the outputs were made
+        meta["route"] = made["route"]
     write_view(a, m, meta, t0)
     if state.get("bundle"):
         log(f"next: python cleanup.py --out {a.out} --yes deletes the batch runs and their bundle")

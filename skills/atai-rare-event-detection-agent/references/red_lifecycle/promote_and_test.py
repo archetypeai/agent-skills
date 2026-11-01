@@ -21,7 +21,10 @@
 free trial: 2 hours): each test file is split into pieces of at most N windows that overlap
 by window - step rows (so every window lies whole in one piece), one eval per piece, at most
 --parallel at a time (a queued job may already be on the clock). The pieces' predictions
-are joined per file and checked as one eval's; the platform's confusion matrix is their sum.
+are joined per file and checked as one eval's; the platform's confusion matrix is their sum,
+and its F1s, accuracy and detection precision/recall are recomputed from the sum. The plan is
+saved with its N: a rerun at another N cuts a new one, keeping only the evals whose file and
+rows are unchanged, so old and new boundaries never mix. Piece files are named by row range.
 
 Every id goes to <out>/test_state.json, so a rerun resumes. Once you have seen the test
 number, the setting is frozen.
@@ -112,17 +115,45 @@ def check(roles, m, ev, preds, window, step):
     return per_file, abstained
 
 
-def summed_report(reports):
+def summed_report(reports, background):
     """One metrics_report from several evals': the confusion matrices summed, and the
-    aggregate F1s recomputed from the sum (the per-eval ones can't be averaged)."""
+    aggregates recomputed from the sum (the per-eval ones can't be averaged): per-class F1,
+    macro and foreground macro F1, accuracy, and detection recall/precision (any event
+    class against the background)."""
     ts = [r["targets"]["event"] for r in reports]
     names = ts[0]["class_names"]
-    cm = [[sum(t["confusion_matrix"][g][q] for t in ts) for q in range(len(names))] for g in range(len(names))]
+    k = len(names)
+    cm = [[sum(t["confusion_matrix"][g][q] for t in ts) for q in range(k)] for g in range(k)]
     f1 = []
-    for k in range(len(names)):
-        tp, fp, fn = cm[k][k], sum(cm[g][k] for g in range(len(names))) - cm[k][k], sum(cm[k]) - cm[k][k]
+    for c in range(k):
+        tp, fp, fn = cm[c][c], sum(cm[g][c] for g in range(k)) - cm[c][c], sum(cm[c]) - cm[c][c]
         f1.append(2 * tp / (2 * tp + fp + fn) if tp else 0.0)
-    return names, cm, f1
+    b = names.index(background)
+    ev = [c for c in range(k) if c != b]
+    tp = sum(cm[g][q] for g in ev for q in ev)
+    fn, fp = sum(cm[g][b] for g in ev), sum(cm[b][q] for q in ev)
+    agg = {"macro_f1": sum(f1) / k, "foreground_macro_f1": sum(f1[c] for c in ev) / len(ev),
+           "accuracy": sum(cm[c][c] for c in range(k)) / max(1, sum(map(sum, cm))),
+           "detection_recall": tp / (tp + fn) if tp + fn else 0.0,
+           "detection_precision": tp / (tp + fp) if tp + fp else 0.0}
+    return {"targets": {"event": {"class_names": names, "confusion_matrix": cm, "aggregate": agg}}}
+
+
+def piece_plan(a, m, window, step):
+    """Every test file cut into pieces of at most --max-windows windows, each written once
+    to <out>/test_pieces/<file>_rows<lo>-<hi>.csv."""
+    pdir = os.path.join(a.out, "test_pieces")
+    os.makedirs(pdir, exist_ok=True)
+    plan = []
+    for f in m["test"]:
+        df = pd.read_csv(os.path.join(a.roles, f["file"]))
+        stem = os.path.splitext(os.path.basename(f["file"]))[0]
+        for lo, hi in pieces(len(df), window, step, a.max_windows):
+            path = os.path.join(pdir, f"{stem}_rows{lo}-{hi}.csv")
+            if not os.path.exists(path):
+                df.iloc[lo:hi].to_csv(path, index=False)
+            plan.append({"file": os.path.basename(f["file"]), "path": path, "rows": [lo, hi]})
+    return plan
 
 
 def test_in_pieces(a, m, bp, state, sf):
@@ -130,19 +161,18 @@ def test_in_pieces(a, m, bp, state, sf):
     (a stand-in eval with the summed report, the joined predictions)."""
     v = bp["values"]
     window, step = v["window_size"], v["step_size"]
-    if "pieces" not in state:
-        pdir = os.path.join(a.out, "test_pieces")
-        os.makedirs(pdir, exist_ok=True)
-        todo = []
-        for f in m["test"]:
-            df = pd.read_csv(os.path.join(a.roles, f["file"]))
-            for k, (lo, hi) in enumerate(pieces(len(df), window, step, a.max_windows)):
-                path = os.path.join(pdir, f"{os.path.splitext(os.path.basename(f['file']))[0]}_p{k}.csv")
-                df.iloc[lo:hi].to_csv(path, index=False)
-                todo.append({"file": os.path.basename(f["file"]), "path": path, "rows": [lo, hi]})
-        state["pieces"] = todo
+    if "pieces" not in state or state.get("max_windows") != a.max_windows:
+        old = {(x["file"], tuple(x["rows"])): x for x in state.get("pieces", []) if x.get("eval")}
+        plan = piece_plan(a, m, window, step)
+        kept = 0
+        for x in plan:
+            if (o := old.get((x["file"], tuple(x["rows"])))):
+                x["eval"], x["status"] = o["eval"], o.get("status")
+                kept += 1
+        state["pieces"], state["max_windows"] = plan, a.max_windows
         json.dump(state, open(sf, "w"), indent=1)
-        log(f"{len(todo)} pieces of at most {a.max_windows} windows")
+        log(f"{len(plan)} pieces of at most {a.max_windows} windows"
+            + (f"; {kept} eval(s) kept from the earlier plan" if kept else ""))
     ids = upload_all([x["path"] for x in state["pieces"]], a.out, cache_path(a.out), prefix=a.name, log=log)
     while True:
         running = 0
@@ -171,7 +201,7 @@ def test_in_pieces(a, m, bp, state, sf):
                 log(f"{os.path.basename(x['path'])}: eval {x['eval']} {x['status']}: {ev.get('error')}")
                 x.pop("eval"), x.pop("status")
             json.dump(state, open(sf, "w"), indent=1)
-            sys.exit("rerun to retry the failed pieces (try a smaller --max-windows)")
+            sys.exit("rerun to retry the failed pieces, or rerun with a smaller --max-windows (a new plan)")
         if all(x.get("status") == "completed" for x in state["pieces"]):
             break
         time.sleep(30)
@@ -179,6 +209,11 @@ def test_in_pieces(a, m, bp, state, sf):
     reports, preds = [], []
     for x in state["pieces"]:
         ev = request("GET", f"{agents()}/evals/{x['eval']}")
+        if not ev.get("metrics_report"):
+            log(f"{os.path.basename(x['path'])}: eval {x['eval']} completed without a metrics report")
+            x.pop("eval"), x.pop("status")
+            json.dump(state, open(sf, "w"), indent=1)
+            sys.exit("rerun to test that piece again")
         reports.append(ev["metrics_report"])
         pred = next(o["id"] for o in ev["output_artifacts"] if o.get("metadata", {}).get("kind") == "predictions")
         for line in request_raw(f"{files_url()}/download/{pred}").decode().splitlines():
@@ -186,11 +221,7 @@ def test_in_pieces(a, m, bp, state, sf):
                 p = json.loads(line)
                 p["example"] = x["file"]          # windows sort by their epoch start across pieces
                 preds.append(p)
-    names, cm, f1 = summed_report(reports)
-    b = names.index(m["background"])
-    fg = [f1[k] for k in range(len(names)) if k != b]
-    agg = {"macro_f1": sum(f1) / len(f1), "foreground_macro_f1": sum(fg) / len(fg)}
-    ev = {"metrics_report": {"targets": {"event": {"class_names": names, "confusion_matrix": cm, "aggregate": agg}}}}
+    ev = {"metrics_report": summed_report(reports, m["background"])}
     with open(os.path.join(a.out, "test-predictions.ndjson"), "w") as fh:
         fh.writelines(json.dumps(p) + "\n" for p in preds)
     return ev, preds
