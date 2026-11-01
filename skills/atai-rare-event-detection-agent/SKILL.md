@@ -609,8 +609,8 @@ output is still being written).
   the same points with one agent instead of a batch run per file: no job slots or queue, and
   on the free trial no 2-hour cap. Batch stays the default: the platform cuts its windows and
   its outputs are files; with serving, check the window count against the tiling. Measured on
-  the AD skill's SKAB library (free trial, 2026-10-31): 143 windows both ways, the same
-  timestamps, embeddings within 2.6×10⁻⁶. The AD skill's `library_embeddings.py --serving`
+  the AD skill's SKAB library (free trial, 2026-10-31): all 1,950 windows both ways, the same
+  timestamps, embeddings within 4.0×10⁻⁶. The AD skill's `library_embeddings.py --serving`
   does it for AD; not yet measured on a RED blueprint.
 - **The bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>` finds every
   attempt, including the ones a rerun replaced; `deliver_state.json` keeps only the last
