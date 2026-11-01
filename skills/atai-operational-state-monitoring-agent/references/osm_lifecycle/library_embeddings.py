@@ -38,6 +38,7 @@ import argparse
 import csv
 import json
 import os
+import signal
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -48,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
 from common import cache_path, load_manifest, log  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
-from serve import MODEL, query_body  # noqa: E402
+from serve import MODEL, end, query_body, stop  # noqa: E402
 
 WORKERS = 4
 
@@ -60,12 +61,13 @@ def firsts(rows, window, step, pieces=None):
     return [i for i in range(0, rows - window + 1, step) if any(a <= i and i + window <= b for a, b in bounds)]
 
 
-def start_serving(args, key, channels):
-    """A serving agent of the promoted blueprint with embeddings on, once it is running."""
-    sp = os.path.join(args.out, "library_serving_state.json")
-    ex = {"endpoint": root(), "agent": None, "bundle": request("POST", f"{agents()}/bundles", {
+def start_serving(args, key, channels, sp):
+    """A serving agent of the promoted blueprint with embeddings on, once running. Its ids are
+    in `sp` from the moment each exists, so a kill leaves them for cleanup.py."""
+    ex = {"endpoint": root(), "agent": None, "bundle": None}
+    ex["bundle"] = request("POST", f"{agents()}/bundles", {
         "blueprint": key, "name": f"{args.name} library serving",
-        "values": {"data_columns": channels, "timestamp_column": "timestamp", "output_embeddings": True}})["id"]}
+        "values": {"data_columns": channels, "timestamp_column": "timestamp", "output_embeddings": True}})["id"]
     json.dump(ex, open(sp, "w"), indent=1)
     ex["agent"] = request("POST", f"{agents()}/bundles/{ex['bundle']}/run", {"mode": "serving"})["id"]
     json.dump(ex, open(sp, "w"), indent=1)
@@ -76,17 +78,6 @@ def start_serving(args, key, channels):
         time.sleep(3)
     log(f"serving agent {ex['agent']} running")
     return ex
-
-
-def stop_serving(args, ex):
-    for method, path in (("POST", f"/instances/{ex['agent']}/cancel"), ("DELETE", f"/instances/{ex['agent']}"),
-                         ("DELETE", f"/bundles/{ex['bundle']}")):
-        try:
-            request(method, f"{agents()}{path}", {} if method == "POST" else None)
-        except RuntimeError as e:          # already cancelled or gone
-            if not any(c in str(e) for c in ("(404)", "(409)")):
-                raise
-    os.remove(os.path.join(args.out, "library_serving_state.json"))
 
 
 def run_serving(args, files, agent, window, step, channels):
@@ -100,7 +91,7 @@ def run_serving(args, files, agent, window, step, channels):
         if missing := [c for c in channels if f"embedding_{c}" not in rec]:
             sys.exit(f"the agent's answer has no embedding_{missing[0]}: its bundle needs output_embeddings: true")
         return rec
-    t0, n = time.time(), 0
+    t0, n, written = time.time(), 0, 0
     with ThreadPoolExecutor(WORKERS) as pool:
         for f in files:
             dst = os.path.join(out_dir, f"{f['state']}.csv")
@@ -118,9 +109,10 @@ def run_serving(args, files, agent, window, step, channels):
                     w.writerow([rows[i]["timestamp"], rows[i + window - 1]["timestamp"], str(r.get("invalid", False)).lower(),
                                 *[json.dumps(r[f"embedding_{c}"]) for c in channels]])
             os.replace(dst + ".part", dst)
-            n += len(first)
+            n, written = n + len(first), written + 1
             log(f"  {f['state']}: {len(first):,} windows")
     log(f"served {n:,} windows in {time.time() - t0:.0f} s")
+    return written
 
 
 def outputs(agent):
@@ -299,13 +291,27 @@ def main(argv=None):
             "route": "through a serving agent" if args.serving else "in batch"}
 
     if args.serving:
-        ex = None if args.agent else start_serving(args, key, manifest["channels"])
+        ssp = os.path.join(args.out, "library_serving_state.json")
+        if os.path.exists(ssp):
+            sys.exit(f"{ssp} exists: an earlier run's serving agent may still be up; run cleanup.py --yes first")
+        if args.agent and (b := request("GET", f"{agents()}/instances/{args.agent}").get("blueprint")) != key:
+            sys.exit(f"agent {args.agent} runs {b}, not the promoted {key}")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, stop)
+        ex = None
         try:
-            run_serving(args, manifest["library"]["files"], args.agent or ex["agent"], meta["window_size"],
-                        meta["step_size"], manifest["channels"])
+            agent = args.agent or (ex := start_serving(args, key, manifest["channels"], ssp))["agent"]
+            written = run_serving(args, manifest["library"]["files"], agent, meta["window_size"],
+                                  meta["step_size"], manifest["channels"])
         finally:
-            if ex:
-                stop_serving(args, ex)
+            if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
+                ex = json.load(open(ssp))
+            if ex and end(ex):
+                os.remove(ssp)
+                log(f"deleted serving agent {ex['agent']} and bundle {ex['bundle']}")
+        summary = os.path.join(args.out, "library_embeddings.json")
+        if not written and os.path.exists(summary):     # every output was already there: keep how it was made
+            meta["route"] = json.load(open(summary)).get("route", "in batch")
         return write_view(args, manifest, meta, t0)
 
     sp = os.path.join(args.out, "library_state.json")

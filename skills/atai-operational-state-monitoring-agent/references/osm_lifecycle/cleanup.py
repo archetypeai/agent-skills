@@ -112,7 +112,7 @@ def main(argv=None):
         if k % 25 == 0 or k == len(todo):
             json.dump({"deleted": sorted(gone)}, open(done_path, "w"), indent=1)
             log(f"deleted {k}/{len(todo)}")
-    for what in ("app", "library", "serving"):       # delivery/runs.json stays: it records the outputs' runs
+    for what in ("app", "library", "serving", "library serving"):   # delivery/runs.json stays: it records the outputs' runs
         if found[what].get("bundle"):
             os.remove(os.path.join(a.out, STATES[what]))
     log("done")

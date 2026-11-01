@@ -549,7 +549,9 @@ bundle value, so a serving agent of the same promoted blueprint returns the same
 `--serving` sends it the library's windows one per query, cut here as the platform cuts them:
 from each file's row 0 at the blueprint's step, leaving out windows that cross a join between
 the file's pieces. With `--agent agt_…` it uses an agent already running with embeddings on
-(a live app's) and leaves it running; otherwise it starts one and deletes it at the end.
+(a live app's; it checks the blueprint) and leaves it running; otherwise it starts one and
+deletes it however the run ends, signals included, with its ids in
+`out/library_serving_state.json` until then for `cleanup.py`.
 - **Batch:** the platform cuts the windows, the outputs are files you can rebuild the view from,
   and runs are byte-identical run to run. Each file is a run, holding a job slot.
 - **Serving:** one agent for the whole library, so no job slots, no queue and, on the free
