@@ -110,6 +110,11 @@ def evaluate(windows, threshold, sustain, step_ms):
             "macro_auroc": float(np.nanmean([v["auroc"] for v in out.values()])) if out else None}
 
 
+def pct(rate):
+    """A rate as a percentage, without rounding a small one away: 0.01 -> 1%, 0.005 -> 0.5%."""
+    return f"{rate * 100:g}%"
+
+
 def calibration_note(calibrated, far, factor=2, min_alarms=10):
     """A note when the delivery's normal windows cross the calibrated threshold well over --far
     (factor times, and at least min_alarms windows), else None."""
@@ -117,9 +122,9 @@ def calibration_note(calibrated, far, factor=2, min_alarms=10):
     if rate <= factor * far or calibrated["false_alarms"] < min_alarms:
         return None
     return (f"note: the delivery's normal windows cross the calibrated threshold {rate:.2%} of the time, "
-            f"not the {far:.0%} it was set for. The calibration file (validation's normal-only recordings) is "
+            f"not the {pct(far)} it was set for. The calibration file (validation's normal-only recordings) is "
             f"not typical of the delivery's normal operation: check that it covers every operating condition "
-            f"the delivery has. Until it does, the calibrated threshold is not a {far:.0%} operating point.")
+            f"the delivery has. Until it does, the calibrated threshold is not a {pct(far)} operating point.")
 
 
 def show(name, r):
@@ -160,11 +165,11 @@ def main(argv=None):
         c = pd.concat(calib, ignore_index=True).anomaly_score.to_numpy()
         thr = float(np.quantile(c, 1 - a.far))
         print(f"calibration: {len(c):,} known-normal windows; {(c > trial_thr).mean():.2%} over the trial's "
-              f"threshold; threshold for {a.far:.0%} false alarms = {thr:.3f}")
+              f"threshold; threshold for {pct(a.far)} false alarms = {thr:.3f}")
         results["calibrated"] = evaluate(windows, thr, a.sustain, m["step_ms"])
     show("the trial's threshold", results["trial"])
     if "calibrated" in results:
-        show(f"calibrated to {a.far:.0%} false alarms on known-normal data", results["calibrated"])
+        show(f"calibrated to {pct(a.far)} false alarms on known-normal data", results["calibrated"])
         results["calibrated"]["target_false_alarm_rate"] = a.far
         if note := calibration_note(results["calibrated"], a.far):
             print("\n" + note)

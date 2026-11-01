@@ -89,6 +89,8 @@ class Scoring(unittest.TestCase):
         self.assertIn("4.94%", score.calibration_note({"false_alarm_rate": 360 / 7288, "false_alarms": 360}, 0.01))
         # TEP sample: 0.38% (6 / 1,591), under the target
         self.assertIsNone(score.calibration_note({"false_alarm_rate": 6 / 1591, "false_alarms": 6}, 0.01))
+        # a target under 1% reads as itself, not "0%"
+        self.assertIn("not the 0.5% it was set for", score.calibration_note({"false_alarm_rate": 0.02, "false_alarms": 50}, 0.005))
         # over twice the target but too few windows to say
         self.assertIsNone(score.calibration_note({"false_alarm_rate": 0.05, "false_alarms": 5}, 0.01))
 
