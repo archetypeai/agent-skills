@@ -248,8 +248,10 @@ The ones that fail silently or expensively:
   search. Add the level as an index column and pass `--scale-by` it; every condition needs
   library recordings, and `build_roles.py` stops if one has none. **Only for a condition known
   at run time** (a set-point, a recipe, a mode switch): the deployed agent must get data scaled
-  the same way, so the condition can't come from the data or its labels. One detector still
-  fits every level; the library should still cover each one.
+  the same way, so the condition can't come from the data or its labels. Scaling is per
+  recording: a recording that changes set-point partway gets one condition's statistics, so
+  split it into one recording per set-point in the index first. One detector still fits every
+  level; the library should still cover each one.
 - **Don't renumber timestamps to hide gaps.** A window across a faked seam mixes two moments.
   Split instead; joining with a one-day gap is safe because the platform rejects it.
 

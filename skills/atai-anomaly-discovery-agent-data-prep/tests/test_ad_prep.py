@@ -203,6 +203,10 @@ def test_scale_by_scales_each_condition_by_its_own_library(tmp_path, built):
     for f in json.load(open(os.path.join(roles, "manifest.json")))["library"]:
         assert pd.read_csv(os.path.join(roles, f["file"]))[CH].mean().abs().max() < 0.5
     assert preflight(roles, "--prepared", prep, "--index", idx) == 0
+    # a non-library recording in a condition's statistics fails the preflight
+    stats["conditions"]["hi"]["recordings"].append("validation_n")
+    json.dump(stats, open(os.path.join(roles, "zscore_stats.json"), "w"))
+    assert preflight(roles) != 0
 
 
 def test_scale_by_needs_a_library_recording_in_every_condition(tmp_path, built):
