@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import atai_http  # noqa: E402
 import cleanup  # noqa: E402
 import deliver  # noqa: E402
+import library_embeddings  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
 import score  # noqa: E402
@@ -325,6 +326,292 @@ class QueryRetry(unittest.TestCase):
     def test_a_plain_post_is_not(self):
         with self.assertRaises(TimeoutError):
             self.run_request()
+
+
+class LibraryCleanup(unittest.TestCase):
+    def test_library_runs_and_a_serving_agent_it_left(self):
+        # agt_dropped: a run the state forgot (it failed), still listed under the bundle
+        t = cleanup.targets({}, {}, set(), {"bundle": "bnd_l", "runs": {"training/a.csv": "agt_a"}}, {"agt_dropped"},
+                            {"bundle": "bnd_ls", "agent": "agt_ls"})
+        self.assertEqual(t, [("library", "instances", "agt_a"), ("library", "instances", "agt_dropped"),
+                             ("library", "bundles", "bnd_l"),
+                             ("library serving", "instances", "agt_ls"), ("library serving", "bundles", "bnd_ls")])
+
+
+class TestInPieces(unittest.TestCase):
+    """--max-windows: one eval per piece, the platform's confusion matrices summed."""
+
+    def test_the_summed_report(self):
+        ev = lambda cm: {"targets": {"event": {"class_names": ["normal", "leak"], "confusion_matrix": cm}}}  # noqa: E731
+        t = promote_and_test.summed_report([ev([[5, 1], [0, 2]]), ev([[3, 0], [2, 4]])], "normal")["targets"]["event"]
+        self.assertEqual((t["class_names"], t["confusion_matrix"]), (["normal", "leak"], [[8, 1], [2, 6]]))
+        agg = t["aggregate"]
+        leak_f1, normal_f1 = 2 * 6 / (2 * 6 + 1 + 2), 2 * 8 / (2 * 8 + 2 + 1)   # from the sum, not the pieces' mean
+        self.assertAlmostEqual(agg["foreground_macro_f1"], leak_f1)
+        self.assertAlmostEqual(agg["macro_f1"], (leak_f1 + normal_f1) / 2)
+        self.assertAlmostEqual(agg["accuracy"], 14 / 17)
+        self.assertAlmostEqual(agg["detection_recall"], 6 / 8)
+        self.assertAlmostEqual(agg["detection_precision"], 6 / 7)
+        r = atai_http.report_event({"targets": {"event": t}}, "normal")   # nothing None in test.json
+        self.assertTrue(all(r[k] is not None for k in ("accuracy", "detection_recall", "detection_precision")))
+
+    def run_pieces(self, out, max_windows, fail_rows=(), no_report=()):
+        """test_in_pieces against a fake platform; returns the evals created, as rows, and the result."""
+        roles = os.path.join(out, "roles")
+        os.makedirs(os.path.join(roles, "test"), exist_ok=True)
+        pd.DataFrame({"timestamp": np.arange(20.0), "a": np.arange(20.0), "label": ["normal"] * 20}).to_csv(
+            os.path.join(roles, "test", "inc01.csv"), index=False)
+        m = {"test": [{"file": "test/inc01.csv"}], "background": "normal"}
+        bp = {"id": "blp", "values": {"window_size": 4, "step_size": 1}}
+        sf = os.path.join(out, "test_state.json")
+        state = json.load(open(sf)) if os.path.exists(sf) else {}
+        a = argparse.Namespace(out=out, roles=roles, max_windows=max_windows, parallel=3, name="t")
+        made, rows_of = [], {}
+
+        def fake(method, url, body=None, idempotent=None):
+            if method == "POST":
+                eid = f"evl_{len(rows_of) + 1}"
+                name = body["examples"][0]["name"]
+                rows_of[eid] = name
+                made.append(name)
+                return {"id": eid, "status": "running"}
+            eid = url.rsplit("/", 1)[1]
+            bad = any(f"rows{r[0]}-{r[1]}" in rows_of[eid] for r in fail_rows)
+            report = None if any(f"rows{r[0]}-{r[1]}" in rows_of[eid] for r in no_report) else {
+                "targets": {"event": {"class_names": ["leak", "normal"], "confusion_matrix": [[0, 0], [0, 1]]}}}
+            return {"status": "failed" if bad else "completed", "error": "DeadlineExceeded" if bad else None,
+                    "metrics_report": report, "output_artifacts": [{"id": f"p_{eid}", "metadata": {"kind": "predictions"}}]}
+        with mock.patch.multiple(promote_and_test, request=fake, agents=lambda: "https://x/api/agents",
+                                 files_url=lambda: "https://x/api/files", stamp=lambda: "T",
+                                 request_raw=lambda url: b'{"w": 1}\n',
+                                 upload_all=lambda paths, *a, **k: {p: os.path.basename(p) for p in paths}), \
+                mock.patch.object(promote_and_test.time, "sleep", lambda s: None):
+            result = promote_and_test.test_in_pieces(a, m, bp, state, sf)
+        return made, result, json.load(open(sf))
+
+    def test_a_new_max_windows_cuts_a_new_plan(self):
+        out = tempfile.mkdtemp()
+        with self.assertRaises(SystemExit) as e:                    # the second of two pieces fails
+            self.run_pieces(out, 9, fail_rows=[(9, 20)])
+        self.assertIn("smaller --max-windows", str(e.exception))
+        made, (ev, preds), state = self.run_pieces(out, 5)          # a rerun at a smaller N: a new plan
+        self.assertEqual([x["rows"] for x in state["pieces"]], [[0, 8], [5, 13], [10, 18], [15, 20]])
+        self.assertEqual(made, ["inc01_rows0-8.csv", "inc01_rows5-13.csv", "inc01_rows10-18.csv", "inc01_rows15-20.csv"])
+        self.assertEqual(state["max_windows"], 5)
+        self.assertEqual(ev["metrics_report"]["targets"]["event"]["confusion_matrix"], [[0, 0], [0, 4]])
+        self.assertEqual(len(preds), 4)
+
+    def test_an_unchanged_piece_keeps_its_eval(self):
+        out = tempfile.mkdtemp()
+        made, _, first = self.run_pieces(out, 17)                   # 17 windows: one piece, rows 0-20
+        self.assertEqual(made, ["inc01_rows0-20.csv"])
+        made, _, second = self.run_pieces(out, 20)                  # the same piece: no new eval
+        self.assertEqual(made, [])
+        self.assertEqual(second["pieces"][0]["eval"], first["pieces"][0]["eval"])
+
+    def test_an_eval_without_a_report_is_tested_again(self):
+        out = tempfile.mkdtemp()
+        with self.assertRaises(SystemExit):
+            self.run_pieces(out, 9, no_report=[(0, 12)])
+        made, _, _ = self.run_pieces(out, 9)
+        self.assertEqual(made, ["inc01_rows0-12.csv"])
+
+
+class LibraryEmbeddings(unittest.TestCase):
+    """The training windows cut as the platform cuts them, embedded over /query, and PCA 1-2."""
+
+    def test_windows_tile_from_row_0(self):
+        self.assertEqual(len(library_embeddings.starts(2760, 512, 4)), 563)   # PRONTO's training leak at 512, step 4
+        self.assertEqual(library_embeddings.starts(10, 4, 3), [0, 3, 6])
+        self.assertEqual(library_embeddings.starts(3, 4, 1), [])
+
+    def test_the_map_faces_the_background_and_the_event(self):
+        rng = np.random.default_rng(0)
+        normal = rng.normal(0, 1, (60, 12)) + np.r_[5, np.zeros(11)]
+        leak = rng.normal(0, 1, (40, 12)) - np.r_[5, np.zeros(11)]
+        v = library_embeddings.landscape(["normal", "leak"], "normal", {"normal": normal, "leak": leak}, 8, 4, 400)
+        self.assertGreater(v["prototypes"][0][0], 0)                # normal on PC 1's positive side
+        self.assertGreater(v["prototypes"][1][1], 0)                # the event on PC 2's
+        X = np.vstack([normal, leak])
+        rows, mean = np.array(v["components"]), np.array(v["mean"])
+        shot = (X[0] - mean) @ rows.T                               # a served window lands where its shot is
+        self.assertAlmostEqual(shot[0], v["shots"][0]["x"], places=2)
+        self.assertEqual((v["n"], v["n_fitted"], len(v["shots"])), (100, 400, 100))
+        self.assertEqual({s["c"] for s in v["shots"]}, {0, 1})
+
+    def serve(self, rec, *args, agent_bp="bp", out=None, failing_query=False, failing_run=False, serving=True,
+              step="2", trial_step=1):
+        """main (--serving by default) against a fake platform; returns out, the windows asked, the
+        other calls, the roles and the manifest."""
+        roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "training"))
+        manifest = {"contract": "red-role-files/v1", "timestamp_column": "timestamp", "channels": ["a", "b"],
+                    "classes": ["normal", "leak"], "background": "normal", "training": []}
+        for name, cls, rows in (("normal", "normal", 20), ("leak_inc01", "leak", 11)):
+            pd.DataFrame({"timestamp": np.arange(rows) * 1.0, "a": np.arange(rows), "b": -np.arange(rows)}).to_csv(
+                os.path.join(roles, "training", f"{name}.csv"), index=False)
+            manifest["training"].append({"file": f"training/{name}.csv", "class": cls, "n_rows": rows})
+        json.dump({"endpoint": "https://x", "blueprint": {"key": "bp", "values": {
+            "window_size": 4, "step_size": trial_step}}}, open(os.path.join(out, "test_state.json"), "w"))
+        asked, calls = [], []
+
+        def fake(method, url, body=None, idempotent=None):
+            if url.endswith("/run") and failing_run:
+                calls.append((method, url.split("/api/agents")[1]))
+                raise RuntimeError("POST /run failed (500)")
+            if url.endswith("/query"):
+                if failing_query:
+                    raise RuntimeError("POST /query failed (500)")
+                asked.append(body["events"][0]["event_data"]["contents"])
+                return {"response": {"data": [rec(body["events"][0]["event_data"]["contents"][0][0])]}}
+            calls.append((method, url.split("/api/agents")[1]))
+            if url.endswith("/bundles"):
+                return {"id": "bnd_s"}
+            if url.endswith("/run"):
+                return {"id": "agt_s"}
+            if method == "GET":
+                return {"status": "running", "blueprint": agent_bp}
+            return {}
+        with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, root=lambda: "https://x",
+                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake), \
+                mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
+            library_embeddings.main(["--roles", roles, "--out", out, *(["--serving"] if serving else []),
+                                     "--step", step, *args])
+        return out, asked, calls, roles, manifest
+
+    @staticmethod
+    def rec(first):
+        return {"predicted_state": "leak" if first > 5 else "normal", "invalid": False,
+                "embedding_a": [first, 1.0, 0.0], "embedding_b": [0.0, first * 2, (first % 3) * 1.0]}
+
+    def test_serving_route_writes_the_batch_shape_and_the_map(self):
+        out, asked, _, roles, manifest = self.serve(self.rec, "--agent", "agt_app")
+        self.assertEqual(len(asked), 9 + 4)                        # (20-4)//2+1 and (11-4)//2+1 windows
+        self.assertIn([[2, 3, 4, 5], [-2, -3, -4, -5]], asked)      # a list per channel, the window at row 2
+        one = pd.read_csv(os.path.join(out, "library_embeddings", "normal.csv"))
+        self.assertEqual(list(one.start_timestamp), [0, 2, 4, 6, 8, 10, 12, 14, 16])
+        self.assertEqual(list(one.finish_timestamp)[:2], [3, 5])
+        summary = json.load(open(os.path.join(out, "library_embeddings.json")))
+        self.assertEqual((summary["route"], summary["windows"], summary["dim"], summary["step_size"]),
+                         ("serving", 13, 6, 2))
+        self.assertEqual(summary["per_class"], {"normal": 9, "leak": 4})
+        view = json.load(open(os.path.join(out, library_embeddings.VIEW)))
+        self.assertEqual((view["classes"], view["n"], view["n_fitted"], view["window_size"]),
+                         (["normal", "leak"], 13, 17 + 8, 4))
+        self.assertEqual((len(view["components"]), len(view["components"][0]), len(view["mean"])), (2, 6, 6))
+        before = open(os.path.join(out, library_embeddings.VIEW)).read()
+        os.remove(os.path.join(out, library_embeddings.VIEW))       # --view: the map again, no platform calls
+        with mock.patch.object(library_embeddings, "load_manifest", lambda roles: manifest), \
+                mock.patch.object(library_embeddings, "request", side_effect=AssertionError("a platform call")):
+            library_embeddings.main(["--roles", roles, "--out", out, "--view"])
+        self.assertEqual(open(os.path.join(out, library_embeddings.VIEW)).read(), before)
+
+    def test_its_own_agent_is_deleted_however_the_run_ends(self):
+        out, _, calls, _, _ = self.serve(self.rec)
+        self.assertIn(("DELETE", "/instances/agt_s"), calls)
+        self.assertIn(("DELETE", "/bundles/bnd_s"), calls)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+        out2 = tempfile.mkdtemp()                         # a query fails: the agent is deleted all the same
+        with self.assertRaises(RuntimeError):
+            self.serve(self.rec, out=out2, failing_query=True)
+        self.assertFalse(os.path.exists(os.path.join(out2, "library_serving_state.json")))
+
+    def test_a_left_agent_another_blueprint_or_step_stops_it(self):
+        out = tempfile.mkdtemp()
+        json.dump({"bundle": "bnd_old", "agent": "agt_old"}, open(os.path.join(out, "library_serving_state.json"), "w"))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, out=out)
+        self.assertIn("cleanup.py", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, "--agent", "agt_other", agent_bp="another-bp")
+        self.assertIn("not the promoted bp", str(e.exception))
+        for old in ({"blueprint": "old-bp", "bundle": "bnd_l"}, {"blueprint": "bp", "step": 4, "bundle": "bnd_l"}):
+            out = tempfile.mkdtemp()
+            json.dump(old, open(os.path.join(out, "library_state.json"), "w"))
+            with self.assertRaises(SystemExit) as e:
+                self.serve(self.rec, "--agent", "agt_app", out=out)
+            self.assertIn("move them aside", str(e.exception))
+
+    def test_an_agent_without_embeddings_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.serve(lambda first: {"predicted_state": "normal"}, "--agent", "agt_app")
+        self.assertIn("output_embeddings", str(e.exception))
+
+
+    def test_a_failure_before_the_agent_starts_deletes_the_bundle(self):
+        out = tempfile.mkdtemp()
+        with self.assertRaises(RuntimeError):
+            self.serve(self.rec, out=out, failing_run=True)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+
+    def test_another_step_stops_even_after_cleanup(self):
+        out, *_ = self.serve(self.rec, "--agent", "agt_app")
+        os.remove(os.path.join(out, "library_state.json"))          # what cleanup.py --yes does
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, "--agent", "agt_app", out=out, step="3")
+        self.assertIn("at step 2, not bp at step 3", str(e.exception))
+
+    def test_nothing_new_keeps_the_route_and_starts_nothing(self):
+        out, *_ = self.serve(self.rec, "--agent", "agt_app")
+        for serving in (False, True):                               # a batch rerun, then a serving one without --agent
+            _, asked, calls, _, _ = self.serve(self.rec, out=out, serving=serving)
+            self.assertEqual((asked, [c for c in calls if c[0] in ("POST", "DELETE")]), ([], []))
+            self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"], "serving")
+
+    def test_n_fitted_counts_the_trials_windows(self):
+        out, *_ = self.serve(self.rec, "--agent", "agt_app", trial_step=2)
+        self.assertEqual(json.load(open(os.path.join(out, library_embeddings.VIEW)))["n_fitted"], 9 + 4)
+
+
+class LibraryBatch(unittest.TestCase):
+    """run_batch: one run per training file, a bundle only when there is something to embed."""
+
+    def run_batch(self, outcome):
+        roles, out = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "training"))
+        os.makedirs(os.path.join(out, "library_embeddings"))
+        files = [{"file": f"training/{n}.csv"} for n in ("normal", "leak_inc01")]
+        for f in files:
+            open(os.path.join(roles, f["file"]), "w").write("timestamp,a\n0,1\n")
+        a = argparse.Namespace(roles=roles, out=out, name="t", parallel=2, timestamp_column="timestamp")
+        state, posts = {}, []
+
+        def fake(method, url, body=None, idempotent=None):
+            posts.append((method, url.split("/api/agents")[1], body))
+            if url.endswith("/bundles"):
+                return {"id": "bnd_l"}
+            if url.endswith("/run"):
+                return {"id": f"agt_{len(posts)}"}
+            return {"error": "rpc error: DeadlineExceeded"}
+
+        def download(agent, dst, src, ts):
+            if outcome == "completed":
+                open(dst, "w").write("x")
+                return dst
+            return None
+        with mock.patch.multiple(library_embeddings, request=fake, agents=lambda: "https://x/api/agents",
+                                 upload_file=lambda src, name: {"file_id": name}, poll=lambda agent: outcome,
+                                 download=download, stamp=lambda: "T"):
+            got = library_embeddings.run_batch(a, files, "bp", 4, state, lambda: None)
+            again = library_embeddings.run_batch(a, files, "bp", 4, state, lambda: None)
+        return got, again, state, posts
+
+    def test_each_file_gets_a_run_then_nothing_more(self):
+        got, again, state, posts = self.run_batch("completed")
+        self.assertEqual((got, again), ((True, 2), (True, 0)))      # the rerun embeds nothing and creates nothing
+        bundle = [p for p in posts if p[1] == "/bundles"]
+        self.assertEqual(len(bundle), 1)
+        self.assertEqual(bundle[0][2]["values"]["step_size"], 4)
+        self.assertTrue(bundle[0][2]["values"]["output_embeddings"])
+        self.assertEqual(sorted(state["runs"]), ["training/leak_inc01.csv", "training/normal.csv"])
+
+    def test_a_failed_run_is_forgotten_with_a_hint(self):
+        with mock.patch.object(library_embeddings, "log") as log:
+            got, _, state, _ = self.run_batch("failed")
+        self.assertEqual(got[0], False)
+        self.assertEqual(state["runs"], {})                         # a rerun starts new runs
+        self.assertTrue(any("--serving" in str(c) for c in log.call_args_list))
 
 
 if __name__ == "__main__":
