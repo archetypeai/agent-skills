@@ -25,6 +25,7 @@ Run:
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -454,3 +455,57 @@ class QueryRetry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(library_embeddings is None, "numpy not installed")
+class TestLibraryServing(unittest.TestCase):
+    """--serving cuts the library's windows as the platform does and saves them in batch's shape."""
+
+    def test_windows_skip_the_joins_between_pieces(self):
+        self.assertEqual(library_embeddings.firsts(12, 4, 2), [0, 2, 4, 6, 8])
+        # two pieces of 6 rows: the window at row 4 crosses the join at row 6 and is left out
+        pieces = [{"row": 0, "rows": 6}, {"row": 6, "rows": 6}]
+        self.assertEqual(library_embeddings.firsts(12, 4, 2, pieces), [0, 2, 6, 8])
+
+    def test_serving_route_writes_what_the_view_reads(self):
+        import tempfile
+        roles, out = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "library"))
+        manifest = {"channels": ["x", "y"], "states": ["a", "b"], "library": {"files": []}}
+        for state, rows in (("a", 8), ("b", 8)):
+            with open(os.path.join(roles, "library", f"{state}.csv"), "w") as fh:
+                fh.write("timestamp,x,y\n" + "".join(f"{100 + i * 0.02:.3f},{i},{-i}\n" for i in range(rows)))
+            manifest["library"]["files"].append({"file": f"library/{state}.csv", "state": state, "rows": rows})
+        asked = []
+
+        def fake(method, url, body=None, idempotent=None):
+            if method == "GET":
+                return {"document": {"values": {"window_size": 4, "step_size": 4}}}
+            asked.append(body["events"][0]["event_data"]["contents"])
+            x0 = body["events"][0]["event_data"]["contents"][0][0]
+            vec = list(np.random.default_rng(int(x0) + len(asked)).normal(size=6))
+            return {"response": {"data": [{"invalid": "false", "embedding_x": vec[:3], "embedding_y": vec[3:]}]}}
+        json.dump({"blueprint": {"key": "bp"}}, open(os.path.join(out, "test_state.json"), "w"))
+        with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, agents=lambda: "https://x/api/agents",
+                                 request=fake):
+            library_embeddings.main(["--roles", roles, "--out", out, "--serving", "--agent", "agt_app"])
+        self.assertEqual(asked[1], [[4.0, 5.0, 6.0, 7.0], [-4.0, -5.0, -6.0, -7.0]])
+        with open(os.path.join(out, "library_embeddings", "a.csv")) as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual([(r["start_timestamp"], r["finish_timestamp"]) for r in rows],
+                         [("100.000", "100.060"), ("100.080", "100.140")])
+        summary = json.load(open(os.path.join(out, "library_embeddings.json")))
+        self.assertEqual((summary["windows"], summary["per_state"]), (4, {"a": 2, "b": 2}))
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+
+    def test_an_agent_without_embeddings_is_refused(self):
+        roles, out = tempfile.mkdtemp(), tempfile.mkdtemp()
+        with open(os.path.join(roles, "a.csv"), "w") as fh:
+            fh.write("timestamp,x\n" + "".join(f"{i}.000,{i}\n" for i in range(4)))
+        args = mock.Mock(roles=roles, out=out, model="osm")
+        with mock.patch.object(library_embeddings, "request",
+                               lambda *a, **k: {"response": {"data": [{"predicted_state": "a"}]}}):
+            with self.assertRaises(SystemExit) as e:
+                library_embeddings.run_serving(args, [{"file": "a.csv", "state": "a", "rows": 4}], "agt", 4, 4, ["x"])
+        self.assertIn("output_embeddings", str(e.exception))

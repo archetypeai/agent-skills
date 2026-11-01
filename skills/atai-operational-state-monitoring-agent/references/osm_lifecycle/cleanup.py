@@ -10,6 +10,8 @@ From the ids in <out>/:
                            before it could delete them (the bridge pattern in SKILL.md
                            writes this file).
   library_state.json       library_embeddings.py's batch runs and their bundle.
+  library_serving_state.json  the serving agent library_embeddings.py --serving started, if it
+                           was killed before it could delete it.
   serve_state.json         a serving agent and its bundle, if serve.py was killed before it
                            could delete them. A running serving agent holds a serving worker
                            until it is cancelled, or idle for 20 minutes.
@@ -34,7 +36,7 @@ from atai_http import TERMINAL, agents, check_auth, list_all, load_dotenv, reque
 from common import log  # noqa: E402
 
 STATES = {"app": "app_serving_state.json", "library": "library_state.json", "serving": "serve_state.json",
-          "delivery": os.path.join("delivery", "runs.json")}
+          "library serving": "library_serving_state.json", "delivery": os.path.join("delivery", "runs.json")}
 
 
 def call(method, path, body=None):
@@ -65,7 +67,7 @@ def targets(found, runs_of):
     for what, st in found.items():
         if not st.get("bundle"):
             continue
-        ids = known_agents(st) | (set() if what == "serving" else runs_of(st["bundle"]))
+        ids = known_agents(st) | (set() if what in ("serving", "library serving") else runs_of(st["bundle"]))
         out += [(what, "instances", a) for a in sorted(ids)] + [(what, "bundles", st["bundle"])]
     return out
 

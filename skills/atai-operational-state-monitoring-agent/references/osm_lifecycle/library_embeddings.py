@@ -2,6 +2,8 @@
 """Path 2, step 6: the library's embeddings, and a 2-D view of them a live app can draw.
 
     python library_embeddings.py --roles roles --out out              # one batch run per library file, then the view
+    python library_embeddings.py --roles roles --out out --serving    # a serving agent, one query per window
+    python library_embeddings.py --roles roles --out out --serving --agent agt_...   # one already running
     python library_embeddings.py --roles roles --out out --view       # the view again from the saved outputs, no platform calls
     python library_embeddings.py --roles roles --out out --view-dir ../my-app/static
 
@@ -10,6 +12,15 @@ no download route, so its reference windows can't be read back. They can be reco
 bundle on the promoted blueprint with `output_embeddings: true` runs each library file (one
 per state) through the same encoder, on the same windows (its window and step), and returns
 each window's Omega embedding, 768 values per channel.
+
+--serving gets the same embeddings from a serving agent instead, one window per /query, cut
+here as the platform cuts them: from each file's row 0 at the blueprint's step, leaving out
+the windows that cross a join between the file's pieces (training skips those). One agent for
+the whole library: no job slots, queue or 2-hour cap on the free trial. With --agent, an
+agent of the promoted blueprint already running with output_embeddings (a live app's) is used
+and left running; otherwise one is started and deleted at the end (ids in
+<out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
+(2026-10-31): the same windows as batch, embeddings within 2.6e-6.
 
 The view is the two directions that best separate the states: each embedding scaled to unit
 length (the model compares by cosine), PCA to 50 dimensions, then linear discriminant analysis
@@ -29,6 +40,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -36,6 +48,79 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
 from common import cache_path, load_manifest, log  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
+from serve import MODEL, query_body  # noqa: E402
+
+WORKERS = 4
+
+
+def firsts(rows, window, step, pieces=None):
+    """First row of each window the platform cuts from a library file: from row 0 every
+    `step` rows, leaving out windows that cross a join between pieces."""
+    bounds = [(p["row"], p["row"] + p["rows"]) for p in pieces] if pieces else [(0, rows)]
+    return [i for i in range(0, rows - window + 1, step) if any(a <= i and i + window <= b for a, b in bounds)]
+
+
+def start_serving(args, key, channels):
+    """A serving agent of the promoted blueprint with embeddings on, once it is running."""
+    sp = os.path.join(args.out, "library_serving_state.json")
+    ex = {"endpoint": root(), "agent": None, "bundle": request("POST", f"{agents()}/bundles", {
+        "blueprint": key, "name": f"{args.name} library serving",
+        "values": {"data_columns": channels, "timestamp_column": "timestamp", "output_embeddings": True}})["id"]}
+    json.dump(ex, open(sp, "w"), indent=1)
+    ex["agent"] = request("POST", f"{agents()}/bundles/{ex['bundle']}/run", {"mode": "serving"})["id"]
+    json.dump(ex, open(sp, "w"), indent=1)
+    t0 = time.time()
+    while (s := request("GET", f"{agents()}/instances/{ex['agent']}").get("status")) != "running":
+        if s in ("failed", "cancelled", "canceled", "completed") or time.time() - t0 > 900:
+            sys.exit(f"serving agent {ex['agent']} is {s}, not running")
+        time.sleep(3)
+    log(f"serving agent {ex['agent']} running")
+    return ex
+
+
+def stop_serving(args, ex):
+    for method, path in (("POST", f"/instances/{ex['agent']}/cancel"), ("DELETE", f"/instances/{ex['agent']}"),
+                         ("DELETE", f"/bundles/{ex['bundle']}")):
+        try:
+            request(method, f"{agents()}{path}", {} if method == "POST" else None)
+        except RuntimeError as e:          # already cancelled or gone
+            if not any(c in str(e) for c in ("(404)", "(409)")):
+                raise
+    os.remove(os.path.join(args.out, "library_serving_state.json"))
+
+
+def run_serving(args, files, agent, window, step, channels):
+    """Each library file's windows, one /query each, saved in the batch output's shape."""
+    out_dir = os.path.join(args.out, "library_embeddings")
+    os.makedirs(out_dir, exist_ok=True)
+
+    def query(chunk):
+        rec = request("POST", f"{agents()}/instances/{agent}/query", query_body(chunk, args.model),
+                      idempotent=True)["response"]["data"][0]
+        if missing := [c for c in channels if f"embedding_{c}" not in rec]:
+            sys.exit(f"the agent's answer has no embedding_{missing[0]}: its bundle needs output_embeddings: true")
+        return rec
+    t0, n = time.time(), 0
+    with ThreadPoolExecutor(WORKERS) as pool:
+        for f in files:
+            dst = os.path.join(out_dir, f"{f['state']}.csv")
+            if os.path.exists(dst):
+                continue
+            with open(os.path.join(args.roles, f["file"]), newline="") as fh:
+                rows = list(csv.DictReader(fh))
+            X = np.array([[float(r[c]) for c in channels] for r in rows], dtype=np.float32)
+            first = firsts(len(rows), window, step, f.get("pieces"))
+            recs = list(pool.map(query, [X[i:i + window] for i in first]))
+            with open(dst + ".part", "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["start_timestamp", "finish_timestamp", "invalid", *[f"embedding_{c}" for c in channels]])
+                for i, r in zip(first, recs):
+                    w.writerow([rows[i]["timestamp"], rows[i + window - 1]["timestamp"], str(r.get("invalid", False)).lower(),
+                                *[json.dumps(r[f"embedding_{c}"]) for c in channels]])
+            os.replace(dst + ".part", dst)
+            n += len(first)
+            log(f"  {f['state']}: {len(first):,} windows")
+    log(f"served {n:,} windows in {time.time() - t0:.0f} s")
 
 
 def outputs(agent):
@@ -168,7 +253,7 @@ def write_view(args, manifest, meta, t0):
     per_state = {s: codes.count(i) for i, s in enumerate(states)}
     with open(os.path.join(view_dir, "library-view.json"), "w") as fh:
         json.dump({
-            "note": ("The promoted model's library, recomputed in batch with output_embeddings on, on the 2 "
+            "note": (f"The promoted model's library, recomputed {meta.get('route', 'in batch')} with output_embeddings on, on the 2 "
                      "directions that best separate the states: unit-length embeddings, PCA to 50, LDA to 2. "
                      "For drawing only."),
             "blueprint": meta["blueprint"], "channels": channels, "states": states,
@@ -191,6 +276,9 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="osm", help="prefixes the uploads and names the bundle")
+    ap.add_argument("--serving", action="store_true", help="embed through a serving agent, a query per window")
+    ap.add_argument("--agent", help="with --serving: an agent already running the promoted blueprint with embeddings")
+    ap.add_argument("--model", default=MODEL, help="the `model` a query names")
     ap.add_argument("--view", action="store_true", help="only rebuild the view from <out>/library_embeddings/")
     ap.add_argument("--view-dir", help="where library-view.{json,bin} go (default <out>)")
     args = ap.parse_args(argv)
@@ -198,7 +286,8 @@ def main(argv=None):
     t0 = time.time()
     if args.view:
         meta = json.load(open(os.path.join(args.out, "library_embeddings.json")))
-        return write_view(args, manifest, {k: meta[k] for k in ("blueprint", "window_size", "step_size")}, t0)
+        return write_view(args, manifest, {k: meta[k] for k in ("blueprint", "window_size", "step_size", "route")
+                                           if k in meta}, t0)
     load_dotenv()
     check_auth(log)
     ts_path = os.path.join(args.out, "test_state.json")
@@ -206,7 +295,18 @@ def main(argv=None):
         sys.exit(f"no {ts_path}: run promote_and_test.py first")
     key = json.load(open(ts_path))["blueprint"]["key"]
     values = request("GET", f"{agents()}/blueprints/{key}")["document"]["values"]
-    meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"]}
+    meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"],
+            "route": "through a serving agent" if args.serving else "in batch"}
+
+    if args.serving:
+        ex = None if args.agent else start_serving(args, key, manifest["channels"])
+        try:
+            run_serving(args, manifest["library"]["files"], args.agent or ex["agent"], meta["window_size"],
+                        meta["step_size"], manifest["channels"])
+        finally:
+            if ex:
+                stop_serving(args, ex)
+        return write_view(args, manifest, meta, t0)
 
     sp = os.path.join(args.out, "library_state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
