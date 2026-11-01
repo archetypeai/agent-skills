@@ -490,7 +490,7 @@ class TestLibraryServing(unittest.TestCase):
                                  load_manifest=lambda roles: manifest, agents=lambda: "https://x/api/agents",
                                  request=fake):
             library_embeddings.main(["--roles", roles, "--out", out, "--serving", "--agent", "agt_app"])
-        self.assertEqual(asked[1], [[4.0, 5.0, 6.0, 7.0], [-4.0, -5.0, -6.0, -7.0]])
+        self.assertIn([[4.0, 5.0, 6.0, 7.0], [-4.0, -5.0, -6.0, -7.0]], asked)   # queries run 4 at a time
         with open(os.path.join(out, "library_embeddings", "a.csv")) as fh:
             rows = list(csv.DictReader(fh))
         self.assertEqual([(r["start_timestamp"], r["finish_timestamp"]) for r in rows],

@@ -555,9 +555,10 @@ the file's pieces. With `--agent agt_…` it uses an agent already running with 
 - **Serving:** one agent for the whole library, so no job slots, no queue and, on the free
   trial, no 2-hour cap. 4 queries at a time, SKAB's 1,950 windows took about 5 minutes. The
   cutting is the client's: when it matters, check the window count against one batch run.
-- **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), 143 windows both
-  ways had the same timestamps, embeddings within 2.6×10⁻⁶ and scores within 2×10⁻⁷. Not yet
-  measured on an OSM blueprint.
+- **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
+  windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. Not yet measured on an OSM
+  blueprint.
 
 **Draw the two directions that separate the states, not the two largest.** The two largest
 directions of spread (PCA 1–2) follow the data's variance, which needn't be the states': on

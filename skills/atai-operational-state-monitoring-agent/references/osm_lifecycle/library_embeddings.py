@@ -20,7 +20,7 @@ the whole library: no job slots, queue or 2-hour cap on the free trial. With --a
 agent of the promoted blueprint already running with output_embeddings (a live app's) is used
 and left running; otherwise one is started and deleted at the end (ids in
 <out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
-(2026-10-31): the same windows as batch, embeddings within 2.6e-6.
+(2026-10-31): the same 1,950 windows as batch, embeddings within 4.0e-6.
 
 The view is the two directions that best separate the states: each embedding scaled to unit
 length (the model compares by cosine), PCA to 50 dimensions, then linear discriminant analysis
