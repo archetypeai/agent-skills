@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import atai_http  # noqa: E402
 import cleanup  # noqa: E402
 import deliver  # noqa: E402
+import library_embeddings  # noqa: E402
 import optimize  # noqa: E402
 import promote_and_test  # noqa: E402
 import score  # noqa: E402
@@ -325,6 +326,143 @@ class QueryRetry(unittest.TestCase):
     def test_a_plain_post_is_not(self):
         with self.assertRaises(TimeoutError):
             self.run_request()
+
+
+class LibraryCleanup(unittest.TestCase):
+    def test_library_runs_and_a_serving_agent_it_left(self):
+        # agt_dropped: a run the state forgot (it failed), still listed under the bundle
+        t = cleanup.targets({}, {}, set(), {"bundle": "bnd_l", "runs": {"training/a.csv": "agt_a"}}, {"agt_dropped"},
+                            {"bundle": "bnd_ls", "agent": "agt_ls"})
+        self.assertEqual(t, [("library", "instances", "agt_a"), ("library", "instances", "agt_dropped"),
+                             ("library", "bundles", "bnd_l"),
+                             ("library serving", "instances", "agt_ls"), ("library serving", "bundles", "bnd_ls")])
+
+
+class TestInPieces(unittest.TestCase):
+    """--max-windows: one eval per piece, the platform's confusion matrices summed."""
+
+    def test_the_summed_report(self):
+        ev = lambda cm: {"targets": {"event": {"class_names": ["normal", "leak"], "confusion_matrix": cm}}}  # noqa: E731
+        names, cm, f1 = promote_and_test.summed_report([ev([[5, 1], [0, 2]]), ev([[3, 0], [2, 4]])])
+        self.assertEqual((names, cm), (["normal", "leak"], [[8, 1], [2, 6]]))
+        self.assertAlmostEqual(f1[1], 2 * 6 / (2 * 6 + 1 + 2))      # from the sum, not the pieces' mean
+        self.assertAlmostEqual(f1[0], 2 * 8 / (2 * 8 + 2 + 1))
+
+
+class LibraryEmbeddings(unittest.TestCase):
+    """The training windows cut as the platform cuts them, embedded over /query, and PCA 1-2."""
+
+    def test_windows_tile_from_row_0(self):
+        self.assertEqual(len(library_embeddings.starts(2760, 512, 4)), 563)   # PRONTO's training leak at 512, step 4
+        self.assertEqual(library_embeddings.starts(10, 4, 3), [0, 3, 6])
+        self.assertEqual(library_embeddings.starts(3, 4, 1), [])
+
+    def test_the_map_faces_the_background_and_the_event(self):
+        rng = np.random.default_rng(0)
+        normal = rng.normal(0, 1, (60, 12)) + np.r_[5, np.zeros(11)]
+        leak = rng.normal(0, 1, (40, 12)) - np.r_[5, np.zeros(11)]
+        v = library_embeddings.landscape(["normal", "leak"], "normal", {"normal": normal, "leak": leak}, 8, 4, 400)
+        self.assertGreater(v["prototypes"][0][0], 0)                # normal on PC 1's positive side
+        self.assertGreater(v["prototypes"][1][1], 0)                # the event on PC 2's
+        X = np.vstack([normal, leak])
+        rows, mean = np.array(v["components"]), np.array(v["mean"])
+        shot = (X[0] - mean) @ rows.T                               # a served window lands where its shot is
+        self.assertAlmostEqual(shot[0], v["shots"][0]["x"], places=2)
+        self.assertEqual((v["n"], v["n_fitted"], len(v["shots"])), (100, 400, 100))
+        self.assertEqual({s["c"] for s in v["shots"]}, {0, 1})
+
+    def serve(self, rec, *args, agent_bp="bp", out=None, failing_query=False):
+        """main --serving against a fake platform; returns out, the windows asked, the other calls."""
+        roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "training"))
+        manifest = {"contract": "red-role-files/v1", "timestamp_column": "timestamp", "channels": ["a", "b"],
+                    "classes": ["normal", "leak"], "background": "normal", "training": []}
+        for name, cls, rows in (("normal", "normal", 20), ("leak_inc01", "leak", 11)):
+            pd.DataFrame({"timestamp": np.arange(rows) * 1.0, "a": np.arange(rows), "b": -np.arange(rows)}).to_csv(
+                os.path.join(roles, "training", f"{name}.csv"), index=False)
+            manifest["training"].append({"file": f"training/{name}.csv", "class": cls, "n_rows": rows})
+        json.dump({"endpoint": "https://x", "blueprint": {"key": "bp", "values": {
+            "window_size": 4, "step_size": 1}}}, open(os.path.join(out, "test_state.json"), "w"))
+        asked, calls = [], []
+
+        def fake(method, url, body=None, idempotent=None):
+            if url.endswith("/query"):
+                if failing_query:
+                    raise RuntimeError("POST /query failed (500)")
+                asked.append(body["events"][0]["event_data"]["contents"])
+                return {"response": {"data": [rec(body["events"][0]["event_data"]["contents"][0][0])]}}
+            calls.append((method, url.split("/api/agents")[1]))
+            if url.endswith("/bundles"):
+                return {"id": "bnd_s"}
+            if url.endswith("/run"):
+                return {"id": "agt_s"}
+            if method == "GET":
+                return {"status": "running", "blueprint": agent_bp}
+            return {}
+        with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, root=lambda: "https://x",
+                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake), \
+                mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
+            library_embeddings.main(["--roles", roles, "--out", out, "--serving", "--step", "2", *args])
+        return out, asked, calls, roles, manifest
+
+    @staticmethod
+    def rec(first):
+        return {"predicted_state": "leak" if first > 5 else "normal", "invalid": False,
+                "embedding_a": [first, 1.0, 0.0], "embedding_b": [0.0, first * 2, (first % 3) * 1.0]}
+
+    def test_serving_route_writes_the_batch_shape_and_the_map(self):
+        out, asked, _, roles, manifest = self.serve(self.rec, "--agent", "agt_app")
+        self.assertEqual(len(asked), 9 + 4)                        # (20-4)//2+1 and (11-4)//2+1 windows
+        self.assertIn([[2, 3, 4, 5], [-2, -3, -4, -5]], asked)      # a list per channel, the window at row 2
+        one = pd.read_csv(os.path.join(out, "library_embeddings", "normal.csv"))
+        self.assertEqual(list(one.start_timestamp), [0, 2, 4, 6, 8, 10, 12, 14, 16])
+        self.assertEqual(list(one.finish_timestamp)[:2], [3, 5])
+        summary = json.load(open(os.path.join(out, "library_embeddings.json")))
+        self.assertEqual((summary["route"], summary["windows"], summary["dim"], summary["step_size"]),
+                         ("serving", 13, 6, 2))
+        self.assertEqual(summary["per_class"], {"normal": 9, "leak": 4})
+        view = json.load(open(os.path.join(out, library_embeddings.VIEW)))
+        self.assertEqual((view["classes"], view["n"], view["n_fitted"], view["window_size"]),
+                         (["normal", "leak"], 13, 17 + 8, 4))
+        self.assertEqual((len(view["components"]), len(view["components"][0]), len(view["mean"])), (2, 6, 6))
+        before = open(os.path.join(out, library_embeddings.VIEW)).read()
+        os.remove(os.path.join(out, library_embeddings.VIEW))       # --view: the map again, no platform calls
+        with mock.patch.object(library_embeddings, "load_manifest", lambda roles: manifest), \
+                mock.patch.object(library_embeddings, "request", side_effect=AssertionError("a platform call")):
+            library_embeddings.main(["--roles", roles, "--out", out, "--view"])
+        self.assertEqual(open(os.path.join(out, library_embeddings.VIEW)).read(), before)
+
+    def test_its_own_agent_is_deleted_however_the_run_ends(self):
+        out, _, calls, _, _ = self.serve(self.rec)
+        self.assertIn(("DELETE", "/instances/agt_s"), calls)
+        self.assertIn(("DELETE", "/bundles/bnd_s"), calls)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+        out2 = tempfile.mkdtemp()                         # a query fails: the agent is deleted all the same
+        with self.assertRaises(RuntimeError):
+            self.serve(self.rec, out=out2, failing_query=True)
+        self.assertFalse(os.path.exists(os.path.join(out2, "library_serving_state.json")))
+
+    def test_a_left_agent_another_blueprint_or_step_stops_it(self):
+        out = tempfile.mkdtemp()
+        json.dump({"bundle": "bnd_old", "agent": "agt_old"}, open(os.path.join(out, "library_serving_state.json"), "w"))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, out=out)
+        self.assertIn("cleanup.py", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(self.rec, "--agent", "agt_other", agent_bp="another-bp")
+        self.assertIn("not the promoted bp", str(e.exception))
+        for old in ({"blueprint": "old-bp", "bundle": "bnd_l"}, {"blueprint": "bp", "step": 4, "bundle": "bnd_l"}):
+            out = tempfile.mkdtemp()
+            json.dump(old, open(os.path.join(out, "library_state.json"), "w"))
+            with self.assertRaises(SystemExit) as e:
+                self.serve(self.rec, "--agent", "agt_app", out=out)
+            self.assertIn("move them aside", str(e.exception))
+
+    def test_an_agent_without_embeddings_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.serve(lambda first: {"predicted_state": "normal"}, "--agent", "agt_app")
+        self.assertIn("output_embeddings", str(e.exception))
 
 
 if __name__ == "__main__":

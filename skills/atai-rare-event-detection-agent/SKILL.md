@@ -11,7 +11,8 @@ description: >
   and distance with the Optimizations API, promote the best trial to a blueprint,
   test it once with the Evals API, deliver it as a bundle, score each incident
   (detected, how soon) and the false alarms, then serve it a window at a time
-  over `/query` (agent serving) and check it against the delivery. Use when the user wants server-side
+  over `/query` (agent serving) and check it against the delivery, and recompute
+  the training windows' embeddings as a 2-D map for a live app. Use when the user wants server-side
   detection of a *named* rare event recurring — equipment breakdowns, process
   excursions — from a handful of labelled examples. Covers the output schema,
   the Embeddings variant, what the `red` blueprint exposes since its 2026-10-12
@@ -457,8 +458,10 @@ runs the whole build, including the channel-leakage audits this data requires.
 role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
   (prep skill)   prototypes from   best trial    one-shot, with           a prediction per row        incidents caught,
                  training, scored  → blueprint   predictions checked            │                     delay, false alarms
-                 on validation                                                  └──► 5 serve (/query, Dev): a window per
-                                                                                     query, checked against step 3
+                 on validation                                                  ├──► 5 serve (/query, Dev): a window per
+                                                                                │    query, checked against step 3
+                                                                                └──► 6 the training windows' embeddings:
+                                                                                     a 2-D map for a live app
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
@@ -572,6 +575,16 @@ Breakdown #4, never seen, caught 16 minutes after onset, from two labelled break
 Once you have seen the test number, the setting is frozen: tuning it further would make
 the test number optimistic.
 
+- **If the eval hits a time limit** (`DeadlineExceeded`: the free trial stops a job after 2
+  hours), `--max-windows N` tests in pieces: each test file is cut into pieces of at most N
+  windows that overlap by window − step rows (as `deliver.py --max-windows-per-run` cuts
+  them, so every window lies whole in one piece), one eval per piece, `--parallel 3` at a
+  time. The pieces' predictions are joined per file and checked as one eval's; the
+  platform's confusion matrix is their sum, and the F1s are recomputed from it. Off by
+  default. Measured on the free trial (2026-10-31, CARE to Compare wind-turbine SCADA,
+  window 128, 10 channels): one eval over three test files (16,323 rows) failed at 2 hours;
+  `--max-windows 2700` ran 7 pieces of about 25 minutes each.
+
 ## Step 3 — Deliver
 
 ```sh
@@ -597,23 +610,12 @@ output is still being written).
   on the pump's 10 channels) and an `embedding_<channel>_features` column, each cell a JSON
   list in the CSV. A serving agent's answers carry them too (Step 5). A trial, an eval
   (predictions only) and the promoted classifier (`aar_…`, no download route) don't, and
-  neither can its prototypes be read. To plot the training windows and the two classes,
-  recompute them: run the training files through the promoted blueprint in batch with
-  `output_embeddings: true` (or through a serving agent, below); each class's
+  neither can its prototypes be read. To plot the training windows and the classes,
+  recompute them (Step 6): run the training files through the promoted blueprint with
+  `output_embeddings: true`, in batch or through a serving agent; each class's
   mean stands in for its prototype (the head is `strategy: centroid`). On the pump, at step 4
   (3,016 of 12,059 windows, a quarter of the download), PC 1–2 and the class means came out
   as those of a local encoder's.
-  **A serving agent gives the same embeddings.** `output_embeddings` is a bundle value, not a
-  new blueprint, so a serving bundle of the promoted blueprint with it on (what a live monitor
-  runs, Step 5) returns them in every `/query` answer. Sending it the training windows, one per
-  query, cut as the platform cuts them (each file from row 0 at the blueprint's step), gives
-  the same points with one agent instead of a batch run per file: no job slots or queue, and
-  on the free trial no 2-hour cap. Batch stays the default: the platform cuts its windows and
-  its outputs are files; with serving, check the window count against the tiling. Measured on
-  the AD skill's SKAB library (free trial, 2026-10-31): all 1,950 windows both ways, the same
-  timestamps, embeddings within 4.0×10⁻⁶. The AD and OSM skills' `library_embeddings.py
-  --serving` do it for their libraries; RED has no such script yet, and the route is not yet
-  measured on a RED blueprint.
 - **The bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>` finds every
   attempt, including the ones a rerun replaced; `deliver_state.json` keeps only the last
   per file. `cleanup.py` uses both.
@@ -711,6 +713,62 @@ monitor needs to place each window among the training windows.
 - **A running serving agent holds a serving worker** until it is deleted. Delete it on
   every way out (signals included), and keep its ids on disk until then.
 
+## Step 6 — The training windows' embeddings, for a live app
+
+```sh
+python library_embeddings.py --roles $R --out out                       # batch: one run per training file
+python library_embeddings.py --roles $R --out out --serving             # or a serving agent, a query per window
+python library_embeddings.py --roles $R --out out --serving --agent agt_…   # one already running (a live app's)
+python library_embeddings.py --roles $R --out out --view --view-dir ../my-app/static
+```
+
+A live monitor that places each served window among the training windows (the pump
+quickstart's `app-serving/` Embedding Space) needs those windows' embeddings and a way to
+project new ones. Nothing returns them (Step 3), so they are recomputed on the promoted
+blueprint with `output_embeddings: true`, at `--step 4` by default (a quarter of the windows:
+the same cloud, a quarter of the download). Two routes, the same points:
+
+- **batch (default):** a bundle at `--step`, one run per training file, `--parallel 3` at a
+  time (the free trial runs 3 jobs); checkpointing off, and each output downloaded until it
+  reaches its file's end. Ids in `out/library_state.json`, for a resume and `cleanup.py`.
+- **`--serving`:** a serving agent, one window per `/query`, cut here as the platform cuts
+  them (each file from row 0, every `--step` rows): one agent for every file, no job slots,
+  queue or 2-hour cap. `--agent agt_…` uses an agent of the promoted blueprint already running
+  with `output_embeddings` (a live app's, Step 5) and leaves it running; otherwise one is
+  started and deleted however the run ends (its ids in `out/library_serving_state.json`
+  until then). An answer without `embedding_<channel>` stops it: that bundle needs
+  `output_embeddings: true`.
+
+The map is PCA 1–2 of the embeddings (768 values per channel, concatenated in the manifest's
+order), PC 1 turned so the background class sits on its positive side and PC 2 so the first
+event class does, with each class's mean projected as its prototype. It holds the mean and
+the two projection rows, so a served window lands in the same coordinates:
+`(e − mean) · row`. Written to `<view-dir>/red-embedding-landscape.json` (default `out/`),
+the format the pump quickstart's `app-serving/` reads from its `static/`; `--view` rebuilds
+it from the saved outputs with no platform calls. A rerun for another blueprint or step
+stops rather than mixing two classifiers' windows. It is a drawing, not the classifier: the
+prototypes are compared in every dimension.
+
+**Measured on a RED blueprint** (free trial, 2026-10-31; PRONTO's air-leak agent, window
+512, dot, 8 channels, 4 training files at step 4), the serving route through a live app's
+agent against batch:
+
+```
+  training/normal_01.csv: 33 windows
+  ...
+  training/air_leakage_inc01.csv: 563 windows
+served 662 windows in 116 s
+
+library: 662 windows of 2,636 (normal 99, air_leakage 563), window 512, step 4 (serving)
+  PCA 1-2 explain 23.0% and 15.6% -> out/red-embedding-landscape.json
+```
+
+Batch, the same files: 9 min (three normal files in 1 min side by side, the 2,760-row leak
+in 8). All 662 windows both ways, the same timestamps and the same `predicted_state`,
+embeddings within 4.5×10⁻⁶, and the same map (explained variance and prototypes to every
+printed digit). As on the AD skill's SKAB library (1,950 windows, within 4.0×10⁻⁶): served
+is batch, and through an agent already up it took 2 minutes, with no job slot.
+
 ## Path 2 pitfalls
 
 - **A window of 1,024.** The `red` blueprint's default; an incident shorter than half a
@@ -723,6 +781,24 @@ monitor needs to place each window among the training windows.
 - **Short incidents get missed with no false alarm to show for it:** on the pump, a
   42-minute breakdown at window 64 was missed by every configuration tried. Score incidents,
   not just windows.
+- **A validation score is one incident's.** Two more datasets on the free trial
+  (2026-10-31), from the same scripts:
+
+  | data | event | validation F1 | test F1 (platform / design) | test false alarms |
+  |---|---|---|---|---|
+  | CARE to Compare, Wind Farm A (10-min SCADA) | the 7 days before a logged hydraulic-group fault | 0.57 (window 128, l2) | 0.20 / 0.20 | 44% of normal windows |
+  | PRONTO multiphase flow rig (1 Hz) | an air leak, opened in steps | 0.71 (window 512, dot) | 0.58 / 0.69 | 37% of normal windows, all in the 15 min after the leak |
+
+  CARE's label marked a period *before* the fault, about 1 σ from normal per channel and
+  mostly through the weather: one validation incident looked learnable, three held-out ones
+  were chance. PRONTO's leak moves the separator's pressure valve and the mixing-zone
+  pressure the same way in every incident: caught 11.6 min after the valve first opened (its
+  first steps move nothing the sensors see). The data-prep skill's pitfalls cover the checks
+  that tell the two apart before any platform time.
+- **A slow event wants a long window, and pays in delay and in a sticky alarm.** On PRONTO,
+  windows of 64 and 128 s scored event F1 under 0.1, 256 s 0.63, 512 s 0.71. After the leak
+  stopped, windows still holding its rows kept alarming for about the window's length plus
+  the plant settling: all of the test's false alarms.
 - **Don't trust `completed` for the output, or `failed` for the run**: `deliver.py`
   downloads until the output reaches the input's end, and a run reported failed can still
   have one.
@@ -742,8 +818,10 @@ Delete your own agent instances, and any bundle you created:
 | promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
 | optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
 
-For Path 2, `cleanup.py` does it from the ids in `out/`: dry run by default, `--yes` to
-delete, an id already gone counts as done, progress saved for a rerun.
+For Path 2, `cleanup.py` does it from the ids in `out/` (the delivery runs, a serving
+agent `serve.py` was killed before deleting, and `library_embeddings.py`'s batch runs or
+serving agent): dry run by default, `--yes` to delete, an id already gone counts as done,
+progress saved for a rerun.
 
 ```sh
 python cleanup.py --out out           # what would be deleted, and what stays
@@ -780,11 +858,12 @@ skills/atai-rare-event-detection-agent/
 │       ├── common.py           the role-file manifest, examples, pinned values
 │       ├── background.py       --background: nohup (+ caffeinate on macOS), output to a log
 │       ├── optimize.py         Step 1: search space → Optimizations API → trials
-│       ├── promote_and_test.py Step 2: best trial → blueprint → one eval, predictions checked
+│       ├── promote_and_test.py Step 2: best trial → blueprint → one eval (or --max-windows pieces), predictions checked
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: incidents, delay, false alarms (and the shared scorer)
 │       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per row, against step 3
-│       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
+│       ├── library_embeddings.py Step 6: the training windows' embeddings (batch, or --serving) → a PCA 1-2 map for an app
+│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6, from the ids in out/
 │       └── requirements.txt    numpy, pandas
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
