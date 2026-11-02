@@ -25,6 +25,8 @@ are joined per file and checked as one eval's; the platform's confusion matrix i
 and its F1s, accuracy and detection precision/recall are recomputed from the sum. The plan is
 saved with its N: a rerun at another N cuts a new one, keeping only the evals whose file and
 rows are unchanged, so old and new boundaries never mix. Piece files are named by row range.
+No eval cancel route is known, so a dropped piece's eval still going counts against --parallel
+until it ends: new pieces don't queue behind it, where a queued job may already be on the clock.
 
 Every id goes to <out>/test_state.json, so a rerun resumes. Once you have seen the test
 number, the setting is frozen.
@@ -164,18 +166,26 @@ def test_in_pieces(a, m, bp, state, sf):
     if "pieces" not in state or state.get("max_windows") != a.max_windows:
         old = {(x["file"], tuple(x["rows"])): x for x in state.get("pieces", []) if x.get("eval")}
         plan = piece_plan(a, m, window, step)
-        kept = 0
         for x in plan:
-            if (o := old.get((x["file"], tuple(x["rows"])))):
+            if (o := old.pop((x["file"], tuple(x["rows"])), None)):
                 x["eval"], x["status"] = o["eval"], o.get("status")
-                kept += 1
+        # no eval cancel route is known: a dropped one still going holds a job slot until it ends,
+        # so it counts against --parallel until then, and new pieces don't queue behind it
+        dropped = [{"eval": o["eval"], "status": o.get("status")} for o in old.values() if o.get("status") not in TERMINAL]
         state["pieces"], state["max_windows"] = plan, a.max_windows
+        state["dropped"] = state.get("dropped", []) + dropped
         json.dump(state, open(sf, "w"), indent=1)
+        kept = sum(bool(x.get("eval")) for x in plan)
         log(f"{len(plan)} pieces of at most {a.max_windows} windows"
-            + (f"; {kept} eval(s) kept from the earlier plan" if kept else ""))
+            + (f"; {kept} eval(s) kept from the earlier plan" if kept else "")
+            + (f"; {len(dropped)} of its evals still going, counted against --parallel until they end"
+               if dropped else ""))
     ids = upload_all([x["path"] for x in state["pieces"]], a.out, cache_path(a.out), prefix=a.name, log=log)
     while True:
-        running = 0
+        for d in state.get("dropped", []):
+            d["status"] = request("GET", f"{agents()}/evals/{d['eval']}").get("status")
+        state["dropped"] = [d for d in state.get("dropped", []) if d["status"] not in TERMINAL]
+        running = len(state["dropped"])
         for x in state["pieces"]:
             if x.get("eval") and x.get("status") not in TERMINAL:
                 x["status"] = request("GET", f"{agents()}/evals/{x['eval']}").get("status")

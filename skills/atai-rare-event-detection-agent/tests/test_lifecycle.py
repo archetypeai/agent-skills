@@ -376,7 +376,7 @@ class TestInPieces(unittest.TestCase):
         r = atai_http.report_event({"targets": {"event": t}}, "normal")   # nothing None in test.json
         self.assertTrue(all(r[k] is not None for k in ("accuracy", "detection_recall", "detection_precision")))
 
-    def run_pieces(self, out, max_windows, fail_rows=(), no_report=()):
+    def run_pieces(self, out, max_windows, fail_rows=(), no_report=(), slow=None):
         """test_in_pieces against a fake platform; returns the evals created, as rows, and the result."""
         roles = os.path.join(out, "roles")
         os.makedirs(os.path.join(roles, "test"), exist_ok=True)
@@ -387,7 +387,10 @@ class TestInPieces(unittest.TestCase):
         sf = os.path.join(out, "test_state.json")
         state = json.load(open(sf)) if os.path.exists(sf) else {}
         a = argparse.Namespace(out=out, roles=roles, max_windows=max_windows, parallel=3, name="t")
-        made, rows_of = [], {}
+        # evals persist across runs, as on the platform; slow: rows -> polls still running
+        self.made_by_wait = []                     # evals made so far, at each wait
+        made, rows_of, polls = [], self.__dict__.setdefault("rows_of", {}), self.__dict__.setdefault("polls", {})
+        slow = slow or {}
 
         def fake(method, url, body=None, idempotent=None):
             if method == "POST":
@@ -397,6 +400,9 @@ class TestInPieces(unittest.TestCase):
                 made.append(name)
                 return {"id": eid, "status": "running"}
             eid = url.rsplit("/", 1)[1]
+            polls[eid] = polls.get(eid, 0) + 1
+            if any(f"rows{r[0]}-{r[1]}" in rows_of[eid] and polls[eid] <= n for r, n in slow.items()):
+                return {"status": "running"}
             bad = any(f"rows{r[0]}-{r[1]}" in rows_of[eid] for r in fail_rows)
             report = None if any(f"rows{r[0]}-{r[1]}" in rows_of[eid] for r in no_report) else {
                 "targets": {"event": {"class_names": ["leak", "normal"], "confusion_matrix": [[0, 0], [0, 1]]}}}
@@ -406,7 +412,7 @@ class TestInPieces(unittest.TestCase):
                                  files_url=lambda: "https://x/api/files", stamp=lambda: "T",
                                  request_raw=lambda url: b'{"w": 1}\n',
                                  upload_all=lambda paths, *a, **k: {p: os.path.basename(p) for p in paths}), \
-                mock.patch.object(promote_and_test.time, "sleep", lambda s: None):
+                mock.patch.object(promote_and_test.time, "sleep", lambda s: self.made_by_wait.append(len(made))):
             result = promote_and_test.test_in_pieces(a, m, bp, state, sf)
         return made, result, json.load(open(sf))
 
@@ -421,6 +427,17 @@ class TestInPieces(unittest.TestCase):
         self.assertEqual(state["max_windows"], 5)
         self.assertEqual(ev["metrics_report"]["targets"]["event"]["confusion_matrix"], [[0, 0], [0, 4]])
         self.assertEqual(len(preds), 4)
+
+    def test_a_dropped_pieces_eval_still_going_holds_its_slot(self):
+        out = tempfile.mkdtemp()
+        with self.assertRaises(SystemExit):         # rows 9-20 fails while rows 0-12 is still going
+            self.run_pieces(out, 9, fail_rows=[(9, 20)], slow={(0, 12): 4})
+        self.assertEqual(json.load(open(os.path.join(out, "test_state.json")))["pieces"][0]["status"], "running")
+        made, _, state = self.run_pieces(out, 5, slow={(0, 12): 4})     # a new plan drops rows 0-12
+        self.assertEqual(len(made), 4)
+        # rows 0-12 holds one of the 3 slots until it ends: 2 new evals at first, not 3
+        self.assertEqual(self.made_by_wait[0], 2)
+        self.assertEqual([d["eval"] for d in state["dropped"]], ["evl_1"])   # tracked, not waited for
 
     def test_an_unchanged_piece_keeps_its_eval(self):
         out = tempfile.mkdtemp()

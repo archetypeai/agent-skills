@@ -583,10 +583,12 @@ the test number optimistic.
   platform's confusion matrix is their sum, and the F1s, accuracy and detection
   precision/recall are recomputed from it. Off by default. The plan is saved with its N: a
   rerun at another N cuts a new plan and keeps only the evals whose file and rows are
-  unchanged, so after a piece fails, a smaller N is a real retry. Measured on the free trial
-  (2026-10-31, CARE to Compare wind-turbine SCADA, window 128, 10 channels): one eval over
-  three test files (16,323 rows) failed at 2 hours; `--max-windows 2700` ran 7 pieces of
-  about 25 minutes each.
+  unchanged, so after a piece fails, a smaller N is a real retry. The old plan's evals still
+  going aren't cancelled (no eval cancel route is known), so they count against `--parallel`
+  until they end: the new pieces wait for those slots rather than queue behind them, on the
+  clock. Measured on the free trial (2026-10-31, CARE to Compare wind-turbine SCADA, window
+  128, 10 channels): one eval over three test files (16,323 rows) failed at 2 hours;
+  `--max-windows 2700` ran 7 pieces of about 25 minutes each.
   **Choosing N:** an eval's time grows with windows × channels. CARE's pieces ran at about
   1,080 windows × channels a minute, faster than the 690–950 measured elsewhere, so size
   from the slow end: at ~700 a minute, a piece of an hour is about 42,000 windows ×
