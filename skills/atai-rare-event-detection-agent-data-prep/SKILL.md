@@ -12,7 +12,7 @@ description: >
   against every rule. Use when the user has one long recording with a few labelled
   incidents of a named fault and wants to fit, test and deploy a RED agent on it (the
   next step is `atai-rare-event-detection-agent`, Path 2), or when a RED optimization or
-  eval scored oddly. Do NOT use for running the maintained RED Quick Start bundle on one
+  eval scored oddly. Do NOT use for running the platform's RED demo blueprint on one
   CSV (`atai-rare-event-detection-agent`, Path 1), for normal-only data with no labelled
   incidents (`atai-anomaly-discovery-agent-data-prep`), for labelled operating states
   (`atai-operational-state-monitoring-agent-data-prep`), or for client-side embedding +
@@ -52,7 +52,7 @@ generalised; the platform rules in it were measured on the dev deployment on 202
   invalid, a suspicious false-alarm rate) and you want to check the role files
 
 **Do not use this skill when:**
-- You only want to run the maintained RED Quick Start bundle on one CSV — that's
+- You only want to run the platform's RED demo blueprint on one CSV — that's
   [`atai-rare-event-detection-agent`](../atai-rare-event-detection-agent/SKILL.md), Path 1
 - You have **no labelled incidents**, only normal operation — that's anomaly discovery:
   [`atai-anomaly-discovery-agent-data-prep`](../atai-anomaly-discovery-agent-data-prep/SKILL.md)

@@ -1,17 +1,16 @@
 """Network-free unit tests for the RED agent reference script.
 
-Mocks urllib at the request boundary, so these run with NO credentials and NO
+Mocks the HTTP helper at the request boundary, so these run with NO credentials and NO
 network. They lock in the invariants verified against dev:
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default endpoint.
-  * The bundle body pins the `red` blueprint and keys the artifact map by
-    `red-classifier` (renamed from `rad-classifier` on 2026-07-28), and the run body binds
-    the source connector to the upload's file_id (the filename), not the fil_ uid.
-  * `step_size` is the only value sent: window_size/data_columns/timestamp_column
-    are inherited from the classifier's own `parameters` metadata.
+  * No bundle or instance call: Path 1 copies the demo blueprint `playground-red` into a
+    project (once), packages the copy, deploys it as batch and runs a session, then deletes
+    the session, deployment and package in that order, even after a failed session.
   * score() applies the design's majority rule (ties to the rare event), skips
     INVALID_STATE windows, reports the false-alarm rate only over windows with
     zero fault rows, and reports incident-level detection separately — a slice
-    can score high accuracy while missing its incident entirely.
+    can score high accuracy while missing its incident entirely. A blueprint's
+    prefixed class names (`pump_nshot_pump_breakdown`) match the sidecar's.
   * The shipped slice satisfies what the blueprint validates: a strictly
     regular cadence, monotonic timestamps, and a sidecar aligned row-for-row.
 
@@ -25,10 +24,9 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import os
+import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -44,35 +42,138 @@ SAMPLE = REF / "sample_data"
 FAULT = "pump_breakdown"   # the class name in the shipped sample data
 
 
+ENV = {"ATAI_API_KEY": "sk_test", "ATAI_API_ENDPOINT": "https://x.test"}
+
+
+class FakeAPI:
+    """Stands in for atai_http.request, routing by method and path prefix and recording calls."""
+
+    def __init__(self, routes):
+        self.calls = []
+        self.routes = routes
+
+    def __call__(self, method, url, body=None, idempotent=None):
+        path = url.split("/api", 1)[1]
+        self.calls.append((method, path, body))
+        for (m, prefix), value in self.routes.items():
+            if m == method and path.startswith(prefix):
+                return value(path, body) if callable(value) else value
+        raise AssertionError(f"unexpected {method} {path}")
+
+
 class EnvTests(unittest.TestCase):
     def test_endpoint_required(self):
         with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k"}, clear=True):
             with self.assertRaises(SystemExit):
-                run_red_agent.api_base()
+                run_red_agent.agents()
 
     def test_key_required(self):
         with mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "https://x"}, clear=True):
             with self.assertRaises(SystemExit):
-                run_red_agent.require_key()
+                run_red_agent.agents()
 
     def test_endpoint_reduces_to_one_root(self):
-        """Files are versioned, the agents API is not, so each gets its own client.
-
-        No single api_endpoint serves both surfaces, so both .env conventions
-        in this repo must reduce to the same root.
-        """
+        """Every .env convention in this repo (bare, /api, /v0.5) reduces to the same root."""
         for endpoint in ("https://x", "https://x/", "https://x/v0.5",
                          "https://x/v0.5/", "https://x/api", "https://x/api/"):
-            self.assertEqual(run_red_agent.api_root(endpoint), "https://x")
+            with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": endpoint}):
+                self.assertEqual(run_red_agent.agents(), "https://x/api/agents", endpoint)
 
-    def test_both_surfaces_mount_under_one_api_prefix(self):
-        """One client serves agents and files; both live under /api."""
-        seen = []
-        with mock.patch.object(run_red_agent, "ArchetypeAI",
-                               lambda key, api_endpoint: seen.append(api_endpoint)
-                               or mock.MagicMock()):
-            run_red_agent.build_client("sk_test", "https://x")
-        self.assertEqual(seen, ["https://x/api"])
+    def test_result_ref_resolves_against_the_root(self):
+        """A session result's ref already carries /api."""
+        with mock.patch.dict(os.environ, ENV):
+            self.assertEqual(run_red_agent.result_url("/api/files/fil_1/content"),
+                             "https://x.test/api/files/fil_1/content")
+
+
+class LifecycleTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def api(self, routes):
+        fake = FakeAPI(routes)
+        patcher = mock.patch.object(run_red_agent, "request", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fake
+
+    def test_no_bundle_or_instance_calls(self):
+        """Bundles and agent instances are being removed from the platform."""
+        src = (REF / "run_red_agent.py").read_text()
+        for gone in ("/bundles", "/instances", "/logs", "archetypeai"):
+            self.assertNotIn(gone, src)
+
+    def test_demo_blueprint_is_resolved_by_key(self):
+        """blp_ ids differ per deployment; the key resolves everywhere the demo is published."""
+        src = (REF / "run_red_agent.py").read_text()
+        self.assertIn('DEMO_BLUEPRINT = "playground-red"', src)
+        self.assertEqual(re.findall(r"blp_[a-z0-9]{10,}", src), [])
+
+    def test_demo_is_copied_into_the_project_once(self):
+        """Only a blueprint in a project can be packaged and deployed, and the demo is in none."""
+        api = self.api({("GET", "/agents/blueprints?"): {"data": []},
+                        ("POST", "/agents/blueprints/playground-red/copy"):
+                            lambda p, b: {"id": "blp_copy", "blueprint_key": b["blueprint_key"]}})
+        self.assertEqual(run_red_agent.demo_copy("prj_1")["id"], "blp_copy")
+        self.assertEqual(api.calls[-1][2], {"project_id": "prj_1",
+                                            "blueprint_key": run_red_agent.COPY_KEY})
+
+    def test_existing_copy_is_reused(self):
+        """A second copy under the same key answers 409; a key in a project resolves only
+        with ?project_id=."""
+        api = self.api({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old"}]}})
+        self.assertEqual(run_red_agent.demo_copy("prj_1")["id"], "blp_old")
+        self.assertEqual(api.calls, [("GET", "/agents/blueprints?project_id=prj_1"
+                                             f"&key={run_red_agent.COPY_KEY}", None)])
+
+    def test_project_is_reused_by_name(self):
+        self.api({("GET", "/projects"): {"data": [{"id": "prj_x", "name": "other"},
+                                                   {"id": "prj_1", "name": run_red_agent.PROJECT}]}})
+        self.assertEqual(run_red_agent.project_id(), "prj_1")
+
+    def test_scoring_window_comes_from_the_blueprint(self):
+        """Rebuild each row's span at the window the blueprint runs at."""
+        self.api({("GET", "/agents/blueprints/blp_1"): {"document": {"values": {"window_size": 64}}}})
+        self.assertEqual(run_red_agent.blueprint_window("blp_1"), 64)
+
+    def _lifecycle(self, status, ended, results=None):
+        for name, fn in (("create_package", lambda bp, name: {"id": "pkg_1"}),
+                         ("deploy", lambda pkg, kind: {"id": "dpl_1", "kind": kind}),
+                         ("open_session", lambda dpl, fid: {"id": "ses_1"}),
+                         ("poll", lambda sid: {"status": status, "error": "boom"}),
+                         ("last_events", lambda sid: []),
+                         ("end", lambda kind, oid: ended.append((kind, oid))),
+                         ("download_results", lambda sid, out, inp: results)):
+            patcher = mock.patch.object(run_red_agent, name, fn)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_teardown_goes_session_deployment_package(self):
+        """Each holds the next: a deployment with sessions, or a package with deployments,
+        can't be deleted."""
+        ended = []
+        self._lifecycle("completed", ended, results="out.csv")
+        with mock.patch("builtins.print"):
+            self.assertEqual(run_red_agent.run("blp_1", "f.csv", "out.csv", "in.csv", "n"), "out.csv")
+        self.assertEqual(ended, [("sessions", "ses_1"), ("deployments", "dpl_1"), ("packages", "pkg_1")])
+
+    def test_failed_session_still_tears_down(self):
+        """A failed run must not strand a deployment and package on the platform."""
+        ended = []
+        self._lifecycle("failed", ended)
+        with mock.patch("builtins.print"), self.assertRaises(SystemExit) as cm:
+            run_red_agent.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
+        self.assertIn("boom", str(cm.exception))
+        self.assertEqual([k for k, _ in ended], ["sessions", "deployments", "packages"])
+
+    def test_download_reports_empty_results(self):
+        self.api({("GET", "/agents/sessions/ses_1/results"): {"data": []}})
+        buf = io.StringIO()
+        with mock.patch("sys.stdout", buf):
+            self.assertIsNone(run_red_agent.download_results("ses_1", "/tmp/unused.csv"))
+        self.assertIn("EMPTY", buf.getvalue())
 
 
 class ScoringTests(unittest.TestCase):
@@ -131,6 +232,17 @@ class ScoringTests(unittest.TestCase):
         self.assertGreater(acc, 0.9)
         self.assertIn("fn=3", out)
 
+    def test_prefixed_class_names_match_the_sidecar(self):
+        """playground-red predicts `pump_nshot_pump_breakdown` for the sidecar's `pump_breakdown`."""
+        labels = [{"timestamp": 60 * i, "label": FAULT if i >= 4 else "normal"} for i in range(8)]
+        preds = [{"timestamp": 180.0, "predicted_state": "pump_nshot_normal", "invalid": "false",
+                  "p_normal": 1, f"p_{FAULT}": 0},
+                 {"timestamp": 420.0, "predicted_state": f"pump_nshot_{FAULT}", "invalid": "false",
+                  "p_normal": 0, f"p_{FAULT}": 1}]
+        out = self._score(preds, labels)
+        self.assertIn("tp=1 fp=0 fn=0 tn=1", out)
+        self.assertIn("DETECTED", out)
+
     def test_false_alarms_counted_only_on_zero_fault_windows(self):
         labels = [{"timestamp": 60 * i, "label": "normal"} for i in range(8)]
         labels[7]["label"] = FAULT               # last row is fault
@@ -180,43 +292,6 @@ class SampleDataTests(unittest.TestCase):
                         "the fault class should be rare — that is the point")
 
 
-class BundleShapeTests(unittest.TestCase):
-    def test_quick_start_bundle_names_are_the_stable_handles(self):
-        """Bundle ids are environment-scoped; the NAMES resolve everywhere."""
-        src = (REF / "run_red_agent.py").read_text()
-        self.assertIn('QUICK_START_BUNDLE = "RED Quick Start (Pump Breakdown)"', src)
-        self.assertIn('QUICK_START_BUNDLE_EMBEDDINGS = '
-                      '"RED Quick Start (Pump Breakdown, Embeddings)"', src)
-        # no real bnd_… id may be hardcoded — that would silently pin one
-        # environment (prose like "bnd_…" in help text is fine)
-        import re
-        self.assertEqual(re.findall(r"bnd_[a-z0-9]{10,}", src), [])
-
-    def test_resolution_is_by_query_with_exact_name_match(self):
-        """?query= is a substring search (?name=/?search= are ignored), so the
-        runner must exact-match the name client-side and prefer canonical."""
-        src = (REF / "run_red_agent.py").read_text()
-        self.assertIn("bundles?query=", src)
-        self.assertIn('bundle.get("name") == name', src)
-        self.assertIn('bundle.get("is_canonical")', src)
-
-    def test_no_hand_built_agent_paths(self):
-        """Bundle/instance paths come from the client, not string concatenation.
-
-        The API moved from singular /agents/bundle to plural /agents/bundles on
-        2026-08-11 and the singular forms now 404. Letting the client own the
-        paths is what stops this runner from having to track that again.
-        """
-        src = (REF / "run_red_agent.py").read_text()
-        # no hand-built request URLs (prose in docstrings is fine)
-        self.assertNotIn('f"{agents}', src)
-        self.assertNotIn("urllib.request.Request(", src)
-        for call in ("client().agents.bundles.list(",
-                     "client().agents.bundles.run(",
-                     "client().agents.instances.get_results("):
-            self.assertIn(call, src)
-
-
 class OutputCompletenessTests(unittest.TestCase):
     """The platform can report completed while the output is still being written."""
 
@@ -244,16 +319,17 @@ class OutputCompletenessTests(unittest.TestCase):
     def test_downloads_again_until_complete(self):
         n = {"downloads": 0}
 
-        def download(name, out_path):
+        def fetch(ref, out_path):
+            self.assertEqual(ref, "/api/files/fil_1/content")
             n["downloads"] += 1
             self.write(1527490260.0 if n["downloads"] >= 3 else 1527000000.0)
 
-        fake = mock.Mock()
-        fake.agents.instances.get_results.return_value = {"data": [{"data": {"filename": "o.csv"}}]}
-        fake.files.local.download.side_effect = download
-        with mock.patch.object(run_red_agent, "client", return_value=fake), \
+        api = FakeAPI({("GET", "/agents/sessions/ses_1/results"):
+                       {"data": [{"data": {"filename": "o.csv", "ref": "/api/files/fil_1/content"}}]}})
+        with mock.patch.dict(os.environ, ENV), mock.patch.object(run_red_agent, "request", api), \
+                mock.patch.object(run_red_agent, "fetch", fetch), \
                 mock.patch.object(run_red_agent.time, "sleep"), mock.patch("builtins.print"):
-            run_red_agent.download_results("agt_x", self.output, self.input)
+            run_red_agent.download_results("ses_1", self.output, self.input)
         self.assertEqual(n["downloads"], 3)
 
 
