@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Path 2, cleanup: delete the sessions, deployments and packages deliver.py and serve.py left on the platform.
+"""Path 2, cleanup: delete the sessions, deployments and packages deliver.py, serve.py and
+library_embeddings.py left on the platform.
 
     python cleanup.py --out out           # list what would be deleted, and what stays
     python cleanup.py --out out --yes     # delete it
@@ -8,6 +9,10 @@ From the packages recorded in <out>/:
   serve_state.json     serve.py's, if it was killed before it could delete them. A serving
                        deployment holds a serving worker until it is stopped.
   deliver_state.json   deliver.py's.
+  library_state.json   library_embeddings.py's batch package (its embeddings blueprint is
+                       kept for a rerun).
+  library_serving_state.json  library_embeddings.py --serving's, if it was killed before it
+                       could delete them.
 For each package, the platform's own listings (GET /agents/deployments?package_id=, then
 GET /agents/sessions?deployment_id=) give its deployments and their sessions, so ones a
 script never recorded, or a rerun replaced, are found too.
@@ -58,7 +63,8 @@ def main(argv=None):
     load_dotenv()
     check_auth(log)
     serve, deliver, test = load(a.out, "serve_state"), load(a.out, "deliver_state"), load(a.out, "test_state")
-    for st in (serve, deliver):
+    library, library_serving = load(a.out, "library_state"), load(a.out, "library_serving_state")
+    for st in (serve, deliver, library, library_serving):
         if not same_deployment(st):
             sys.exit(f"ids in {a.out} are from {st['endpoint']}, a different deployment from {root()}: "
                      f"set .env to that deployment")
@@ -72,14 +78,15 @@ def main(argv=None):
             if "(404)" in str(e):
                 return False
             raise
-    packages = [(what, st["package"]) for what, st in (("serving", serve), ("delivery", deliver))
+    packages = [(what, st["package"]) for what, st in (("serving", serve), ("delivery", deliver),
+                                                        ("library", library), ("library serving", library_serving))
                 if st.get("package") and exists(st["package"])]
     ids = lambda kind, **q: [r["id"] for r in list_all(lifecycle_url(kind) + "?" + "&".join(f"{k}={v}" for k, v in q.items()))]  # noqa: E731
     todo_all = targets(packages, lambda p: ids("deployments", package_id=p), lambda d: ids("sessions", deployment_id=d))
     done_path = os.path.join(a.out, "cleanup_state.json")
     gone = set(load(a.out, "cleanup_state").get("deleted", []))
     todo = [t for t in todo_all if t[2] not in gone]
-    for what in ("serving", "delivery"):
+    for what in ("serving", "delivery", "library", "library serving"):
         mine = [t for t in todo if t[0] == what]
         print(f"{what}: " + ", ".join(f"{sum(t[1] == k for t in mine)} {k}" for k in KINDS) + " to delete")
     print(f"already deleted: {len(gone & {t[2] for t in todo_all})}")
@@ -98,6 +105,11 @@ def main(argv=None):
             log(f"deleted {k}/{len(todo)}")
     if serve.get("package"):
         os.remove(os.path.join(a.out, "serve_state.json"))
+    if library_serving.get("package"):
+        os.remove(os.path.join(a.out, "library_serving_state.json"))
+    if library.get("package"):            # keep the embeddings blueprint for a rerun; forget what was deleted
+        json.dump({k: v for k, v in library.items() if k not in ("package", "deployment", "runs")},
+                  open(os.path.join(a.out, "library_state.json"), "w"), indent=1)
     log("done")
     return 0
 
