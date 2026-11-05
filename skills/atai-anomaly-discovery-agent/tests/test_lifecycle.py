@@ -264,7 +264,8 @@ class Serving(unittest.TestCase):
             json.dump({"contract": "ad-role-files/v1", "timestamp_column": "timestamp", "channels": ["a"],
                        "delivery": [{"file": "delivery/f.csv", "labels": "labels/f.csv"}]},
                       open(os.path.join(d, "roles", "manifest.json"), "w"))
-            json.dump({"endpoint": "x", "blueprint": {"key": "bp", "values": {"window_size": window, "step_size": step}}},
+            json.dump({"endpoint": "x", "blueprint": {"key": "bp", "id": "blp_1",
+                                                      "values": {"window_size": window, "step_size": step}}},
                       open(os.path.join(d, "out", "test_state.json"), "w"))
             json.dump({"values": {"step_size": step}}, open(os.path.join(d, "out", "deliver_state.json"), "w"))
             sent = []
@@ -275,10 +276,14 @@ class Serving(unittest.TestCase):
                     sent.append(chunk[:, 0].tolist())
                     return {"response": {"data": [{"anomaly_score": score(chunk[:, 0]), "predicted_label": "normal",
                                                    "invalid": "false"}]}}
-                return {"id": "bnd" if url.endswith("/bundles") else "agt", "status": "running"}
+                raise AssertionError(f"{method} {url}")
 
             env = {"ATAI_API_ENDPOINT": "https://x/api", "ATAI_API_KEY": "k"}
+            lifecycle = dict(create_package=lambda bp, name: {"id": "pkg"}, deploy=lambda pkg, kind: {"id": "dpl"},
+                             open_session=lambda dpl: {"id": "ses"}, package_ready=lambda pid: {},
+                             deployment_ready=lambda did: {}, wait_for=lambda *args, **kw: {})
             with mock.patch.dict(os.environ, env), mock.patch.object(serve, "request", request), \
+                    mock.patch.multiple(serve, **lifecycle), \
                     mock.patch.object(serve, "load_dotenv"), \
                     mock.patch.object(serve, "check_auth"), mock.patch.object(serve, "same_deployment", return_value=True), \
                     mock.patch.object(serve, "end", return_value=True), mock.patch.object(serve, "log"):
@@ -296,25 +301,44 @@ class Serving(unittest.TestCase):
 
 
 class Cleanup(unittest.TestCase):
-    def test_agents_before_their_bundle(self):
-        t = cleanup.targets({"bundle": "bnd_s", "agent": "agt_s"},
-                            {"bundle": "bnd_d", "agents": {"f1": "agt_1", "f2": "agt_2"}}, {"agt_0", "agt_1"})
-        self.assertEqual(t, [("serving", "instances", "agt_s"), ("serving", "bundles", "bnd_s"),
-                             ("delivery", "instances", "agt_0"), ("delivery", "instances", "agt_1"),
-                             ("delivery", "instances", "agt_2"), ("delivery", "bundles", "bnd_d")])
+    def test_sessions_before_deployments_before_their_package(self):
+        dpls = {"pkg_s": ["dpl_s"], "pkg_d": ["dpl_d"]}
+        sess = {"dpl_s": ["ses_s"], "dpl_d": ["ses_1", "ses_2"]}
+        t = cleanup.targets([("serving", "pkg_s"), ("delivery", "pkg_d")], dpls.get, sess.get)
+        self.assertEqual(t, [("serving", "sessions", "ses_s"), ("serving", "deployments", "dpl_s"),
+                             ("serving", "packages", "pkg_s"),
+                             ("delivery", "sessions", "ses_1"), ("delivery", "sessions", "ses_2"),
+                             ("delivery", "deployments", "dpl_d"), ("delivery", "packages", "pkg_d")])
 
-    def test_library_runs_and_a_serving_agent_it_left(self):
-        # agt_dropped: a run the state forgot (it failed), still listed under the bundle
-        t = cleanup.targets({}, {}, set(), {"bundle": "bnd_l", "runs": {"library/a.csv": "agt_a"}}, {"agt_dropped"},
-                            {"bundle": "bnd_ls", "agent": "agt_ls"})
-        self.assertEqual(t, [("library", "instances", "agt_a"), ("library", "instances", "agt_dropped"),
-                             ("library", "bundles", "bnd_l"),
-                             ("library serving", "instances", "agt_ls"), ("library serving", "bundles", "bnd_ls")])
+    def test_library_packages_are_found_and_the_embeddings_blueprint_kept(self):
+        out = tempfile.mkdtemp()
+        json.dump({"endpoint": "https://x", "blueprint": "bp", "embeddings_blueprint": {"id": "blp_e", "key": "bp-e"},
+                   "package": "pkg_l", "deployment": "dpl_l", "runs": {"library/a.csv": "ses_a"}},
+                  open(os.path.join(out, "library_state.json"), "w"))
+        json.dump({"endpoint": "https://x", "package": "pkg_ls", "deployment": "dpl_ls", "session": "ses_ls"},
+                  open(os.path.join(out, "library_serving_state.json"), "w"))
+        # ses_dropped: a session the state forgot (it failed), still listed under the deployment
+        listed = {"deployments?package_id=pkg_l": ["dpl_l"], "sessions?deployment_id=dpl_l": ["ses_a", "ses_dropped"],
+                  "deployments?package_id=pkg_ls": ["dpl_ls"], "sessions?deployment_id=dpl_ls": ["ses_ls"]}
+        ended = []
+        with mock.patch.multiple(cleanup, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 same_deployment=lambda st: True, request=lambda method, url: {"id": url},
+                                 lifecycle_url=lambda kind, obj="": f"{kind}/{obj}" if obj else kind,
+                                 list_all=lambda url: [{"id": i} for i in listed.get(url, [])],
+                                 end=lambda kind, obj: ended.append((kind, obj)), log=lambda msg: None), \
+                mock.patch("builtins.print"):
+            cleanup.main(["--out", out, "--yes"])
+        self.assertEqual(ended, [("sessions", "ses_a"), ("sessions", "ses_dropped"), ("deployments", "dpl_l"),
+                                 ("packages", "pkg_l"), ("sessions", "ses_ls"), ("deployments", "dpl_ls"),
+                                 ("packages", "pkg_ls")])
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+        kept = json.load(open(os.path.join(out, "library_state.json")))
+        self.assertEqual((kept["embeddings_blueprint"]["id"], "package" in kept, "runs" in kept), ("blp_e", False, False))
 
     def test_nothing_recorded(self):
-        self.assertEqual(cleanup.targets({}, {"agents": {"f": "agt_1"}}, set()), [])
-        self.assertEqual(cleanup.targets({"bundle": "bnd_s", "agent": None}, {}, set()),
-                         [("serving", "bundles", "bnd_s")])
+        self.assertEqual(cleanup.targets([], lambda p: [], lambda d: []), [])
+        self.assertEqual(cleanup.targets([("serving", "pkg_s")], lambda p: [], lambda d: []),
+                         [("serving", "packages", "pkg_s")])
 
 
 class Promote(unittest.TestCase):
@@ -346,8 +370,8 @@ class Promote(unittest.TestCase):
             self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
 
 class DeliverResume(unittest.TestCase):
-    """A file whose agent failed without a complete output gets a new agent on the next run;
-    a file longer than --max-windows-per-run goes in several runs whose outputs join to its own."""
+    """A file whose session failed without a complete output gets a new session on the next run;
+    a file longer than --max-windows-per-run goes in several sessions whose outputs join to its own."""
 
     def deliver(self, status, *args):
         started, self.cancelled = [], []
@@ -359,9 +383,12 @@ class DeliverResume(unittest.TestCase):
             if url.endswith("/cancel"):
                 self.cancelled.append(url.split("/")[-2])
                 return {}
-            assert url.endswith("/run"), url
-            started.append(body)
-            return {"id": f"agt_new{len(started)}"}
+            raise AssertionError(f"{method} {url}")
+
+        def open_session(deployment, file_id):
+            assert deployment == "dpl_1", deployment
+            started.append(file_id)
+            return {"id": f"ses_new{len(started)}"}
 
         def download(agent, dst, src, ts_col):     # a batch output: a window every `step` rows of src
             if status != "completed":
@@ -373,35 +400,42 @@ class DeliverResume(unittest.TestCase):
         with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
                                  load_manifest=lambda roles: {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t"},
                                  root=lambda: "https://x", same_deployment=lambda s: True,
-                                 agents=lambda: "https://x/api/agents", request=fake,
+                                 request=fake, open_session=open_session,
+                                 lifecycle_url=lambda kind, obj="": f"https://x/api/agents/{kind}/{obj}",
                                  upload_file=lambda src, name: {"file_id": "fil_1"},
-                                 poll=lambda agent: status, download=download):
+                                 poll=lambda session: status, download=download):
             deliver.main(["--roles", self.roles, "--out", self.out, *args])
-        return started, json.load(open(os.path.join(self.out, "deliver_state.json")))["agents"]
+        return started, json.load(open(os.path.join(self.out, "deliver_state.json")))["sessions"]
 
     def setUp(self):
         self.out, self.roles = tempfile.mkdtemp(), tempfile.mkdtemp()
         os.makedirs(os.path.join(self.roles, "delivery"))
         pd.DataFrame({"t": range(100, 120), "v": range(20)}).to_csv(os.path.join(self.roles, "delivery", "d.csv"), index=False)
         # window 4, step 2: 20 rows hold 9 windows
-        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp", "values": {"window_size": 4, "step_size": 2}}}),
-                            ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1",
-                                                    "values": {"step_size": 2}, "agents": {"delivery/d.csv": "agt_dead"}})):
+        for name, state in (("test_state.json", {"endpoint": "https://x", "blueprint": {"key": "bp", "id": "blp_1", "values": {"window_size": 4, "step_size": 2}}}),
+                            ("deliver_state.json", {"endpoint": "https://x", "blueprint": "bp", "package": "pkg_1",
+                                                    "deployment": "dpl_1", "sessions": {"delivery/d.csv": "ses_dead"}})):
             json.dump(state, open(os.path.join(self.out, name), "w"))
 
-    def test_a_failed_agent_is_replaced_on_the_next_run(self):
+    def test_a_failed_session_is_replaced_on_the_next_run(self):
         started, runs = self.deliver("failed")
-        self.assertEqual(started, [])                       # this run only polls the dead agent
+        self.assertEqual(started, [])                       # this run only polls the dead session
         self.assertEqual(runs, {})
         started, runs = self.deliver("timeout")             # still running when this run stopped waiting
         self.assertEqual(len(started), 1)
-        self.assertEqual(runs, {"delivery/d.csv": "agt_new1"})
+        self.assertEqual(runs, {"delivery/d.csv": "ses_new1"})
 
-    def test_a_completed_or_still_running_agent_is_kept(self):
+    def test_a_completed_or_still_running_session_is_kept(self):
         for status in ("completed", "timeout"):
             os.makedirs(os.path.join(self.out, "delivery"), exist_ok=True)
             started, runs = self.deliver(status)
-            self.assertEqual((started, runs), ([], {"delivery/d.csv": "agt_dead"}))
+            self.assertEqual((started, runs), ([], {"delivery/d.csv": "ses_dead"}))
+
+    def test_a_bundle_state_is_refused(self):
+        sf = os.path.join(self.out, "deliver_state.json")
+        json.dump({"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1"}, open(sf, "w"))
+        with self.assertRaises(SystemExit):
+            self.deliver("completed")
 
     def test_pieces(self):
         self.assertEqual(deliver.pieces(20, 4, 2, 0), [(0, 20)])
@@ -414,7 +448,7 @@ class DeliverResume(unittest.TestCase):
         whole = os.path.join(self.out, "delivery", "d.csv")
         os.makedirs(os.path.dirname(whole))
         state = json.load(open(os.path.join(self.out, "deliver_state.json")))
-        state["agents"] = {}
+        state["sessions"] = {}
         json.dump(state, open(os.path.join(self.out, "deliver_state.json"), "w"))
         self.deliver("completed")
         one = pd.read_csv(whole)
@@ -439,7 +473,7 @@ class DeliverResume(unittest.TestCase):
         sf = os.path.join(self.out, "deliver_state.json")
         state = json.load(open(sf))
         if not keep_state:
-            state["agents"] = {"delivery/d.csv": running} if running else {}
+            state["sessions"] = {"delivery/d.csv": running} if running else {}
         json.dump(state, open(sf, "w"))
 
         def download(agent, dst, src, ts_col):     # a batch output: a window every 2 rows of src
@@ -453,21 +487,25 @@ class DeliverResume(unittest.TestCase):
 
         def fake(method, url, body=None):
             if method == "GET":
-                return {"status": "running"}               # the earlier split's agents are still going
+                return {"status": "running"}               # the earlier split's sessions are still going
             if url.endswith("/cancel"):
                 self.cancelled.append(url.split("/")[-2])
                 return {}
-            started.append(body)
-            return {"id": f"agt_new{len(started)}"}
+            raise AssertionError(f"{method} {url}")
+
+        def open_session(deployment, file_id):
+            started.append(file_id)
+            return {"id": f"ses_new{len(started)}"}
         manifest = {"delivery": [{"file": "delivery/d.csv"}], "timestamp_column": "t", "channels": ["v"]}
         with mock.patch.multiple(deliver, load_dotenv=lambda: None, check_auth=lambda log: None,
                                  load_manifest=lambda roles: manifest, root=lambda: "https://try.archetypeai.app",
-                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake,
+                                 same_deployment=lambda s: True, request=fake, open_session=open_session,
+                                 lifecycle_url=lambda kind, obj="": f"https://x/api/agents/{kind}/{obj}",
                                  upload_file=lambda src, name: {"file_id": "fil_1"},
-                                 poll=lambda agent: "completed" if completed else "timeout",
+                                 poll=lambda session: "completed" if completed else "timeout",
                                  download=download, TRIAL_CHANNEL_WINDOWS_PER_RUN=100):
             deliver.main(["--roles", self.roles, "--out", self.out, *args])
-        return started, json.load(open(sf))["agents"]
+        return started, json.load(open(sf))["sessions"]
 
     def test_the_free_trial_splits_a_long_file_from_the_start(self):
         started, runs = self.on_trial()
@@ -480,8 +518,8 @@ class DeliverResume(unittest.TestCase):
         self.on_trial("--max-windows-per-run", "50")
         started, runs = self.on_trial(completed=True, keep_state=True)
         self.assertEqual(len(started), 2)            # rows 0-202 and 200-402; 400-500 is the same run in both
-        # the 50-window split's other 4 runs are cancelled, not left holding job slots
-        self.assertEqual(sorted(self.cancelled), ["agt_new1", "agt_new2", "agt_new3", "agt_new4"])
+        # the 50-window split's other 4 sessions are cancelled, not left holding job slots
+        self.assertEqual(sorted(self.cancelled), ["ses_new1", "ses_new2", "ses_new3", "ses_new4"])
         self.assertEqual(sorted(runs), ["delivery/d.csv rows 0-202", "delivery/d.csv rows 200-402",
                                         "delivery/d.csv rows 400-500"])
         whole = pd.read_csv(os.path.join(self.out, "delivery", "d.csv"))
@@ -526,7 +564,7 @@ class QueryRetry(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k"}), \
                 mock.patch.object(atai_http.urllib.request, "urlopen", urlopen), \
                 mock.patch.object(atai_http.time, "sleep", lambda s: None):
-            return atai_http.request("POST", "https://x/api/agents/instances/a/query", {"data": []}, **kw), calls
+            return atai_http.request("POST", "https://x/api/agents/sessions/s/query", {"data": []}, **kw), calls
 
     def test_an_idempotent_post_is_retried(self):
         answer, calls = self.run_request(idempotent=True)
@@ -555,8 +593,11 @@ class LibraryEmbeddings(unittest.TestCase):
             np.testing.assert_allclose(ref.std(axis=0, ddof=1), [1, 1], rtol=1e-6)
             self.assertGreater(explained[0], explained[1])
 
-    def serve(self, rec, *args, agent_bp="bp", out=None, failing_query=False, key="bp", serving=True):
-        """main (--serving unless serving=False) against a fake platform; returns out, the windows asked, the other calls."""
+    EMB = {"id": "blp_emb", "key": "bp-embeddings"}
+
+    def serve(self, rec, *args, session_bp="blp_emb", out=None, failing_query=False, key="bp", serving=True):
+        """main (--serving unless serving=False) against a fake platform; returns out, the windows
+        asked, the other calls. The embeddings blueprint is already made (in library_state.json)."""
         roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
         os.makedirs(os.path.join(roles, "library"))
         manifest = {"timestamp_column": "timestamp", "channels": ["a", "b"], "library": []}
@@ -564,33 +605,40 @@ class LibraryEmbeddings(unittest.TestCase):
             pd.DataFrame({"timestamp": np.arange(rows) * 1.0, "a": np.arange(rows), "b": -np.arange(rows)}).to_csv(
                 os.path.join(roles, "library", f"{name}.csv"), index=False)
             manifest["library"].append({"file": f"library/{name}.csv", "rows": rows})
-        json.dump({"endpoint": "https://x", "blueprint": {"key": key, "values": {
-            "window_size": 4, "step_size": 2, "threshold": 1.5}}}, open(os.path.join(out, "test_state.json"), "w"))
+        json.dump({"endpoint": "https://x", "blueprint": {"key": key, "id": "blp_" + key, "values": {
+            "window_size": 4, "step_size": 2, "threshold": 1.5, "n_neighbors": 5}}},
+            open(os.path.join(out, "test_state.json"), "w"))
+        lib = os.path.join(out, "library_state.json")
+        if not os.path.exists(lib):
+            json.dump({"endpoint": "https://x", "embeddings_blueprint": self.EMB}, open(lib, "w"))
         asked, calls = [], []
 
-        def fake(method, url, body=None, idempotent=None):
+        def fake(method, url, body=None, idempotent=None, **_):
             if url.endswith("/query"):
                 if failing_query:
                     raise RuntimeError("POST /query failed (500)")
                 asked.append(body["events"][0]["event_data"]["contents"])
                 return {"response": {"data": [rec(body["events"][0]["event_data"]["contents"][0][0])]}}
-            calls.append((method, url.split("/api/agents")[1]))
-            if url.endswith("/bundles"):
-                return {"id": "bnd_s"}
-            if url.endswith("/run"):
-                return {"id": "agt_s"}
-            if method == "GET":
-                return {"status": "running", "blueprint": agent_bp}
+            path = url.split("/api/agents")[1]
+            calls.append((method, path))
+            if method == "POST" and path in ("/packages", "/deployments", "/sessions"):
+                return {"id": {"/packages": "pkg_s", "/deployments": "dpl_s", "/sessions": "ses_s"}[path]}
+            if method == "GET" and path.startswith("/packages/"):
+                return {"id": path.split("/")[-1], "status": "ready", "blueprint_ids": [session_bp]}
+            if method == "GET" and path.startswith("/deployments/"):
+                return {"id": path.split("/")[-1], "status": "ready", "package_id": "pkg_app"}
+            if method == "GET" and path.startswith("/sessions/"):
+                return {"id": path.split("/")[-1], "status": "running", "deployment_id": "dpl_app"}
             return {}
+        fakes = dict(request=fake, agents=lambda: "https://x/api/agents", root=lambda: "https://x")
         with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
-                                 load_manifest=lambda roles: manifest, root=lambda: "https://x",
-                                 same_deployment=lambda s: True, agents=lambda: "https://x/api/agents", request=fake), \
-                mock.patch.multiple(serve, request=fake, agents=lambda: "https://x/api/agents"):
+                                 load_manifest=lambda roles: manifest, same_deployment=lambda s: True, **fakes), \
+                mock.patch.multiple(atai_http, **fakes), mock.patch.object(atai_http.time, "sleep", lambda s: None):
             library_embeddings.main(["--roles", roles, "--out", out, *(["--serving"] if serving else []), *args])
         return out, asked, calls
 
     def test_serving_route_writes_the_batch_shape_and_the_view(self):
-        out, asked, _ = self.serve(self.rec, "--agent", "agt_app")
+        out, asked, _ = self.serve(self.rec, "--session", "ses_app")
         self.assertEqual(len(asked), 9 + 4)                        # (20-4)//2+1 and (11-4)//2+1 windows
         self.assertIn([[2, 3, 4, 5], [-2, -3, -4, -5]], asked)      # a list per channel, the window at row 2 (queries run 4 at a time)
         one = pd.read_csv(os.path.join(out, "library_embeddings", "l1.csv"))
@@ -606,49 +654,52 @@ class LibraryEmbeddings(unittest.TestCase):
         return {"anomaly_score": 1.0 + first / 100, "invalid": False,
                 "embedding_a": [first, 1.0, 0.0], "embedding_b": [0.0, first * 2, 1.0]}
 
-    def test_its_own_agent_is_deleted_however_the_run_ends(self):
+    def test_its_own_session_deployment_and_package_are_deleted_however_the_run_ends(self):
         out, _, calls = self.serve(self.rec)
-        self.assertIn(("DELETE", "/instances/agt_s"), calls)
-        self.assertIn(("DELETE", "/bundles/bnd_s"), calls)
+        self.assertIn(("POST", "/packages"), calls)
+        self.assertEqual([c[1] for c in calls if c[0] == "DELETE"], ["/sessions/ses_s", "/deployments/dpl_s", "/packages/pkg_s"])
         self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
-        out2 = tempfile.mkdtemp()                         # a query fails: the agent is deleted all the same
+        out2 = tempfile.mkdtemp()                         # a query fails: they are deleted all the same
         with self.assertRaises(RuntimeError):
             self.serve(self.rec, out=out2, failing_query=True)
         self.assertFalse(os.path.exists(os.path.join(out2, "library_serving_state.json")))
 
-    def test_a_left_serving_agent_or_another_blueprint_stops_it(self):
+    def test_a_left_serving_session_or_another_blueprint_stops_it(self):
         out = tempfile.mkdtemp()
-        json.dump({"bundle": "bnd_old", "agent": "agt_old"}, open(os.path.join(out, "library_serving_state.json"), "w"))
+        json.dump({"package": "pkg_old", "deployment": "dpl_old", "session": "ses_old"},
+                  open(os.path.join(out, "library_serving_state.json"), "w"))
         with self.assertRaises(SystemExit) as e:
             self.serve(self.rec, out=out)
         self.assertIn("cleanup.py", str(e.exception))
         with self.assertRaises(SystemExit) as e:
-            self.serve(self.rec, "--agent", "agt_other", agent_bp="another-bp")
-        self.assertIn("not the promoted bp", str(e.exception))
+            self.serve(self.rec, "--session", "ses_other", session_bp="blp_another")
+        self.assertIn("not the embeddings blueprint", str(e.exception))
         out = tempfile.mkdtemp()
-        json.dump({"blueprint": "old-bp", "bundle": "bnd_l"}, open(os.path.join(out, "library_state.json"), "w"))
+        json.dump({"endpoint": "https://x", "blueprint": "old-bp", "package": "pkg_l"},
+                  open(os.path.join(out, "library_state.json"), "w"))
         with self.assertRaises(SystemExit) as e:
-            self.serve(self.rec, "--agent", "agt_app", out=out)
+            self.serve(self.rec, "--session", "ses_app", out=out)
         self.assertIn("old-bp", str(e.exception))
 
-    def test_an_agent_without_embeddings_is_refused(self):
+    def test_a_session_without_embeddings_is_refused(self):
         with self.assertRaises(SystemExit) as e:
-            self.serve(lambda first: {"anomaly_score": 1.0}, "--agent", "agt_app")
+            self.serve(lambda first: {"anomaly_score": 1.0}, "--session", "ses_app")
         self.assertIn("output_embeddings", str(e.exception))
 
     def test_after_cleanup_another_blueprint_still_stops_it(self):
-        out, _, _ = self.serve(self.rec, "--agent", "agt_app")
-        os.remove(os.path.join(out, "library_state.json"))    # what cleanup.py deletes; the outputs stay
+        out, _, _ = self.serve(self.rec, "--session", "ses_app")
+        os.remove(os.path.join(out, "library_state.json"))    # moved aside; the outputs stay
         with self.assertRaises(SystemExit) as e:
-            self.serve(self.rec, "--agent", "agt_app", out=out, key="new-bp")
+            self.serve(self.rec, "--session", "ses_app", out=out, key="new-bp")
         self.assertIn("library_embeddings.json", str(e.exception))
 
     def test_a_rerun_with_nothing_to_embed_starts_nothing_and_keeps_the_route(self):
-        out, _, _ = self.serve(self.rec, "--agent", "agt_app")
-        for serving in (True, False):                       # --serving without --agent, then batch
+        out, _, _ = self.serve(self.rec, "--session", "ses_app")
+        for serving in (True, False):                       # --serving without --session, then batch
             _, asked, calls = self.serve(self.rec, out=out, serving=serving)
             self.assertEqual((asked, calls), ([], []))
             self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"], "serving")
+
 
 if __name__ == "__main__":
     unittest.main()

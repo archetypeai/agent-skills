@@ -3,8 +3,9 @@
 
 1. Promote the best completed trial across optimize.py's runs (or --trial):
    POST /agents/optimizations/{opt}/trials/{trial}/promote with a blueprint_key unique per
-   trial. The blueprint carries the fitted detector (a registry artifact, `aar_…`) and pins
-   the trial's values.
+   trial (choosing one takes the admin role: without it, the platform's default,
+   `<base key>-<trial id>`). The blueprint lands in the optimization's project, carries the
+   fitted detector (a registry artifact, `aar_…`) and pins the trial's values.
 2. Test once: POST /agents/evals with the blueprint and every test file, at the trial's own
    threshold and step (an eval takes no value overrides), with predictions.
 3. Check the predictions before reporting: each window's expected label equals its

@@ -213,7 +213,8 @@ RESULT: PASS, 0 fail(s), 0 warning(s); ready for the AD agent skill (Path 2)
 ```
 
 Then: [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md),
-**Path 2** — Optimize → promote → test once with Evals → deliver → score.
+**Path 2** — Optimize → promote → test once with Evals → deliver → score → serve, and the
+library view for a live app.
 
 ## The rules, and what breaks
 
