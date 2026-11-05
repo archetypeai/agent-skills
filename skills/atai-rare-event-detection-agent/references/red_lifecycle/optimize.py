@@ -15,13 +15,17 @@ What can be searched (`kind: value`):
 One value pins a setting in `overrides.values`; `metric` is always in the search space
 (it can't be empty). Trials that share window and step share one encoder pass, so the
 metric is nearly free and each window or step adds a pass over every file.
+The optimization searches the project's own copy of `red` (--project, created or reused;
+the copy is keyed `<--name>-base`), so the blueprints it promotes, and their packages,
+deployments and sessions, land in that project.
 
 The platform draws distinct points at random: a budget at or above the grid's size runs
 every point (a grid), below it, or with a range, a random search. By default a grid of up
 to DEFAULT_TRIALS points runs in full, and a bigger grid or a range gets a
 DEFAULT_TRIALS-trial random search. --max-trials sets the budget.
 
-Writes <out>/optimize_<optimization id>.json and <out>/optimize_state.json.
+Writes <out>/optimize_<optimization id>.json, <out>/optimize_state.json and
+<out>/project_state.json.
 
     python optimize.py --roles roles --dry-run                       # the plan: no uploads, no jobs
     python optimize.py --roles roles --out out --name red-sample     # window 64, step 1, four metrics
@@ -36,7 +40,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import agents, check_auth, list_trials, load_dotenv, report_event, request, root, same_deployment, trial_values, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
-from common import base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
+from common import base_blueprint, base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
 DEFAULTS = {"windows": ["64"], "steps": ["1"], "metrics": ["cosine", "l1", "l2", "dot"]}
 DEFAULT_TRIALS = 12
@@ -92,7 +96,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
-    ap.add_argument("--name", default="red", help="prefixes every upload; use your own")
+    ap.add_argument("--name", default="red", help="prefixes every upload, and keys the copy of `red`; use your own")
+    ap.add_argument("--project", default="Rare Event Detection", help="the project to work in (created if you have none of that name)")
     ap.add_argument("--windows", nargs="+", default=DEFAULTS["windows"])
     ap.add_argument("--steps", nargs="+", default=DEFAULTS["steps"])
     ap.add_argument("--metrics", nargs="+", default=DEFAULTS["metrics"])
@@ -136,7 +141,7 @@ def main(argv=None):
             return 0
         check_auth(log)
         ids = upload_all([p for p, _ in train] + val, a.roles, cache_path(a.out), prefix=a.name, log=log)
-        bp = request("GET", f"{agents()}/blueprints/red")
+        bp = base_blueprint(a.out, a.project, f"{a.name}-base", log=log)
         body = {"name": f"{a.name} {stamp()}", "blueprint_id": bp["id"], "primary": a.primary,
                 "overrides": {"values": {**base_values(m), **pinned}}, "search_space": space,
                 "budget": {"max_trials": trials},

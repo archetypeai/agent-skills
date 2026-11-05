@@ -433,22 +433,46 @@ runs the whole build, including the channel-leakage audits this data requires.
 > ([`atai_http.py`](references/red_lifecycle/atai_http.py), shared with the OSM and AD
 > skills' Path 2) because the official client doesn't cover these APIs yet.
 >
-> **Path 2 still delivers and serves through bundles and agent instances**, which are
-> being removed: some deployments of the platform already answer 404 for them, and the
-> rest keep them only until their next platform release. Steps 0–2 (role files, Optimize,
-> promote and Evals) are unaffected.
+> **On projects, packages, deployments and sessions: verified on dev (2026-11-04, a member
+> key in a new project; see each step).** Only dev serves deployments and sessions so far;
+> production, staging and the free trial still run bundles and agent instances until their
+> next platform release, and the production numbers below were taken through bundles. Check
+> first: `GET /agents/sessions?limit=1` answers 200, not 404.
 
 ```
-role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
-  (prep skill)   prototypes from   best trial    one-shot, with           a prediction per row        incidents caught,
-                 training, scored  → blueprint   predictions checked            │                     delay, false alarms
-                 on validation                                                  ├──► 5 serve (/query, Dev): a window per
-                                                                                │    query, checked against step 3
-                                                                                └──► 6 the training windows' embeddings:
-                                                                                     a 2-D map for a live app
+role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver ──────────────────► 4 score
+  (prep skill)   the project's     best trial    one-shot, with           package → batch deployment  incidents caught,
+                 copy of `red`:    → blueprint   predictions checked      → a session per file        delay, false alarms
+                 prototypes from   (in the              │
+                 training, scored  project)             ├──► 5 serve: serving deployment → a session,
+                 on validation                          │    a window per /query, checked against step 3
+                                                        └──► 6 the training windows' embeddings:
+                                                             a 2-D map for a live app
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
+
+### The lifecycle the steps use
+
+Everything lives in one **project**, and every object takes its project from the one it is
+made from: an optimization from the blueprint it searches, a promoted blueprint from its
+optimization, a **package** from its blueprint, a **deployment** from its package, a
+**session** from its deployment. `POST /agents/optimizations` takes no `project_id` and the
+canonical `red` is outside any project, so `optimize.py` first creates or reuses a project
+(`--project`, default `Rare Event Detection`), copies `red` into it
+(`POST /agents/blueprints/red/copy`, keyed `<--name>-base`) and optimizes the copy.
+
+- **A package has no values.** It pins one blueprint and the models it resolves to (the
+  Omega encoder, the fitted prototypes `aar_…`) and runs it exactly as promoted: the trial's
+  window, step and metric, `events`, `background` and the columns, which `optimize.py` pins.
+  So delivery and serving run at the trial's step (the sample's is 1: a prediction per row),
+  and an output such as `output_embeddings` needs a blueprint of its own (Step 6).
+- **Deployments: `batch` or `serving`.** A batch deployment is ready at once; each batch
+  session is one run over its input file. A serving deployment places and loads the agent on
+  a worker (seconds) and holds it until stopped; a serving session is a client's handle on
+  it, queried at `/sessions/{id}/query`.
+- **Every package and deployment id is recorded before the script waits on it,** so a build
+  that fails or is interrupted is still found by `cleanup.py`.
 
 ## Step 0 — Role files
 
@@ -585,37 +609,46 @@ the test number optimistic.
 python deliver.py --roles $R --out out --name red-sample
 ```
 
-A bundle on the promoted blueprint adding only `step_size: 1` (one prediction per row;
-the prototypes, window, metric, `events` and `background` come with the blueprint), then
-one agent run per delivery file, `--parallel 3` at a time. Each output is downloaded again
-until its last window reaches the input's end (a run can report `completed` while its
-output is still being written).
+1. **Package** the promoted blueprint: `POST /agents/packages {"blueprint_ids": ["<blp_…>"],
+   "target": {"kind": "platform"}, "name": …}`, then poll until `status` is `ready`.
+2. **Deploy** it in batch: `POST /agents/deployments {"package_id": "<pkg_…>", "kind": "batch"}`,
+   ready at once.
+3. **A session per delivery file**, `--parallel 3` at a time: `POST /agents/sessions
+   {"deployment_id": "<dpl_…>", "connectors": {"source": [{"type": "file", "id": "<file_id>",
+   "format": "csv"}]}}`; poll `GET /agents/sessions/{id}` until `completed`.
+4. **Download** from `GET /agents/sessions/{id}/results`: `data[0].data.ref` is a root path,
+   `/api/files/<fil_…>/content`. Each output is downloaded again until its last window
+   reaches the input's end (a session can report `completed` while its output is still
+   being written).
 
-- **If a run hits a time limit** (`DeadlineExceeded`: the free trial stops a run after 2
-  hours, with no output), a plain rerun hits it again. `--max-windows-per-run N` delivers the
-  same windows in runs of at most N: each starts on a multiple of the step and overlaps the
-  next by window − step rows, and the outputs are joined, so the result equals one run's.
-  Split runs' files are named by row range, so a rerun at another N never reuses another
-  split's files; that split's runs are forgotten, and any still going is cancelled first, so
-  it doesn't hold a job slot for up to 2 hours (`cleanup.py` deletes them with the bundle).
-  Off by default. The sample (2,654 rows) took 28 min on the free trial, so it doesn't need
-  it; at that rate a recording past ~10,000 rows at step 1 would. A larger `--step` also
-  fits, at a coarser delay.
+The delivery runs at the trial's window and step: a package can't override them, so there
+is no `--step` any more (a bundle could add `step_size: 1` over a coarser fit). Choose the
+step at Optimize for the delay you want. On the sample the trial's step is 1 already.
 
-- **Embeddings from your own classifier.** `output_embeddings: true` in a bundle's values
-  works on a promoted blueprint too: per channel, an `embedding_<channel>` column (10 × 768
-  on the pump's 10 channels) and an `embedding_<channel>_features` column, each cell a JSON
-  list in the CSV. A serving agent's answers carry them too (Step 5). A trial, an eval
-  (predictions only) and the promoted classifier (`aar_…`, no download route) don't, and
-  neither can its prototypes be read. To plot the training windows and the classes,
-  recompute them (Step 6): run the training files through the promoted blueprint with
-  `output_embeddings: true`, in batch or through a serving agent; each class's
-  mean stands in for its prototype (the head is `strategy: centroid`). On the pump, at step 4
-  (3,016 of 12,059 windows, a quarter of the download), PC 1–2 and the class means came out
+- **If a session hits a time limit** (`DeadlineExceeded`: the free trial stopped a bundle
+  run after 2 hours, with no output), a plain rerun hits it again. `--max-windows-per-run N`
+  delivers the same windows in sessions of at most N: each starts on a multiple of the step
+  and overlaps the next by window − step rows, and the outputs are joined, so the result
+  equals one session's. Split sessions' files are named by row range, so a rerun at another N
+  never reuses another split's files; that split's sessions are forgotten, and any still
+  going is cancelled first, so it doesn't hold a job slot for up to 2 hours. Off by default.
+  Through a bundle, the sample (2,654 rows) took 28 min on the free trial, so it doesn't need
+  it; at that rate a recording past ~10,000 rows at step 1 would.
+
+- **Embeddings from your own classifier** need a blueprint with `output_embeddings: true`,
+  since a package can't switch an output on: Step 6 makes one (a 1-trial optimization at the
+  trial's values plus the switch, promoted). Per channel it writes an `embedding_<channel>`
+  column (10 × 768 on the pump's 10 channels) and an `embedding_<channel>_features` column,
+  each cell a JSON list in the CSV, and a serving session of it carries them in each answer.
+  A trial, an eval (predictions only) and the promoted classifier (`aar_…`, no download
+  route) don't, and neither can its prototypes be read. Each class's mean stands in for its
+  prototype (the head is `strategy: centroid`). On the pump, at step 4 (3,016 of 12,059
+  windows, a quarter of the download, through a bundle), PC 1–2 and the class means came out
   as those of a local encoder's.
-- **The bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>` finds every
-  attempt, including the ones a rerun replaced; `deliver_state.json` keeps only the last
-  per file. `cleanup.py` uses both.
+- **A package lists its deployments, and a deployment its sessions**
+  (`GET /agents/deployments?package_id=`, `GET /agents/sessions?deployment_id=`), so the
+  sessions a rerun replaced are found too; `deliver_state.json` keeps only the last per
+  file. `cleanup.py` uses both.
 
 ## Step 4 — Score the delivery
 
@@ -648,17 +681,18 @@ python serve.py --roles $R --out out --windows-per-query 16   # 16 consecutive w
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a pump's historian would ask
-every minute about the latest `window_size` readings. A running serving agent holds a serving
+every minute about the latest `window_size` readings. A serving deployment holds a serving
 worker until it is stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
 
-1. **A bundle of the promoted blueprint, as it is,** at `step_size` 1 (bundle values override
-   a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
-   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
-   supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
-2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
-   wait until the agent's `status` is `running`.
-3. **One query per row:** `POST /agents/instances/{agt}/query` with the latest `window_size`
-   rows, a list per channel:
+1. **A package of the promoted blueprint, as it is** (`POST /agents/packages`). No served
+   copy of the blueprint is needed: for a serving deployment the platform supplies the
+   `atai-records` serving source and sink itself, in place of the CSV ones.
+2. **Deploy it for serving and open a session:** `POST /agents/deployments {"package_id": …,
+   "kind": "serving"}`, wait until `ready` (the agent placed and loaded, seconds), then
+   `POST /agents/sessions {"deployment_id": …}` with no connectors, and wait until the
+   session is `running`.
+3. **One query per step** (per row at the sample's step 1): `POST /agents/sessions/{ses}/query`
+   with the latest `window_size` rows, a list per channel:
 
    ```json
    {"model": "red", "query": "", "events": [{"type": "data.numeric_array",
@@ -667,17 +701,18 @@ worker until it is stopped; free-trial accounts serve on CPU only, so answers ca
 
    The answer is at `response.data`, one record per window:
    `{"finish_timestamp": 63, "invalid": "false", "p_normal": 0, "p_pump_breakdown": 1, "predicted_state": "pump_breakdown", "start_timestamp": 0}`.
-   The timestamps are row indices within the query, not times. `window + N − 1` rows give
-   N consecutive windows (step 1).
-4. **Every answer against batch** (step 3's output at step 1): the same `predicted_state`,
+   The timestamps are row indices within the query, not times. `window + (N − 1) × step` rows
+   give N consecutive windows.
+4. **Every answer against batch** (step 3's output, at the same step): the same `predicted_state`,
    every probability within 10⁻⁴, and per file each incident's delay and the false alarms
    (step 4's rules), served and batch. By default only the windows ending within
    `--context` rows (120) of an event row: every detection, and the false alarms near it.
-5. **The agent cancelled and deleted, and the bundle deleted**, however the replay ends
-   (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
-   for `cleanup.py`.
+5. **The session cancelled, the deployment stopped, and all three deleted** (session,
+   deployment, package, in that order: each holds the next), however the replay ends (Ctrl-C,
+   SIGTERM and SIGHUP included); each id goes to `out/serve_state.json` before the script
+   waits on it, for `cleanup.py`.
 
-**Expect, on the sample** (production, 2026-10-29; ~7 min):
+**Expect, on the sample** (production through a bundle, 2026-10-29; ~7 min):
 
 ```
 served 846 windows of 1 file(s) in 846 queries, 423 s
@@ -697,44 +732,50 @@ and Staging before. **Served is batch, to the bit:** the head is
 nearest-prototype, so its probabilities are 0 or 1, and the tiny float differences between
 served and batch embeddings change nothing. **~0.45 s median per query** (sample: 467 ms,
 p95 0.7 s, worst 1.0 s; the quickstart 436 ms), so a replay runs at ~2 rows a second and
-1,162 windows take about 10 min. With `output_embeddings: true` on the served bundle, each
-answer also carries the window's embeddings (10 × 768), at about 0.3 s a query: what a live
+1,162 windows take about 10 min. Served from Step 6's embeddings blueprint, each answer also
+carries the window's embeddings (10 × 768; about 0.3 s a query through a bundle): what a live
 monitor needs to place each window among the training windows.
 
 - **A query must hold the whole window.** The agent keeps nothing between queries: keep the
   latest `window_size` rows client-side, and send them every row.
 - **One window per query is the way to serve it live**; more windows a query only wait for
   more rows. For stored data, deliver in batch.
-- **An idle agent is released** after 20 minutes without a query, and a query to it answers
-  409: delete it and start a new one. A live monitor paused that long must do the same.
-- **A running serving agent holds a serving worker** until it is deleted. Delete it on
-  every way out (signals included), and keep its ids on disk until then.
+- **A session that stops taking queries answers 409** (under bundles, an agent idle for 20
+  minutes was released): open a new session, on a new deployment if the old one is no longer
+  `ready`. A live monitor paused that long must do the same.
+- **A serving deployment holds a serving worker** until it is stopped. Delete the session,
+  the deployment and the package on every way out (signals included), and keep their ids on
+  disk until then.
 
 ## Step 6 — The training windows' embeddings, for a live app
 
 ```sh
-python library_embeddings.py --roles $R --out out                       # batch: one run per training file
-python library_embeddings.py --roles $R --out out --serving             # or a serving agent, a query per window
-python library_embeddings.py --roles $R --out out --serving --agent agt_…   # one already running (a live app's)
+python library_embeddings.py --roles $R --out out                       # batch: one session per training file
+python library_embeddings.py --roles $R --out out --serving             # or a serving session, a query per window
+python library_embeddings.py --roles $R --out out --serving --session ses_…   # one already running (a live app's)
 python library_embeddings.py --roles $R --out out --view --view-dir ../my-app/static
 ```
 
 A live monitor that places each served window among the training windows (the pump
 quickstart's `app-serving/` Embedding Space) needs those windows' embeddings and a way to
-project new ones. Nothing returns them (Step 3), so they are recomputed on the promoted
-blueprint with `output_embeddings: true`, at `--step 4` by default (a quarter of the windows:
-the same cloud, a quarter of the download). Two routes, the same points:
+project new ones. Nothing returns them (Step 3), so they are recomputed. A package carries
+no values, so the script first makes an **embeddings blueprint**: a 1-trial optimization of
+the project's copy of `red` at the promoted trial's values plus `output_embeddings: true` and
+`step_size` `--step` (4 by default: a quarter of the windows, the same cloud, a quarter of
+the download), promoted; its ids stay in `out/library_state.json`, so a rerun reuses it. Two
+routes, the same points:
 
-- **batch (default):** a bundle at `--step`, one run per training file, `--parallel 3` at a
-  time (the free trial runs 3 jobs); checkpointing off, and each output downloaded until it
-  reaches its file's end. Ids in `out/library_state.json`, for a resume and `cleanup.py`.
-- **`--serving`:** a serving agent, one window per `/query`, cut here as the platform cuts
-  them (each file from row 0, every `--step` rows): one agent for every file, no job slots,
-  queue or 2-hour cap. `--agent agt_…` uses an agent of the promoted blueprint already running
-  with `output_embeddings` (a live app's, Step 5) and leaves it running; otherwise one is
-  started and deleted however the run ends (its ids in `out/library_serving_state.json`
-  until then). An answer without `embedding_<channel>` stops it: that bundle needs
-  `output_embeddings: true`.
+- **batch (default):** a package of the embeddings blueprint, a batch deployment, one session
+  per training file, `--parallel 3` at a time (the free trial runs 3 jobs), each output
+  downloaded until it reaches its file's end. Ids in `out/library_state.json`, for a resume
+  and `cleanup.py`.
+- **`--serving`:** a serving deployment of the embeddings blueprint and one session, one
+  window per `/query`, cut here as the platform cuts them (each file from row 0, every
+  `--step` rows): no job slots, queue or 2-hour cap. `--session ses_…` uses a session already
+  running the embeddings blueprint (a live app's; it checks the package's blueprint) and
+  leaves it running; otherwise the package, deployment and session are made and deleted
+  however the run ends (their ids in `out/library_serving_state.json` until then). An answer
+  without `embedding_<channel>` stops it: that blueprint needs `output_embeddings: true`.
 
 The map is PCA 1–2 of the embeddings (768 values per channel, concatenated in the manifest's
 order), PC 1 turned so the background class sits on its positive side and PC 2 so the first
@@ -744,13 +785,18 @@ the two projection rows, so a served window lands in the same coordinates:
 the format the pump quickstart's `app-serving/` reads from its `static/`; `--view` rebuilds
 it from the saved outputs with no platform calls. A rerun for another blueprint or step
 stops rather than mixing two classifiers' windows (it checks `library_embeddings.json` as
-well as the batch ids, which `cleanup.py` deletes); a rerun that embeds nothing new starts
-no agent or bundle and keeps the route the outputs were made by. If a batch run hits
-`DeadlineExceeded`, a plain rerun hits it again: rerun with a larger `--step`, or
-`--serving`. It is a drawing, not the classifier: the prototypes are compared in every
+well as the batch ids); a rerun that embeds nothing new starts nothing and keeps the route
+the outputs were made by. If a batch session hits `DeadlineExceeded`, a plain rerun hits it
+again: rerun with a larger `--step`, or `--serving`. It is a drawing, not the classifier: the prototypes are compared in every
 dimension.
 
-**Measured on a RED blueprint** (free trial, 2026-10-31; PRONTO's air-leak agent, window
+**Expect, on the sample** (dev, 2026-11-04): the embeddings blueprint's 1-trial optimization
+in 2 min, then `library: 3,016 windows of 12,059 (normal 2,033, pump_breakdown 983), window
+64, step 4`, PCA 1–2 explaining 31.4% and 4.4%; batch in 2.5 min, 3 sessions at once.
+`--serving` gave the same 3,016 windows, timestamps and predicted states in 15 min, each
+embedding within 0.3% of batch's (cosine ≥ 0.999995), the class means within 0.002 on the map.
+
+**Measured on a RED blueprint through bundles** (free trial, 2026-10-31; PRONTO's air-leak agent, window
 512, dot, 8 channels, 4 training files at step 4), the serving route through a live app's
 agent against batch:
 
@@ -814,38 +860,35 @@ objects, each before what it holds:
 
 | object | delete | notes |
 |---|---|---|
-| Path 1: sessions (`ses_…`) | ✅ `DELETE /agents/sessions/{id}` | cancel a running one first (`POST …/cancel`) |
-| Path 1: deployments (`dpl_…`) | ✅ `DELETE /agents/deployments/{id}` | stop it first (`POST …/stop`); delete its sessions first |
-| Path 1: packages (`pkg_…`) | ✅ `DELETE /agents/packages/{id}` | delete its deployments first |
-| Path 1: the project and its copy of `playground-red` | — | reused by the next run; `--project` picks another |
-| Path 2: agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` | cancel a running one first (`POST …/cancel` with `{}`); a running serving agent holds a shared worker |
-| Path 2: your delivery and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` | delete its agents first: a bundle that still has any, even a cancelled one, answers **409** |
+| sessions (`ses_…`) | ✅ `DELETE /agents/sessions/{id}` | cancel a running one first (`POST …/cancel`) |
+| deployments (`dpl_…`) | ✅ `DELETE /agents/deployments/{id}` | stop it first (`POST …/stop`); delete its sessions first; a serving one holds a shared worker until stopped |
+| packages (`pkg_…`) | ✅ `DELETE /agents/packages/{id}` | delete its deployments first |
+| the projects, with Path 1's copy of `playground-red` and Path 2's of `red` | — | reused by the next run; `--project` picks another |
 | promoted blueprints (`blp_…`) | ❌ 403 for a regular key | ask an org admin; use a distinctive `--name` |
 | optimizations (`opt_…`), evals (`evl_…`) | — | records of what was fitted and scored; keep them if your docs cite them |
 
 `run_red_agent.py` deletes its own session, deployment and package after each run, failed
-or not. For Path 2, `cleanup.py` does it from the ids in `out/` (the delivery runs, a serving
-agent `serve.py` was killed before deleting, and `library_embeddings.py`'s batch runs or
-serving agent): dry run by default, `--yes` to delete, an id already gone counts as done,
-progress saved for a rerun.
+or not. For Path 2, `cleanup.py` does it from the packages recorded in `out/` (the delivery,
+a serving replay `serve.py` was killed before deleting, and `library_embeddings.py`'s batch
+or serving package), with their deployments and sessions from the platform's own listings:
+dry run by default, `--yes` to delete, an id already gone counts as done, progress saved for
+a rerun. The embeddings blueprint stays for a rerun.
 
 ```sh
 python cleanup.py --out out           # what would be deleted, and what stays
 python cleanup.py --out out --yes
 ```
 
-To see which serving agents are running (yours and anyone's on the same workers),
-`status=running` filters on the server; `mode=serving` is ignored there, so filter it
-client-side:
+To see which serving deployments are up:
 
 ```sh
-curl -s "$ATAI_API_ENDPOINT/agents/instances?status=running&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
-  | jq -c '.data[] | select(.mode=="serving") | {id, blueprint, name, created_at}'
+curl -s "$ATAI_API_ENDPOINT/api/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
+  | jq -c '.data[] | select(.kind=="serving") | {id, package_id, project_id, created_at}'
 ```
 
-A live app on a serving agent (the pump examples' `app-serving/`) should delete its agent
-and bundle on every way out, keep their ids on disk until then, and stop only its own
-processes; closing the browser tab stops nothing.
+A live app on a serving session (the pump examples' `app-serving/`) should delete its
+session, deployment and package on every way out, keep their ids on disk until then, and
+stop only its own processes; closing the browser tab stops nothing.
 
 ## File Layout
 
@@ -864,11 +907,11 @@ skills/atai-rare-event-detection-agent/
 │       ├── background.py       --background: nohup (+ caffeinate on macOS), output to a log
 │       ├── optimize.py         Step 1: search space → Optimizations API → trials
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval (or --max-windows pieces), predictions checked
-│       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
+│       ├── deliver.py          Step 3: package → batch deployment → a session per file → complete outputs
 │       ├── score.py            Step 4: incidents, delay, false alarms (and the shared scorer)
-│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per row, against step 3
+│       ├── serve.py            Step 5: package → serving deployment → a session, a query per step, against step 3
 │       ├── library_embeddings.py Step 6: the training windows' embeddings (batch, or --serving) → a PCA 1-2 map for an app
-│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6, from the ids in out/
+│       ├── cleanup.py          the sessions, deployments and packages of steps 3, 5 and 6, from out/
 │       └── requirements.txt    numpy, pandas
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
