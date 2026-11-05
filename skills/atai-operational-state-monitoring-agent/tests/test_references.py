@@ -1,20 +1,18 @@
 """Network-free unit tests for the OSM agent reference script.
 
-Mocks urllib at the request boundary, so these run with NO credentials and
+Mocks the HTTP helper at the request boundary, so these run with NO credentials and
 NO network. They lock in the verified invariants:
   * Every surface lives under one /api prefix: any /api or /vX.Y suffix on
-    ATAI_API_ENDPOINT is stripped before appending /api.
-  * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
-    endpoint.
-  * The pre-packaged bundle is resolved by EXACT name via
-    GET /agents/bundles?query=... with no bundle creation;
-    --embeddings selects the variant, --bundle-id skips the lookup; the run
-    body binds the source connector to the upload's file_id (the filename),
-    not the fil_ uid.
+    ATAI_API_ENDPOINT is stripped before appending /api. Both ATAI_API_KEY and
+    ATAI_API_ENDPOINT are required — no default endpoint.
+  * No bundle or instance call: Path 1 copies the demo blueprint `playground-osm-drilling`
+    into a project (once), packages the copy, deploys it as batch and runs a session over
+    the upload's file_id (the filename, not the fil_ uid), then deletes the session,
+    deployment and package in that order, even after a failed session.
   * evaluate() scores with end-row labeling, skips INVALID_STATE windows,
     and restricts the steady-state cut to seam-free single-label windows.
-  * The shipped sample slice and its labels sidecar line up row-for-row and
-    cover all six states.
+  * The shipped sample log is on the exact grid the demo validates, and its labels
+    sidecar lines up row for row.
 
 Run:
     python -m unittest discover -s skills/atai-operational-state-monitoring-agent/tests
@@ -28,6 +26,7 @@ import contextlib
 import csv
 import io
 import os
+import re
 import sys
 import shutil
 import tempfile
@@ -44,143 +43,134 @@ SAMPLE = REF / "sample_data"
 STATES = {"drilling", "reaming", "off_bottom", "in_slips", "trip_in_slips", "shut_in"}
 
 
+ENV = {"ATAI_API_KEY": "sk_test", "ATAI_API_ENDPOINT": "https://x.test"}
+
+
+class FakeAPI:
+    """Stands in for atai_http.request, routing by method and path prefix and recording calls."""
+
+    def __init__(self, routes):
+        self.calls = []
+        self.routes = routes
+
+    def __call__(self, method, url, body=None, idempotent=None):
+        path = url.split("/api", 1)[1]
+        self.calls.append((method, path, body))
+        for (m, prefix), value in self.routes.items():
+            if m == method and path.startswith(prefix):
+                return value(path, body) if callable(value) else value
+        raise AssertionError(f"unexpected {method} {path}")
+
+
 class TestEndpointResolution(unittest.TestCase):
-    """One client at <root>/api serves both surfaces (/api/agents, /api/files).
-
-    Every endpoint form in use (bare, /v0.5, /api) must reduce to the same root.
-    """
-
     ROOT = "https://platform.u1.archetypeai.app"
 
     def test_any_env_convention_reduces_to_one_root(self):
         for endpoint in (self.ROOT, self.ROOT + "/", self.ROOT + "/v0.5",
                          self.ROOT + "/v0.5/", self.ROOT + "/api",
                          self.ROOT + "/api/"):
-            self.assertEqual(run_osm_agent.api_root(endpoint), self.ROOT)
+            with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": endpoint}):
+                self.assertEqual(run_osm_agent.agents(), self.ROOT + "/api/agents")
 
-    def test_both_surfaces_mount_under_one_api_prefix(self):
-        """One client serves agents and files; both live under /api."""
-        seen = []
-        with mock.patch.object(run_osm_agent, "ArchetypeAI",
-                               lambda key, api_endpoint: seen.append(api_endpoint)
-                               or mock.MagicMock()):
-            run_osm_agent.build_client("sk_test", self.ROOT + "/v0.5")
-        self.assertEqual(seen, [self.ROOT + "/api"])
+    def test_endpoint_and_key_required(self):
+        for env in ({"ATAI_API_KEY": "k"}, {"ATAI_API_ENDPOINT": self.ROOT}):
+            with mock.patch.dict(os.environ, env, clear=True), self.assertRaises(SystemExit):
+                run_osm_agent.agents()
 
-
-class _FakeClient:
-    """Stands in for ArchetypeAI, recording the calls main() makes.
-
-    Mocks the client object rather than HTTP, so these tests assert the
-    lifecycle the runner drives — resolve, run, poll, results, download — and
-    stay network-free.
-    """
-
-    def __init__(self, bundles, calls):
-        self.calls = calls
-        outer = self
-
-        class _Local:
-            def upload(self, path):
-                outer.calls.append(("upload", os.path.basename(path)))
-                return {"file_id": os.path.basename(path), "file_uid": "fil_x"}
-
-            def download(self, filename, out_path):
-                outer.calls.append(("download", filename))
-                with open(out_path, "w") as f:
-                    f.write("x,y\n")
-                return True
-
-        class _Files:
-            local = _Local()
-
-        class _Bundles:
-            def list(self, query=None, limit=None):
-                outer.calls.append(("bundles.list", query))
-                return {"data": bundles}
-
-            def create(self, **kw):
-                outer.calls.append(("bundles.create", kw))
-                raise AssertionError("the quick-start flow must never create a bundle")
-
-            def run(self, bundle_id, source=None, sink=None):
-                outer.calls.append(("bundles.run", bundle_id, tuple(source or ())))
-                return {"id": "agt_1", "status": "running"}
-
-        class _Instances:
-            def get(self, agent_id):
-                return {"id": agent_id, "status": "completed"}
-
-            def get_events(self, agent_id):
-                return {"data": []}
-
-            def get_results(self, agent_id):
-                return {"data": [{"data": {"filename": "out.csv", "num_bytes": 3}}]}
-
-        class _Agents:
-            bundles = _Bundles()
-            instances = _Instances()
-
-        self.files = _Files()
-        self.agents = _Agents()
+    def test_result_ref_resolves_against_the_root(self):
+        """A session result's ref already carries /api."""
+        with mock.patch.dict(os.environ, ENV):
+            self.assertEqual(run_osm_agent.result_url("/api/files/fil_1/content"),
+                             "https://x.test/api/files/fil_1/content")
 
 
-class TestRequestBodies(unittest.TestCase):
-    """Drive main() against a faked client and assert the lifecycle."""
+class TestLifecycle(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    BUNDLES = [
-        {"id": "bnd_emb", "name": "OSM Quick Start (Volve Six State, Embeddings)",
-         "is_canonical": True},
-        {"id": "bnd_base", "name": "OSM Quick Start (Volve Six State)",
-         "is_canonical": True},
-    ]
+    def api(self, routes):
+        fake = FakeAPI(routes)
+        patcher = mock.patch.object(run_osm_agent, "request", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return fake
 
-    def _run_main(self, argv):
-        calls = []
-        env = {"ATAI_API_KEY": "sk_test",
-               "ATAI_API_ENDPOINT": "https://platform.u1.archetypeai.app"}
-        with tempfile.TemporaryDirectory() as td, \
-                mock.patch.dict(os.environ, env), \
-                mock.patch.object(run_osm_agent, "ArchetypeAI",
-                                  lambda *a, **kw: _FakeClient(self.BUNDLES, calls)), \
-                mock.patch.object(sys, "argv",
-                                  ["run_osm_agent.py",
-                                   "--output", os.path.join(td, "out.csv")] + argv), \
-                contextlib.redirect_stdout(io.StringIO()):
-            run_osm_agent.main()
-        return calls
+    def test_no_bundle_or_instance_calls(self):
+        """Bundles and agent instances are being removed from the platform."""
+        src = (REF / "run_osm_agent.py").read_text()
+        for gone in ("/bundles", "/instances", "/logs", "archetypeai"):
+            self.assertNotIn(gone, src)
 
-    def test_resolves_exact_name_not_first_result(self):
-        """A prefix query returns both variants, Embeddings first (newest-first).
+    def test_demo_blueprint_is_resolved_by_key(self):
+        """blp_ ids differ per deployment; the key resolves everywhere the demo is published."""
+        src = (REF / "run_osm_agent.py").read_text()
+        self.assertIn('DEMO_BLUEPRINT = "playground-osm-drilling"', src)
+        self.assertEqual(re.findall(r"blp_[a-z0-9]{10,}", src), [])
 
-        Taking data[0] would silently run the Embeddings bundle — a 314 MB
-        output in place of a 221 KB one — so the runner matches the name
-        exactly. The fake deliberately lists Embeddings first.
-        """
-        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv")])
-        run = next(c for c in calls if c[0] == "bundles.run")
-        self.assertEqual(run[1], "bnd_base")
-        self.assertEqual(run[2], ("volve_states_opt_slice_04.csv",))
+    def test_demo_is_copied_into_the_project_once(self):
+        api = self.api({("GET", "/agents/blueprints?"): {"data": []},
+                        ("POST", "/agents/blueprints/playground-osm-drilling/copy"):
+                            lambda p, b: {"id": "blp_copy", "blueprint_key": b["blueprint_key"]}})
+        with mock.patch("builtins.print"):
+            self.assertEqual(run_osm_agent.demo_copy("prj_1")["id"], "blp_copy")
+        self.assertEqual(api.calls[-1][2], {"project_id": "prj_1",
+                                            "blueprint_key": run_osm_agent.COPY_KEY})
 
-    def test_embeddings_selects_exact_variant(self):
-        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
-                                "--embeddings"])
-        run = next(c for c in calls if c[0] == "bundles.run")
-        self.assertEqual(run[1], "bnd_emb")
+    def test_existing_copy_is_reused(self):
+        """A second copy under the same key answers 409; a key in a project resolves only
+        with ?project_id=."""
+        api = self.api({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old"}]}})
+        self.assertEqual(run_osm_agent.demo_copy("prj_1")["id"], "blp_old")
+        self.assertEqual(api.calls, [("GET", "/agents/blueprints?project_id=prj_1"
+                                             f"&key={run_osm_agent.COPY_KEY}", None)])
 
-    def test_bundle_id_override_skips_lookup(self):
-        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv"),
-                                "--bundle-id", "bnd_pinned"])
-        # The /api probe also calls bundles.list, with no query — what must not
-        # happen is a NAME lookup.
-        self.assertEqual([c for c in calls if c[0] == "bundles.list" and c[1]], [])
-        run = next(c for c in calls if c[0] == "bundles.run")
-        self.assertEqual(run[1], "bnd_pinned")
+    def test_project_is_reused_by_name(self):
+        self.api({("GET", "/projects"): {"data": [{"id": "prj_x", "name": "other"},
+                                                   {"id": "prj_1", "name": run_osm_agent.PROJECT}]}})
+        self.assertEqual(run_osm_agent.project_id(), "prj_1")
 
-    def test_source_is_the_file_id_not_the_uid(self):
-        calls = self._run_main(["--csv", str(SAMPLE / "volve_states_opt_slice_04.csv")])
-        run = next(c for c in calls if c[0] == "bundles.run")
-        self.assertNotIn("fil_x", run[2])
+    def test_scoring_window_comes_from_the_blueprint(self):
+        self.api({("GET", "/agents/blueprints/blp_1"): {"document": {"values": {"window_size": 16}}}})
+        self.assertEqual(run_osm_agent.blueprint_window("blp_1"), 16)
+
+    def _lifecycle(self, status, ended, sessions, results=None):
+        for name, fn in (("create_package", lambda bp, name: {"id": "pkg_1"}),
+                         ("deploy", lambda pkg, kind: {"id": "dpl_1", "kind": kind}),
+                         ("open_session", lambda dpl, fids: sessions.append(fids) or {"id": "ses_1"}),
+                         ("poll", lambda sid: {"status": status, "error": "boom"}),
+                         ("last_events", lambda sid: []),
+                         ("end", lambda kind, oid: ended.append((kind, oid))),
+                         ("download_results", lambda sid, out, inp: results)):
+            patcher = mock.patch.object(run_osm_agent, name, fn)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_teardown_goes_session_deployment_package(self):
+        """Each holds the next: a deployment with sessions, or a package with deployments,
+        can't be deleted. The session's source is the upload's file_id."""
+        ended, sessions = [], []
+        self._lifecycle("completed", ended, sessions, results="out.csv")
+        with mock.patch("builtins.print"):
+            self.assertEqual(run_osm_agent.run("blp_1", "log.csv", "out.csv", "in.csv", "n"), "out.csv")
+        self.assertEqual(sessions, [["log.csv"]])
+        self.assertEqual(ended, [("sessions", "ses_1"), ("deployments", "dpl_1"), ("packages", "pkg_1")])
+
+    def test_failed_session_still_tears_down(self):
+        ended = []
+        self._lifecycle("failed", ended, [])
+        with mock.patch("builtins.print"), self.assertRaises(SystemExit) as cm:
+            run_osm_agent.run("blp_1", "log.csv", "out.csv", "in.csv", "n")
+        self.assertIn("boom", str(cm.exception))
+        self.assertEqual([k for k, _ in ended], ["sessions", "deployments", "packages"])
+
+    def test_download_reports_empty_results(self):
+        self.api({("GET", "/agents/sessions/ses_1/results"): {"data": []}})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertIsNone(run_osm_agent.download_results("ses_1", "/tmp/unused.csv", "in.csv"))
+        self.assertIn("EMPTY", out.getvalue())
 
 
 class TestOutputCompleteness(unittest.TestCase):
@@ -190,35 +180,38 @@ class TestOutputCompleteness(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.input = os.path.join(self.dir, "in.csv")
         with open(self.input, "w") as f:
-            f.write("DATE_TIME,a\n1247008660,0\n1223651115,1\n")   # seams: not monotonic
+            f.write("timestamp,a\n1194200000,0\n1194213745,1\n")
         self.output = os.path.join(self.dir, "out.csv")
 
     def tearDown(self):
         shutil.rmtree(self.dir)
 
     def _write(self, last):
+        """An output whose last window (200 s, the demo's 40 rows at 5 s) ends at `last`."""
         with open(self.output, "w") as f:
-            f.write(f"finish_timestamp,start_timestamp\n1247008705.0,1247008660.0\n{last},0\n")
+            f.write(f"finish_timestamp,start_timestamp\n1194200195.0,1194200000.0\n{last},{last - 195}\n")
 
     def test_output_reaches_the_inputs_last_row(self):
-        self._write("1223651115.0")
+        """Rows after the last whole window are never output: within one window span counts."""
+        self._write(1194213595.0)                 # 150 s short: the 30 rows no window holds
         self.assertTrue(run_osm_agent.output_reaches_end(self.output, self.input))
-        self._write("1223650000.0")
+        self._write(1194210000.0)
         self.assertFalse(run_osm_agent.output_reaches_end(self.output, self.input))
 
     def test_downloads_again_until_complete(self):
         n = {"downloads": 0}
-        test = self
 
-        class _Local:
-            def download(self, filename, out_path):
-                n["downloads"] += 1
-                test._write("1223651115.0" if n["downloads"] >= 3 else "1223650000.0")
+        def fetch(ref, out_path):
+            self.assertEqual(ref, "/api/files/fil_1/content")
+            n["downloads"] += 1
+            self._write(1194213595.0 if n["downloads"] >= 3 else 1194210000.0)
 
-        client = mock.Mock()
-        client.files.local = _Local()
-        with mock.patch.object(run_osm_agent.time, "sleep"), mock.patch("builtins.print"):
-            self.assertTrue(run_osm_agent.download_complete(client, "out", self.output, self.input))
+        api = FakeAPI({("GET", "/agents/sessions/ses_1/results"):
+                       {"data": [{"data": {"filename": "o.csv", "ref": "/api/files/fil_1/content"}}]}})
+        with mock.patch.dict(os.environ, ENV), mock.patch.object(run_osm_agent, "request", api), \
+                mock.patch.object(run_osm_agent, "fetch", fetch), \
+                mock.patch.object(run_osm_agent.time, "sleep"), mock.patch("builtins.print"):
+            self.assertTrue(run_osm_agent.download_results("ses_1", self.output, self.input))
         self.assertEqual(n["downloads"], 3)
 
 
@@ -394,16 +387,25 @@ class TestEvaluate(unittest.TestCase):
 
 
 class TestSampleData(unittest.TestCase):
-    def test_slice_and_sidecar_line_up(self):
-        with open(SAMPLE / "volve_states_opt_slice_04.csv") as f:
+    LOG = SAMPLE / "drilling_volve_f14.csv"
+    LABELS = SAMPLE / "drilling_volve_f14_labels.csv"
+
+    def test_log_and_sidecar_line_up(self):
+        with open(self.LOG) as f:
             data_rows = list(csv.DictReader(f))
-        with open(SAMPLE / "volve_states_opt_slice_04_labels.csv") as f:
+        with open(self.LABELS) as f:
             label_rows = list(csv.DictReader(f))
-        self.assertEqual(len(data_rows), len(label_rows))
-        self.assertEqual([r["DATE_TIME"] for r in data_rows],
-                         [r["DATE_TIME"] for r in label_rows])
-        self.assertEqual({r["label"] for r in label_rows}, STATES)
+        self.assertEqual([r["timestamp"] for r in data_rows],
+                         [r["timestamp"] for r in label_rows])
+        self.assertLessEqual({r["label"] for r in label_rows}, STATES)
         self.assertNotIn("label", data_rows[0])  # inference input carries no labels
+
+    def test_log_is_on_an_exact_grid(self):
+        """The demo keeps sample_rate_interval_tolerance 0.05: a window whose row gaps differ
+        by more than 5% is INVALID_STATE."""
+        with open(self.LOG) as f:
+            ts = [int(r["timestamp"]) for r in csv.DictReader(f)]
+        self.assertEqual({b - a for a, b in zip(ts, ts[1:])}, {5})
 
 
 if __name__ == "__main__":

@@ -349,7 +349,6 @@ class TestHttp(unittest.TestCase):
                 self.assertEqual(atai_http.SOURCE["ATAI_API_ENDPOINT"], env)
 
     def test_dotenv_is_found_upwards_and_the_nearest_wins(self):
-        import run_osm_agent
         with tempfile.TemporaryDirectory() as root:
             deep = os.path.join(root, "skills", "x", "references", "osm_lifecycle")
             os.makedirs(deep)
@@ -360,7 +359,7 @@ class TestHttp(unittest.TestCase):
             cwd = os.getcwd()
             try:
                 os.chdir(deep)
-                self.assertEqual(os.path.realpath(run_osm_agent.find_dotenv()),
+                self.assertEqual(os.path.realpath(atai_http.find_dotenv()),         # from the folder you run in
                                  os.path.realpath(os.path.join(root, "skills", ".env")))
             finally:
                 os.chdir(cwd)
