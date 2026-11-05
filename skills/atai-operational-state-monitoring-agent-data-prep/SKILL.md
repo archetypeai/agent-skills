@@ -39,6 +39,9 @@ Everything here is **local and needs no API key**. The contract itself is in
 measured on the dev deployment (2026-09-30) while building the LARCO washing-machine
 examples (the [quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart),
 and the [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco)).
+The examples follow the same rules with their own `prep/` and `fit/` scripts and their own
+manifest (no `states` or `channels`), so their role files are for their scripts, not this
+skill's pair; to run the skills on LARCO, build the role files here from the recordings.
 
 ## When to Apply
 
@@ -228,7 +231,8 @@ Without `--prepared` (e.g. role files unpacked from an archive), the two checks 
 the prepared data are skipped and everything else runs.
 
 Then: [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md),
-**Path 2** — Optimize → promote → test once with Evals → deliver → score.
+**Path 2** — Optimize → promote → test once with Evals → deliver → score → serve, and the
+library view for a live app.
 
 ## The rules, and what breaks
 
