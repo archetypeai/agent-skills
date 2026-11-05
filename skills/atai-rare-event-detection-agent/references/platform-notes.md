@@ -79,7 +79,24 @@ on it there.
   `predicted`. Windows tile each file from row 0 at `step_size`. Until 2026-10-20 the
   records carried `gold`, `abstained` and a `row_index` instead.
 
-## Bundles and agent runs
+## Packages, deployments and sessions
+
+- **One project holds everything:** an optimization takes its project from the blueprint it
+  searches, so `optimize.py` copies `red` into the project first (`POST
+  /agents/blueprints/red/copy`); promoted blueprints, packages, deployments and sessions follow.
+- **A package carries no values.** It runs the promoted blueprint as it is: the trial's
+  window and step, so delivery and serving are at the trial's step (a bundle could set
+  `step_size: 1`). An output such as `output_embeddings` needs a blueprint of its own (a
+  1-trial optimization at the trial's values plus the switch, promoted).
+- **A batch deployment is ready at once; a serving one in seconds,** and it holds a serving
+  worker until stopped.
+- **Delete in order:** sessions, then the deployment (stopped), then the package; each holds
+  the next. `GET /agents/deployments?package_id=` and `GET /agents/sessions?deployment_id=`
+  find what a rerun replaced; an unknown filter parameter is ignored, not rejected.
+- **Record an id before waiting on it:** a package that fails to build stays `failed`, and
+  only its id lets you delete it.
+
+## Bundles and agent runs (before packages and sessions)
 
 - **A bundle on a promoted blueprint needs only `step_size`** (bundle values override the
   blueprint's); the prototypes, window, metric, `events` and `background` come with it.
@@ -105,7 +122,7 @@ on it there.
   32.5% and 4.0% of the variance and the class means sit where a local encoder's
   prototypes do (to within 0.1 on PC 1).
 
-## Agent serving (production 2026-10-29; first on Dev 2026-10-15 and 16, Staging 2026-10-23)
+## Agent serving (through bundles: production 2026-10-29; first on Dev 2026-10-15 and 16, Staging 2026-10-23)
 
 - **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
   it is cancelled, or released after 20 minutes without a query; a query to a released agent
