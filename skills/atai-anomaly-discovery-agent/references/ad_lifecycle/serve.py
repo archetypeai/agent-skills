@@ -40,8 +40,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (check_auth, create_package, deploy, end as end_one, lifecycle_url, load_dotenv,  # noqa: E402
-                       open_session, request, root, same_deployment, wait_for)
+from atai_http import (check_auth, create_package, deploy, deployment_ready, end as end_one, lifecycle_url,  # noqa: E402
+                       load_dotenv, open_session, package_ready, request, root, same_deployment, wait_for)
 from common import load_manifest, log  # noqa: E402
 
 MODEL = "ad"          # the name a query gives in `model`
@@ -142,11 +142,14 @@ def main(argv=None):
     served, latency = {}, []
     t0 = time.time()
     try:
-        for kind, make in (("package", lambda: create_package(bp["id"], f"{a.name} serving")),
-                           ("deployment", lambda: deploy(ex["package"], "serving")),
-                           ("session", lambda: open_session(ex["deployment"]))):
+        # each id is recorded before waiting on it, so cleanup.py can delete what fails
+        for kind, make, ready in (("package", lambda: create_package(bp["id"], f"{a.name} serving"), package_ready),
+                                  ("deployment", lambda: deploy(ex["package"], "serving"), deployment_ready),
+                                  ("session", lambda: open_session(ex["deployment"]), None)):
             ex[kind] = make()["id"]
             json.dump(ex, open(sf, "w"))
+            if ready:
+                ready(ex[kind])
         log(f"package {ex['package']} · serving deployment {ex['deployment']} · session {ex['session']}")
         wait_for("sessions", ex["session"], "running", "pending")
         for rec, first, n in segs:

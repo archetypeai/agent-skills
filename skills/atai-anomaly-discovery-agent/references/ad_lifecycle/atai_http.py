@@ -152,20 +152,28 @@ def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3):
 
 
 def create_package(blueprint_id, name):
-    """Package one blueprint for the platform and wait until it is ready. A package pins the
+    """Package one blueprint for the platform; it starts `building`. A package pins the
     blueprint and the models it resolves to (the encoder `mdl_…`, the fitted detector `aar_…`)
     and carries no values: it runs the blueprint exactly as promoted. It lands in the
-    blueprint's project, and a deployment needs one."""
-    pkg = request("POST", lifecycle_url("packages"),
-                  {"blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": name})
-    return wait_for("packages", pkg["id"], "ready", "building", every_s=5)
+    blueprint's project, and a deployment needs one. Record its id before `package_ready`, so
+    a build that fails or is interrupted can still be deleted."""
+    return request("POST", lifecycle_url("packages"),
+                   {"blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": name})
+
+
+def package_ready(package_id):
+    return wait_for("packages", package_id, "ready", "building", every_s=5)
 
 
 def deploy(package_id, kind):
-    """Deploy a package as `batch` (ready at once) or `serving` (the agent placed on a worker
-    and loaded, usually within seconds; it holds the worker until stopped)."""
-    dpl = request("POST", lifecycle_url("deployments"), {"package_id": package_id, "kind": kind})
-    return wait_for("deployments", dpl["id"], "ready", "deploying")
+    """Deploy a ready package as `batch` (ready at once) or `serving` (the agent placed on a
+    worker and loaded, usually within seconds; it holds the worker until stopped). It starts
+    `deploying`: record its id before `deployment_ready`."""
+    return request("POST", lifecycle_url("deployments"), {"package_id": package_id, "kind": kind})
+
+
+def deployment_ready(deployment_id):
+    return wait_for("deployments", deployment_id, "ready", "deploying")
 
 
 def open_session(deployment_id, file_id=None):
