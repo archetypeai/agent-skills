@@ -519,9 +519,11 @@ and self-scores against the `_labels.csv` sidecar at the end.
 # Path 2 — Build an AD agent on your own data
 
 > **Status: on projects, packages, deployments and sessions, verified end to end on dev
-> (2026-10-30).** Bundles and agent instances are being retired; the bundle version of these
-> steps was verified on production (2026-10-28/29). Check that your deployment serves the
-> new APIs first: `GET /agents/sessions?limit=1` answers 200, not 404. Built on the Tennessee Eastman Process:
+> (2026-10-30; Steps 1–6 again on 2026-11-04 with a member key in a new project, the same
+> numbers as below).** Only dev serves deployments and sessions so far; production, staging
+> and the free trial still run bundles and agent instances until their next platform release,
+> and the bundle version of these steps was verified on production (2026-10-28/29). Check
+> first: `GET /agents/sessions?limit=1` answers 200, not 404. Built on the Tennessee Eastman Process:
 > [anomaly-discovery-agent-example-tep-quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 > (the whole lifecycle in about 30 minutes, reproduced exactly by a second run from
 > scratch). The scripts use a small stdlib HTTP helper
@@ -898,8 +900,15 @@ embeddings within 4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' p
   blueprint), and leaves it running; otherwise it makes the package, deployment and session
   and deletes all three however the run ends, signals included (their ids stay in
   `out/library_serving_state.json` until then, for `cleanup.py`).
-  Better when an app's agent is up, or on the trial; batch is better for a library of tens of
+  Better when an app's session is up, or on the trial; batch is better for a library of tens of
   thousands of windows.
+
+**Expect, on the sample** (dev, 2026-11-04): the embeddings blueprint's 1-trial optimization
+in 1.5 min, then `library: 570 windows from 10 files, window 48, step 8`, scores 0.971–1.158
+(median 1.006), none over 1.215, PCA 1–2 explaining 7.2% and 6.4%; batch in about 3 min, 10
+sessions 3 at a time. `--serving` gave the same 570 windows and timestamps in 6.6 min, each
+embedding within 0.07% of batch's (cosine ≥ 0.9999997), scores within 8.4×10⁻⁶, the view's
+points within 5.5×10⁻⁴ and the same explained variance.
 
 The script checks each file's window count against the tiling and prints the library's score
 range: they are the windows the detector was fitted on, so they should sit under the
