@@ -12,7 +12,7 @@ description: >
   user has labelled time-series recordings and wants to train, test and deploy an
   OSM agent on them (the next step is `atai-operational-state-monitoring-agent`,
   Path 2), or when an OSM optimization or eval failed or silently never started.
-  Do NOT use for running a maintained OSM bundle on a single CSV
+  Do NOT use for running the platform's OSM demo blueprint on a single CSV
   (`atai-operational-state-monitoring-agent`, Path 1), for client-side embedding
   + KNN (`atai-newton-omega-model-data-prep`), or for video / image / text.
 ---
@@ -50,7 +50,7 @@ and the [full example](https://github.com/archetypeai/operational-state-monitori
   platform time on them
 
 **Do not use this skill when:**
-- You only want to run the maintained Volve bundle on one CSV — that's
+- You only want to run the platform's Volve demo blueprint on one CSV — that's
   [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md), Path 1
 - You're embedding windows yourself over `/query` for a local KNN — use
   [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md)

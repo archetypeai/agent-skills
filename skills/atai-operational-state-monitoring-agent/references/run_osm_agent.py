@@ -1,59 +1,55 @@
 #!/usr/bin/env python3
-"""Run the managed OSM agent end-to-end against a PRE-PACKAGED bundle: upload a
-sensor CSV, resolve the maintained "OSM Quick Start" bundle, run it, poll until
-terminal, download the per-window predictions — and, if the input ships a
-`<input>_labels.csv` ground-truth sidecar, score the run.
+"""Run the platform's OSM demo blueprint end to end, then score the output.
 
-Built on the official Archetype AI python client (`pip install archetypeai`),
-which owns auth, retries, and both API surfaces. Both live under one
-versionless `/api` prefix, so a single client serves both; pass
-ATAI_API_ENDPOINT in any form (see build_client).
+    python3 run_osm_agent.py                         # playground-osm-drilling on the sample slice
+    python3 run_osm_agent.py --csv my_slice.csv      # your own prepared CSV
+    python3 run_osm_agent.py --blueprint-id blp_...  # a blueprint in your project (Path 2's)
 
-No bundle creation, no classifier URI: the platform ships canonical quick-start
-bundles (classifier + windowing already pinned). This script just finds one and
-runs it. It resolves the bundle **by name** so it is portable across
-deployments (the bundle *id* is deployment-specific; the name is not); pass
-`--bundle-id` to skip the lookup.
+By default this copies the platform's demo blueprint `playground-osm-drilling` into a project
+(created on first use, reused after), packages the copy, deploys the package as `batch`,
+runs one session over the input file and downloads its output. The session, deployment
+and package are deleted afterwards; the project and the copy are kept for the next run.
 
-Auth / endpoint come from the environment (a local .env is loaded if present):
-  ATAI_API_KEY        Bearer token (required).
-  ATAI_API_ENDPOINT   Deployment root (required).
+`playground-osm-drilling` is the canonical `osm` blueprint with a six-state classifier the
+platform fitted on Volve drilling telemetry, its windowing (window and step 40) and
+`output_embeddings` pinned. Its input validation keeps the blueprint default
+`sample_rate_interval_tolerance: 0.05`, so the input must be on an exact sample grid: a
+window whose row gaps differ by more than 5% comes back INVALID_STATE.
 
-Usage:
-  python3 run_osm_agent.py                      # default sample slice
-  python3 run_osm_agent.py --csv my_slice.csv
-  python3 run_osm_agent.py --embeddings         # + Newton Omega embedding per window
-  python3 run_osm_agent.py --bundle-id bnd_...  # skip name lookup (pin an id)
+If the input ships a `<input>_labels.csv` sidecar (timestamp, label), the run is scored:
+each window against the label of its end row.
+
+Stdlib only, on the same HTTP helper as Path 2 (osm_lifecycle/atai_http.py). Reads
+ATAI_API_KEY and ATAI_API_ENDPOINT from the environment or the nearest .env.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import os
-import re
 import sys
 import time
+import urllib.request
 
-try:
-    from archetypeai import ArchetypeAI
-except ModuleNotFoundError:  # the only third-party dependency
-    sys.exit("This runner needs the official Archetype AI client:\n"
-             "    pip install -r requirements.txt   (from this directory)\n"
-             "    pip install archetypeai           (or just the package)")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "osm_lifecycle"))
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
+                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
+                       result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "volve_states_opt_slice_04.csv")
+DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "drilling_volve_f14.csv")
 
-# Canonical pre-packaged quick-start bundles, resolved by name (portable across
-# deployments). Query is a substring match, so a PREFIX of these names matches
-# both variants — always select the exact name, never the first result.
-BUNDLE_NAME = "OSM Quick Start (Volve Six State)"
-BUNDLE_NAME_EMBEDDINGS = "OSM Quick Start (Volve Six State, Embeddings)"
+# The platform's OSM demo blueprint, resolved by key: its blp_ id differs per deployment.
+DEMO_BLUEPRINT = "playground-osm-drilling"
+# Only a blueprint in a project can be packaged and deployed, so the demo is copied into
+# this project under this key once, and the copy reused.
+PROJECT = "OSM skill Path 1"
+COPY_KEY = "playground-osm-drilling-skill"
+# The demo's window, for scoring when the blueprint doesn't say.
+DEFAULT_WINDOW = 40
 
-POLL_INTERVAL_S = 15
-TIMEOUT_S = 2 * 60 * 60   # ~2 min uncontended, ~30 min contended; generous margin
 # The platform can report a run completed while its output file is still being written
 # (a known issue), so the output counts as complete only once its last window ends at
 # the input's last row.
@@ -61,101 +57,66 @@ END_SLACK_S = 60
 OUTPUT_WAIT_S = 600
 
 
-def find_dotenv():
-    """The nearest .env from the current folder upwards (else from this script's folder
-    upwards), so one .env at the repo root serves every skill; a closer one still wins."""
-    for base in (os.getcwd(), os.path.dirname(os.path.abspath(__file__))):
-        d = os.path.abspath(base)
-        while True:
-            if os.path.isfile(os.path.join(d, ".env")):
-                return os.path.join(d, ".env")
-            parent = os.path.dirname(d)
-            if parent == d:
-                break
-            d = parent
-    return None
+# --------------------------------------------------------------------------
+# lifecycle: project -> copy -> package -> batch deployment -> session
+# --------------------------------------------------------------------------
+
+def project_id(name: str = PROJECT) -> str:
+    """Your project of that name, created on first use."""
+    found = [p for p in request("GET", f"{project_url()}?limit=1000")["data"] if p["name"] == name]
+    if found:
+        return found[0]["id"]
+    pid = request("POST", project_url(), {"name": name})["id"]
+    print(f"created project {pid} ({name!r})")
+    return pid
 
 
-def load_dotenv(path=None):
-    path = path or find_dotenv()
-    if not path or not os.path.exists(path):
-        return
-    with open(path) as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            if not os.environ.get(key.strip()):  # unset, or set but empty
-                os.environ[key.strip()] = value.strip()
+def demo_copy(pid: str) -> dict:
+    """The project's copy of the demo blueprint, copied on first use. Copying needs only the
+    right to modify the project. A key in a project resolves only with ?project_id=."""
+    found = request("GET", f"{agents()}/blueprints?project_id={pid}&key={COPY_KEY}")["data"]
+    if found:
+        return found[0]
+    bp = request("POST", f"{agents()}/blueprints/{DEMO_BLUEPRINT}/copy",
+                 {"project_id": pid, "blueprint_key": COPY_KEY})
+    print(f"copied {DEMO_BLUEPRINT} into {pid} as {COPY_KEY} ({bp['id']})")
+    return bp
 
 
-def api_root(endpoint):
-    """Return the deployment root, with any /api or /vX.Y suffix removed.
-
-    Accept every form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
-    and the console shows it bare.
-    """
-    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
-    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+def blueprint_window(blueprint_id: str) -> int:
+    """The window the blueprint runs at, for the steady-state view when scoring."""
+    doc = request("GET", f"{agents()}/blueprints/{blueprint_id}").get("document") or {}
+    return int((doc.get("values") or {}).get("window_size") or DEFAULT_WINDOW)
 
 
-def build_client(api_key, endpoint):
-    """The official client, pointed at the deployment's /api prefix.
+def upload(path: str) -> str:
+    """Upload under a timestamped name and return the file id.
 
-    Both API surfaces live under one versionless prefix — /api/agents and
-    /api/files — so a single client serves both. The client uses api_endpoint
-    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
-    """
-    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
-
-
-def resolve_bundle(client, name):
-    """Find the pre-packaged bundle id for an EXACT name.
-
-    `query` is a case-insensitive substring match over name and id, so a prefix
-    of a bundle name returns every variant — querying "OSM Quick Start" returns
-    the Embeddings bundle too, and it sorts newest-first. Taking the first row
-    would silently run the wrong bundle (314 MB of embeddings instead of a
-    221 KB prediction file), so match the name exactly and prefer the canonical
-    (platform-published) bundle over any same-named org bundle.
-    """
-    rows = client.agents.bundles.list(query=name, limit=50).get("data", [])
-    exact = [b for b in rows if b.get("name") == name]
-    if not exact:
-        seen = [b.get("name") for b in rows]
-        sys.exit(f"no bundle named {name!r} found (query returned {seen}). "
-                 f"Is it published in this deployment? Pass --bundle-id to "
-                 f"pin one, or contact support@archetypeai.dev.")
-    for bundle in exact:
-        if bundle.get("is_canonical"):
-            return bundle["id"]
-    return exact[0]["id"]
+    File ids ARE filenames, so re-uploading a name replaces the record and orphans the
+    object any in-flight run already resolved."""
+    stem = os.path.basename(path).rsplit(".", 1)[0]
+    return upload_file(path, f"{stem}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv")["file_id"]
 
 
-def watch(client, agent_id):
-    """Poll until terminal, echoing new audit events as they arrive.
+def poll(session_id: str, timeout_s: int = 2 * 3600, interval_s: int = 5) -> dict:
+    """The session, once terminal. A session's `status` is authoritative and reaches
+    completed, failed or cancelled, with `error` saying why."""
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        ses = request("GET", lifecycle_url("sessions", session_id))
+        if ses.get("status") != last:
+            last = ses.get("status")
+            print(f"  {last}")
+        if last in TERMINAL:
+            return ses
+        time.sleep(interval_s)
+    return {"status": "timeout"}
 
-    Deliberately NOT client.agents.instances.wait_until_done(): that returns as
-    soon as `status` is terminal, and `status` is not trustworthy here. A run
-    whose output exists can report `failed` (the job poller flakes), so the
-    caller must judge success from /results, not from this return value.
-    """
-    deadline = time.time() + TIMEOUT_S
-    seen = set()
-    status = "running"
-    while status == "running" and time.time() < deadline:
-        status = client.agents.instances.get(agent_id).get("status")
-        for event in client.agents.instances.get_events(agent_id).get("data", []):
-            marker = f"{event.get('created_at')}{event.get('message')}"
-            if marker not in seen:
-                seen.add(marker)
-                print(f"  [{event.get('level', 'info')}] {event.get('created_at', '')}  "
-                      f"{event.get('message', '')}")
-        if status == "running":
-            time.sleep(POLL_INTERVAL_S)
-    return status
+
+def last_events(session_id: str, n: int = 5) -> list:
+    """The session's latest events, newest first."""
+    return request("GET", lifecycle_url("sessions", session_id) + "/events?limit=" + str(n)).get("data", [])
 
 
 # csv.reader caps one field at 128 KB by default. An `embedding_{variate}`
@@ -198,34 +159,17 @@ def last_window_end(output_csv):
 
 
 def output_reaches_end(output_csv, input_csv):
-    """Whether the output's last window ends within END_SLACK_S of the input's last row.
-    None when the timestamps aren't epoch numbers (no check then)."""
+    """Whether the output's last window ends at the input's last row: within one window span
+    (an output row's finish - start; rows after the last whole window are never output) plus
+    END_SLACK_S. None when the timestamps aren't epoch numbers (no check then)."""
     try:
         header, row = tail_row(output_csv)
         finish = float(row[header.index("finish_timestamp")])
+        span = finish - float(row[header.index("start_timestamp")])
         end = float(tail_row(input_csv)[1][0])
     except (ValueError, IndexError, StopIteration):
         return None
-    return end - finish <= END_SLACK_S
-
-
-def download_complete(client, filename, output_csv, input_csv):
-    """Download the output, again every POLL_INTERVAL_S while it ends before the input does."""
-    deadline = time.time() + OUTPUT_WAIT_S
-    while True:
-        client.files.local.download(filename, output_csv)
-        done = output_reaches_end(output_csv, input_csv)
-        if done is not False:
-            return done
-        if time.time() > deadline:
-            print(f"  WARNING output still ends early {OUTPUT_WAIT_S // 60} min after the run finished: "
-                  f"last window {last_window_end(output_csv)}, "
-                  f"input ends {tail_row(input_csv)[1][0]}")
-            return False
-        print(f"  platform: finished; output still being written "
-              f"(last window {last_window_end(output_csv)}, "
-              f"input ends {tail_row(input_csv)[1][0]})")
-        time.sleep(POLL_INTERVAL_S)
+    return end - finish <= max(span, 0) + END_SLACK_S
 
 
 ARTIFACT_WAIT_S = 600          # how long to wait for artifacts after a run reports completed
@@ -247,7 +191,7 @@ def artifact_status(item):
 def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
     """The run's outputs, once every one reports complete.
 
-    Needs nothing but the agent id -- unlike a content check, which has to
+    Needs nothing but the session id -- unlike a content check, which has to
     compare the output against the input and so only works for the client that
     produced the run.
     """
@@ -269,92 +213,142 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
         time.sleep(15)
 
 
+def fetch(ref: str, out_path: str) -> None:
+    req = urllib.request.Request(result_url(ref))
+    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
+        fh.write(resp.read())
+
+
+def download_results(session_id: str, out_path: str, input_csv: str) -> str | None:
+    """The session's output, downloaded again every 15 s while it ends before the input does."""
+    items = complete_results(
+        lambda: request("GET", lifecycle_url("sessions", session_id) + "/results").get("data", []))
+    if not items:
+        print("  /results is EMPTY — the session completed but produced nothing.")
+        return None
+    # Each item nests its fields one level down: {id, port_name, data: {ref, filename,
+    # num_bytes, ...}}. `ref` is a root path, /api/files/<fil_…>/content, which already
+    # carries /api: result_url resolves it against the deployment root.
+    inner = items[0].get("data") or {}
+    if not inner.get("ref"):
+        print(f"  results present but no ref in the entry: {items[0]!r}")
+        return None
+    print(f"  results ({len(items)}): {inner.get('filename', '?')}  ({inner.get('num_bytes', '?')} bytes)")
+    deadline = time.time() + OUTPUT_WAIT_S
+    while True:
+        fetch(inner["ref"], out_path)
+        if output_reaches_end(out_path, input_csv) is not False:
+            return out_path
+        if time.time() > deadline:
+            print(f"  WARNING output still ends early {OUTPUT_WAIT_S // 60} min after the run finished: "
+                  f"last window {last_window_end(out_path)}, input ends {tail_row(input_csv)[1][0]}")
+            return out_path
+        print(f"  finished; output still being written (last window {last_window_end(out_path)}, "
+              f"input ends {tail_row(input_csv)[1][0]})")
+        time.sleep(15)
+
+
+def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: str) -> str | None:
+    """Package the blueprint, deploy it as batch, run one session over the file, download its
+    output; then delete the session, deployment and package, which each hold the next."""
+    t0 = time.time()
+    pkg = dpl = ses = None
+    try:
+        pkg = create_package(blueprint_id, name)
+        package_ready(pkg["id"])
+        print(f"package {pkg['id']} ready ({time.time() - t0:.0f} s)")
+        dpl = deploy(pkg["id"], "batch")
+        deployment_ready(dpl["id"])
+        print(f"batch deployment {dpl['id']} ready")
+        ses = open_session(dpl["id"], [file_id])
+        print(f"session {ses['id']}")
+        done = poll(ses["id"])
+        if done.get("status") != "completed":
+            for ev in last_events(ses["id"]):
+                print(f"  event: {ev}")
+            sys.exit(f"session did not complete: {done.get('status')} {done.get('error') or ''}")
+        print(f"  completed ({time.time() - t0:.0f} s from packaging)")
+        return download_results(ses["id"], out_path, input_csv)
+    finally:
+        for kind, obj in (("sessions", ses), ("deployments", dpl), ("packages", pkg)):
+            if obj:
+                end(kind, obj["id"])
+        print("deleted the session, deployment and package (the project and blueprint stay)")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=DEFAULT_CSV, help="input CSV to run inference on")
-    parser.add_argument("--embeddings", action="store_true",
-                        help="run the Embeddings bundle: adds one 768-d "
-                             "embedding_{variate} column per channel (~1,400x "
-                             "the output size)")
-    parser.add_argument("--bundle-id",
-                        help="skip name resolution and run this bundle id")
-    parser.add_argument("--window-size", type=int, default=16,
-                        help="the bundle's window size, for scoring only")
+    parser.add_argument("--labels", default=None,
+                        help="ground-truth sidecar (default: <csv stem>_labels.csv)")
+    parser.add_argument("--blueprint-id", default=None,
+                        help="run this blueprint (blp_…, in one of your projects, e.g. Path 2's "
+                             f"promoted one) instead of the project's copy of {DEMO_BLUEPRINT}")
+    parser.add_argument("--project", default=PROJECT,
+                        help=f"the project to copy {DEMO_BLUEPRINT} into (default {PROJECT!r})")
+    parser.add_argument("--window-size", type=int, default=None,
+                        help="window for the steady-state view when scoring "
+                             f"(default: the blueprint's own, {DEFAULT_WINDOW} for the demo)")
+    parser.add_argument("--name", default="OSM Path 1", help="name of the package built for the run")
     parser.add_argument("--output", default="osm-output.csv",
                         help="local path to save the classified-windows CSV")
+    parser.add_argument("--score-only", metavar="OUTPUT_CSV", default=None,
+                        help="skip the platform and score an output you already have")
     args = parser.parse_args()
 
+    labels = args.labels or args.csv.rsplit(".", 1)[0] + "_labels.csv"
+
+    if args.score_only:
+        if not os.path.exists(labels):
+            sys.exit(f"no label sidecar at {labels}")
+        evaluate(args.score_only, labels, args.window_size or DEFAULT_WINDOW)
+        return
+
     load_dotenv()
-    api_key = os.environ.get("ATAI_API_KEY")
-    endpoint = os.environ.get("ATAI_API_ENDPOINT")
-    if not api_key:
-        sys.exit("ATAI_API_KEY is not set")
-    if not endpoint:
-        sys.exit("ATAI_API_ENDPOINT is not set")
-    client = build_client(api_key, endpoint)
+    check_auth()
 
-    # 1. Upload the input CSV. Source connectors use the returned file_id (the
-    #    filename), NOT the fil_ uid — client.agents.bundles.run() builds the
-    #    data ref for us.
-    print(f"uploading {args.csv} ...")
-    uploaded = client.files.local.upload(args.csv)
-    file_id = uploaded["file_id"]
-    print(f"  file_id={file_id}  file_uid={uploaded.get('file_uid')}")
-
-    # 2. Resolve the pre-packaged bundle. By name (portable) unless an id is
-    #    pinned. The bundle already pins the classifier and windowing.
-    name = BUNDLE_NAME_EMBEDDINGS if args.embeddings else BUNDLE_NAME
-    if args.bundle_id:
-        bundle_id = args.bundle_id
-        print(f"using bundle {bundle_id}")
+    if args.blueprint_id:
+        blueprint_id = args.blueprint_id
+        print(f"blueprint {blueprint_id}")
     else:
-        bundle_id = resolve_bundle(client, name)
-        print(f"resolved {name!r} -> {bundle_id}")
+        pid = project_id(args.project)
+        blueprint_id = demo_copy(pid)["id"]
+        print(f"blueprint {blueprint_id} ({COPY_KEY}, the copy of {DEMO_BLUEPRINT} in {pid})")
+    window = args.window_size or blueprint_window(blueprint_id)
 
-    # 3. Run the bundle. No sink, so the runner writes one output per input.
-    print("starting agent run ...")
-    agent = client.agents.bundles.run(bundle_id, source=[file_id])
-    agent_id = agent["id"]
-    print(f"  agent_id={agent_id}  status={agent.get('status')}")
+    print(f"uploading {args.csv}")
+    file_id = upload(args.csv)
+    print(f"  file_id={file_id}")
 
-    # 4. Poll until terminal, streaming audit events.
-    status = watch(client, agent_id)
+    if not run(blueprint_id, file_id, args.output, args.csv, args.name):
+        sys.exit("no results to score")
+    print(f"  saved {args.output}")
+    summarize(args.output)
 
-    # 5. Fetch results and download the output CSV. Checked even on
-    #    status=failed: a flaky job poller can mark a successful run failed —
-    #    if the output is there, the run succeeded.
-    outputs = complete_results(
-        lambda: client.agents.instances.get_results(agent_id).get("data", []))
-    if not outputs:
-        sys.exit(f"run produced no output: status={status}")
-    if status != "completed":
-        print(f"  note: status={status} but output exists — treating as succeeded")
-    print(f"results ({len(outputs)}):")
-    for output in outputs:
-        inner = output["data"]
-        print(f"  {inner['filename']}  ({inner['num_bytes']} bytes)")
+    if os.path.exists(labels):
+        evaluate(args.output, labels, window)
+    else:
+        print(f"  no labels at {labels} — skipping scoring")
 
-    filename = outputs[0]["data"]["filename"]
-    complete = download_complete(client, filename, args.output, args.csv)
-    print(f"saved output to {args.output}" + {True: " (complete: its last window ends at the input's end)",
-                                              False: " (INCOMPLETE: rerun to download again)",
-                                              None: ""}[complete])
 
-    # 6. If the input ships a ground-truth sidecar (the sample slice does),
-    #    score the predictions: each window is judged against the label of its
-    #    end row (the row its timestamp points at).
-    labels_csv = args.csv.replace(".csv", "_labels.csv")
-    if os.path.exists(labels_csv):
-        evaluate(args.output, labels_csv, args.window_size)
+def summarize(pred_csv):
+    """Windows, invalid windows and predicted states, so an unlabelled run says something."""
+    rows = list(csv.DictReader(open(pred_csv)))
+    states = {}
+    for r in rows:
+        states[r["predicted_state"]] = states.get(r["predicted_state"], 0) + 1
+    print(f"  {len(rows)} windows, {states.get('INVALID_STATE', 0)} invalid; predicted: "
+          + ", ".join(f"{s} {n}" for s, n in sorted(states.items(), key=lambda x: -x[1])))
 
 
 def evaluate(pred_csv, labels_csv, window):
-    import csv
     truth_rows = list(csv.DictReader(open(labels_csv)))
-    truth = {int(float(r["DATE_TIME"])): r["label"] for r in truth_rows}
+    tcol = next(iter(truth_rows[0]))          # the timestamp column: DATE_TIME, timestamp, ...
+    truth = {int(float(r[tcol])): r["label"] for r in truth_rows}
 
     # steady windows: all rows one label, no timestamp seams inside
-    ts = [int(float(r["DATE_TIME"])) for r in truth_rows]
+    ts = [int(float(r[tcol])) for r in truth_rows]
     labs = [r["label"] for r in truth_rows]
     steady_ts = set()
     for i in range(len(ts) - window + 1):
