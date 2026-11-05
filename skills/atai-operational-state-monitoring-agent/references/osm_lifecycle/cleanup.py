@@ -9,6 +9,8 @@ From the packages recorded in <out>/:
   app_serving_state.json   a serving app's, if its bridge was killed before it could delete
                            them (the bridge pattern in SKILL.md writes this file).
   library_state.json       library_embeddings.py's (its embeddings blueprint is kept for a rerun).
+  library_serving_state.json  library_embeddings.py --serving's serving deployment, if it was
+                           killed before it could delete it.
   serve_state.json         serve.py's, if it was killed before it could delete them. A
                            serving deployment holds a serving worker until it is stopped.
   delivery/runs.json       deliver.py's.
@@ -35,7 +37,7 @@ from atai_http import check_auth, end, lifecycle_url, list_all, load_dotenv, req
 from common import log  # noqa: E402
 
 STATES = {"app": "app_serving_state.json", "library": "library_state.json", "serving": "serve_state.json",
-          "delivery": os.path.join("delivery", "runs.json")}
+          "library serving": "library_serving_state.json", "delivery": os.path.join("delivery", "runs.json")}
 KINDS = ("sessions", "deployments", "packages")
 
 
@@ -101,7 +103,7 @@ def main(argv=None):
         if k % 25 == 0 or k == len(todo):
             json.dump({"deleted": sorted(gone)}, open(done_path, "w"), indent=1)
             log(f"deleted {k}/{len(todo)}")
-    for what in ("app", "serving"):       # delivery/runs.json stays: it records the outputs' sessions
+    for what in ("app", "serving", "library serving"):   # delivery/runs.json stays: it records the outputs' sessions
         if found[what].get("package"):
             os.remove(os.path.join(a.out, STATES[what]))
     lib = found["library"]

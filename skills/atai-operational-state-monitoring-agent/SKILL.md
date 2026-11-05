@@ -45,7 +45,7 @@ either.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), stdlib only, on Path 2's HTTP helper | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~40 s on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | **on packages, deployments and sessions: verified on dev, 2026-11-04**; production doesn't serve `playground-osm-drilling` or sessions yet (the bundle version was verified there) | **on packages, deployments and sessions: verified on dev, 2026-10-30**; production doesn't serve deployments and sessions yet (the bundle version was verified on production 2026-10-28/29, staging and dev, identical results) |
+| status | **on packages, deployments and sessions: verified on dev, 2026-11-04**; production doesn't serve `playground-osm-drilling` or sessions yet (the bundle version was verified there) | **on packages, deployments and sessions: verified on dev, 2026-10-30 and 2026-11-04**; production doesn't serve deployments and sessions yet (the bundle version was verified on production 2026-10-28/29, staging and dev, identical results) |
 
 Both paths' outputs share one schema, so the output schema and scoring below apply to both.
 
@@ -298,19 +298,31 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 # Path 2 — Build an OSM agent on your own data
 
 > **Status: on projects, packages, deployments and sessions, verified end to end on dev
-> (2026-10-30).** Bundles and agent instances are being retired; check that your deployment
-> serves the new APIs first (`GET /agents/sessions?limit=1` answers 200, not 404). The bundle
+> (2026-10-30, and again 2026-11-04 with a member key in a new project: validation 0.7920, test
+> 0.8463, delivery 0.7431, 367/367 served as batch, the same library view).** Only dev serves
+> deployments and sessions so far; production, staging and the free trial still run bundles
+> and agent instances until their next platform release. Check first: `GET
+> /agents/sessions?limit=1` answers 200, not 404. The bundle
 > version was verified end to end on production, staging, Tokyo (2026-10-01) and dev
 > (2026-09-30), with identical results on all four: the prep skill's sample below scored the
 > same at every step (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
 > [operational-state-monitoring-agent-example-larco-quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart)
 > (19 short cycles) and the
-> [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
+> [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study), which follow the same steps with their own scripts and role-file
+manifest (the skill's scripts read only the data-prep skill's). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
 > Steps 5–6 (agent serving and the library view) are verified on production (2026-10-29), on
 > the sample below and on the LARCO quickstart; first built on Dev (2026-10-16 to 10-18) and
 > Staging (2026-10-24), all through bundles.
+> Steps 0–6 also ran on the free trial, through bundles (`try.archetypeai.app`, 2026-10-31) on a
+> second, non-machine dataset: UCI HAPT human activity (a waist-worn phone, 6 channels at 50 Hz,
+> 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
+> delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
+> `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
+> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
+> queued job already reports `running`, so with large library files that wait counts against
+> the trial's 2-hour job limit; `--serving` takes one serving session instead.
 >
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
@@ -610,6 +622,7 @@ production with every state as batch's and a 448 ms median.
 
 ```sh
 python library_embeddings.py --roles $R --out out                       # one batch run per library file, then the view
+python library_embeddings.py --roles $R --out out --serving             # or through a serving session, a query per window
 python library_embeddings.py --roles $R --out out --view                # the view again, no platform calls
 python library_embeddings.py --roles $R --out out --view-dir ../my-app/static
 ```
@@ -623,6 +636,33 @@ an embeddings blueprint (a 1-trial optimization at the promoted trial's point wi
 same encoder and the same windows (the blueprint's window and step). Each output adds an
 `embedding_<channel>` column per channel (768 values, a JSON list in the CSV). One session per
 library file, so each output's state is its file's.
+
+**Batch is the default; a serving session gives the same points.** A serving deployment of
+the same embeddings blueprint returns the same `embedding_<channel>` lists in every `/query`
+answer (what a live app draws each answer with). `--serving` sends it the library's windows
+one per query, cut here as the platform cuts them: from each file's row 0 at the blueprint's
+step, leaving out windows that cross a join between the file's pieces. With `--session ses_…`
+it uses a session already running the embeddings blueprint (a live app's; it checks the
+package's blueprint) and leaves it running; otherwise it packages the embeddings blueprint,
+deploys it as serving, opens a session, and deletes all three however the run ends, signals
+included, with their ids in `out/library_serving_state.json` until then for `cleanup.py`.
+- **Batch:** the platform cuts the windows, the outputs are files you can rebuild the view from,
+  and runs are byte-identical run to run. Each file is a session, holding a job slot.
+- **Serving:** one serving session for the whole library, so no job slots, no queue and, on
+  the free trial, no 2-hour cap. 4 queries at a time, SKAB's 1,950 windows took about 5 minutes. The
+  cutting is the client's: when it matters, check the window count against one batch run.
+- **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
+  windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. On this skill's sample (dev,
+  2026-11-04, an OSM embeddings blueprint): all 1,600 windows with batch's timestamps, each
+  embedding within 0.04% of batch's (cosine ≥ 0.9999999), the same view (84% nearest their
+  own state's centre); 6.0 min served, against about 2 min for 4 batch sessions running at once.
+
+**A rerun resumes,** and starts nothing when every file already has its output: it only
+redraws the view, keeping the route the outputs were made by. **For another blueprint it
+stops** rather than mix two models' windows in one view: it checks `out/library_state.json`
+and, in case that was moved, `out/library_embeddings.json` too. Move both, and
+`out/library_embeddings/`, aside first.
 
 **Draw the two directions that separate the states, not the two largest.** The two largest
 directions of spread (PCA 1–2) follow the data's variance, which needn't be the states': on
@@ -645,10 +685,10 @@ mean and the two projection rows). A served answer with embeddings lands in the 
 coordinates: `(e / |e| − mean) · row`, with `e` the channels' embeddings concatenated in the
 manifest's order. It is a cross-section, not the model: the kNN decides in every dimension.
 
-## A live app on a serving agent
+## A live app on a serving session
 
 What the LARCO apps (`app-serving/` in both examples: a browser, a local MQTT broker, a
-replayer and a bridge) taught, for any app that streams a machine's windows to a serving agent:
+replayer and a bridge) taught, for any app that streams a machine's windows to a serving session:
 
 - **One bridge holds the key.** The browser never sees `ATAI_API_KEY`: a local process
   packages a blueprint (Step 6's embeddings blueprint, to draw each answer), deploys it as
@@ -673,6 +713,21 @@ replayer and a bridge) taught, for any app that streams a machine's windows to a
 - **Draw the library first:** a dot per window and a density per state, in the state's colour,
   a label on each cloud, then the trail of the latest answers on top. The view ships with the
   app; rebuild it (`--view`) only after promoting another model.
+- **Match the view's states by name.** `library-view.json` lists the states in the
+  manifest's order (alphabetical unless `build_roles.py` was given `--states`), and each
+  window's state in `library-view.bin` is an index into that list. An app that shows its
+  states in another order must map them by name, or every cloud is drawn in a neighbour's
+  colour.
+- **Replay a recording's segments in order, a window at a time within each.** A recording
+  split at gaps (or at dropped states) becomes several delivery files, some only a few
+  windows long. Play them back to back as one session, but cut windows per file, so no window
+  spans a seam the agent never saw in training.
+- **Publish each window's channel means for the page, not only its level (RMS about the
+  mean), when states are postures.** This is what the bridge publishes for the page to draw;
+  the agent gets the raw window and already tells the postures apart. The level shows moving
+  from still, but not sitting from standing from lying. The direction of gravity, the
+  accelerometer's mean, does, and it's what a viewer needs to see why the agent called a
+  still state (on HAPT, a phone drawn turned by the mean).
 
 ## Path 2 pitfalls
 
@@ -768,7 +823,7 @@ skills/atai-operational-state-monitoring-agent/
 │       ├── deliver.py          Step 3: package → batch deployment → session(s) → outputs matched by time
 │       ├── score.py            Step 4: last-record pairing against the held-back labels
 │       ├── serve.py            Step 5: package → serving deployment → session, a query per window, against step 3
-│       ├── library_embeddings.py Step 6: the library's embeddings in batch → a 2-D discriminant view
+│       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a 2-D discriminant view
 │       ├── cleanup.py          the sessions, deployments and packages of steps 3, 5 and 6 (and a serving app's), from out/
 │       └── requirements.txt    numpy, pandas, pyarrow (score.py, serve.py, library_embeddings.py)
 └── tests/

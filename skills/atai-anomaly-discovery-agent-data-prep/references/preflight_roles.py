@@ -76,9 +76,12 @@ def check_file(roles, m, role, entry, rep, problems):
         problems.append(f"{entry['labels']}: labels other than {list(LABELS)}")
     if "label" in d and not (d.label.to_numpy() == side.label.to_numpy()).all():
         problems.append(f"{entry['file']}: `label` disagrees with its sidecar")
-    boundary = np.r_[False, side.recording.to_numpy()[1:] != side.recording.to_numpy()[:-1]]
     steps = np.diff(t)
-    inside, seams = steps[~boundary[1:]], steps[boundary[1:]]
+    # a boundary is a change of recording, or the exact seam build_roles.py puts between the
+    # segments of one recording that prepare.py split at a gap
+    seam_ms = int(m["seam_s"] * 1000)                 # as build_roles.py computes it
+    boundary = (side.recording.to_numpy()[1:] != side.recording.to_numpy()[:-1]) | (steps == seam_ms)
+    inside, seams = steps[~boundary], steps[boundary]
     if not (inside == m["step_ms"]).all():
         problems.append(f"{entry['file']}: not an exact {m['step_ms']} ms grid inside a recording")
     if (seams <= 1.05 * m["step_ms"]).any():
@@ -140,8 +143,13 @@ def main(argv=None):
 
     stats = json.load(open(os.path.join(a.roles, m["zscore_stats"])))
     lib = sorted({f["recording"] for f in m["library"]})
-    rep.line("PASS" if sorted(stats["recordings"]) == lib else "FAIL", "z-score from library",
-             f"fitted on {len(stats['recordings'])} recordings, the library has {len(lib)}")
+    ok = sorted(stats["recordings"]) == lib
+    detail = f"fitted on {len(stats['recordings'])} recordings, the library has {len(lib)}"
+    if conds := stats.get("conditions"):     # --scale-by: each condition's own library recordings, no others
+        per = sorted(r for v in conds.values() for r in v["recordings"])
+        ok = ok and per == lib and all(stats["condition_of"].get(r) == c for c, v in conds.items() for r in v["recordings"])
+        detail += f"; per '{stats['by']}', {len(conds)} conditions"
+    rep.line("PASS" if ok else "FAIL", "z-score from library", detail)
 
     if a.index:
         idx = read_index(a.index)

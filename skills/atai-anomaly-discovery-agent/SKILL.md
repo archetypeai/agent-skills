@@ -534,6 +534,8 @@ role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals
                  validation
                                                                                  └──► 5 serve (/query, Dev): a window per
                                                                                       query, checked against step 3
+                                                                                 └──► 6 library view: the fit's windows
+                                                                                      embedded again, for a live app
 ```
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
@@ -657,27 +659,35 @@ each output is downloaded again until its last window reaches the input's end, a
 network outage is waited out instead of failing every file. **Expect, on the sample**
 (~13 min): `2 of 2 delivery files have complete outputs`.
 
-- **If a run hits a time limit** (`DeadlineExceeded`: the free trial stops a run after 2
-  hours, with no output), a plain rerun hits it again. Two ways through, both resumable:
+- **A run's time limit** (`DeadlineExceeded`: the free trial stops a run after 2 hours, with
+  no output). A plain rerun hits it again. Two ways through, both resumable:
   - `--max-windows-per-run N`: the same windows, in runs of at most N. Each run starts on a
     multiple of the step and overlaps the next by window − step rows, and the outputs are
-    joined, so the scores equal one run's. Off by default; production needs it only for
-    recordings far longer than the sample's.
+    joined, so the scores equal one run's. **On the free trial it is on by default**, sized
+    to 40–60 min a run at the rates below: 38,400 ÷ channels windows (4,800 at 8 channels,
+    1,100 at 33), so a long file is split before it starts, not after a run has spent 2 hours
+    and died. Split runs' files are named by row range, so a rerun at another size never
+    reuses a different split's files. The earlier split's runs are forgotten, and any still
+    going is cancelled first, so it doesn't hold a free-trial job slot for up to 2 hours;
+    `cleanup.py` deletes them with the bundle.
+    `--max-windows-per-run 0` turns it off; elsewhere it is off unless you set it.
   - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
     measured in steps of 8 samples.
 
-  **On the free trial** (2026-10-30, CPU, 3 runs at once): the sample at step 1 stopped at 2 h
-  on both files. With `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min
-  in all, and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min.
+  **On the free trial** (CPU): a run gets through roughly 640–1,400 channel-windows a minute.
+  On 2026-10-30, 3 runs at once, the sample (33 channels) at step 1 stopped at 2 h on both
+  files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min in all,
+  and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min. On
+  2026-10-31, SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped
+  at 2 h, and in 4 runs of at most 3,000 (37 min each, 2 at a time) it finished in 75 min.
   Queued runs report `running` too; whether queue time counts toward the limit is not known,
   so keep `--parallel` at 3.
 - **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works
   on a promoted blueprint too: per channel, an `embedding_<channel>` column (768-d) and an
   `embedding_<channel>_features` column (one value per feature), each cell a JSON list in the
-  CSV. Nothing else returns embeddings: a trial, an eval (predictions only) and the promoted
-  detector (`aar_…`, no download route) don't. To plot where the fit's normal sits, run the
-  library files through the promoted blueprint in batch at the trial's `step_size` with
-  `output_embeddings: true`: the same windows and encoder as the fit, so the same embeddings.
+  CSV. A serving agent's answers carry them too (Step 5). A trial, an eval (predictions only)
+  and the promoted detector (`aar_…`, no download route) don't. To plot where the fit's normal
+  sits, recompute the library's: Step 6.
 - **At scale, the bundle lists its own runs.** `deliver_state.json` keeps each file's last
   attempt; `GET /agents/instances?bundle_id=<bnd_…>` also finds the attempts a rerun
   replaced (734 agents behind the TEP full example's 714 files). `cleanup.py` uses both.
@@ -691,8 +701,10 @@ python score.py --roles $R --out out
 Each window is paired with the held-back label of its last row; windows the platform marked
 invalid are left out and counted. At the trial's threshold, and at one set to a 1%
 false-alarm rate on the calibration file's scores, per incident type: **window detection**,
-**detected** (3 consecutive windows over the threshold at or after onset), **delay** to that
-detection, and **AUROC** against every normal window; overall, the **false-alarm rate**.
+**detected** (3 consecutive windows over the threshold at or after onset, never across a gap
+in the recording), **delay** to that detection in operating hours (a gap counts as one
+sample, as in `serve.py`), and **AUROC** against every normal window; overall, the
+**false-alarm rate**.
 
 ```
 delivery: 1 files, 6,391 windows scored; left out: 470 invalid, 0 with no label at finish time
@@ -715,6 +727,16 @@ calibration: 4,565 known-normal windows; 1.51% over the trial's threshold; thres
 - **Step changes are caught within an hour, slow faults in hours** (IDV 13's drift 2.35 h).
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
+- **The calibrated threshold is a 1% operating point only on data like the calibration
+  file.** That file is validation's normal-only recordings, so it inherits their operating
+  conditions. On SKAB (2026-10-31) they covered one of the pump's three flow levels: 0.70% of
+  calibration windows crossed the trial's 1.604, so "calibrating" lowered the threshold to
+  1.562, and the delivery's own normal windows then crossed it **4.94%** of the time (3.47% at
+  the trial's). On TEP, whose validation normal covers the plant's one operating point, the
+  calibrated threshold held: 0.38%. `score.py` prints a note when the delivery's normal windows
+  cross the calibrated threshold more than twice as often as `--far` (at least 10 windows).
+  The fix is in the role files: give validation normal-only recordings from every operating
+  condition the delivery will see.
 
 ## Step 5 — Serve it
 
@@ -732,6 +754,10 @@ stopped; free-trial accounts serve on CPU only, so answers can be slower than be
    a blueprint's): `POST /agents/bundles {"blueprint": "<key>", "name": …, "values": {"step_size": 1}}`.
    No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
    supplies the `atai-records` serving source and sink itself, in place of the CSV ones.
+   **With `"output_embeddings": true` in those values**, each answer also carries
+   `embedding_<channel>` (768 values per channel): what a live app needs to place each window
+   among the library's (Step 6). SKAB's app (8 channels, free trial, 2026-10-31) got all 8 in
+   every answer at a 0.25 s median.
 2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
    wait until the agent's `status` is `running`.
 3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
@@ -774,11 +800,64 @@ For stored data, deliver in batch.
 
 - **A query must hold the whole window.** The agent keeps nothing between queries: rows 1–48
   of a run, sent alone, answer exactly as batch's second window. Keep the buffer client-side.
-- **Replay one recording at a time.** The served agent numbers the samples itself and can't
-  see a time gap, so a window across two joined recordings is scored as if it were
-  continuous, where batch marks it invalid.
+- **Replay one recording at a time, and one gap-free piece at a time.** The served agent
+  numbers the samples itself and can't see a time gap, so a window across two joined
+  recordings, or across a gap inside one recording, is scored as if it were continuous,
+  where batch marks it invalid. `serve.py` splits each recording wherever a step exceeds the
+  sample interval by more than 5%, starts a fresh window buffer after each gap, and measures
+  alarm times in operating hours, with the gap counted as one sample.
 - **An idle agent is released** after 20 minutes without a query, and a query to it answers
   409: start a new one.
+
+## Step 6 — The library view, for a live app
+
+```sh
+python library_embeddings.py --roles $R --out out                     # batch: one run per library file
+python library_embeddings.py --roles $R --out out --serving           # or a serving agent, a query per window
+python library_embeddings.py --roles $R --out out --serving --agent agt_…   # one already running (a live app's)
+python library_embeddings.py --roles $R --out out --view --view-dir ../my-app/static
+```
+
+A live app is easier to read with the detector's normal behind each answer: where this window
+sits among the windows the detector was fitted on. **They can't be read back** (the promoted
+detector has no download route) **but can be recomputed** on the promoted blueprint with
+`output_embeddings: true`, a bundle value: no new optimization or blueprint, the same encoder
+on the same windows (the trial's window and step, tiled from each library file's row 0).
+
+**Two routes, the same points.** On SKAB (free trial, 2026-10-31), the whole library both
+ways: 1,950/1,950 windows from 11 files with the same start timestamps, embeddings within
+4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' points within 5×10⁻⁷.
+- **Batch (the default):** a bundle at the trial's `step_size`, one run per library file. The
+  platform cuts the windows and the outputs are files; each run takes a job slot (40 runs for
+  the TEP quickstart's library).
+- **`--serving`:** one serving agent, the windows cut client-side exactly as the platform cuts
+  them and sent one per query, 4 at a time. No job slots or queue, and on the free trial no
+  2-hour cap. SKAB's 1,950 windows took 5.6 min served, against 11.6 min for its 11
+  batch runs, 3 at a time. With `--agent` it uses an agent already running the promoted
+  blueprint with embeddings on (it checks the blueprint), and leaves it running; otherwise it
+  starts one and deletes it however the run ends, signals included (its ids stay in
+  `out/library_serving_state.json` until then, for `cleanup.py`).
+  Better when an app's agent is up, or on the trial; batch is better for a library of tens of
+  thousands of windows.
+
+The script checks each file's window count against the tiling and prints the library's score
+range: they are the windows the detector was fitted on, so they should sit under the
+threshold (SKAB: 0.928–1.377, median 1.003, none over 1.604).
+
+**A rerun resumes,** and starts nothing when every file already has its output: it only
+redraws the view, keeping the route the outputs were made by. **For another blueprint or step
+it stops** rather than mix two detectors' windows in one view: it checks `out/library_state.json`
+and, because `cleanup.py` deletes that, `out/library_embeddings.json` too. Move both, and
+`out/library_embeddings/`, aside first.
+
+**The view is PCA 1–2** of the embeddings (every channel's 768 values, concatenated in the
+manifest's order), each axis at unit spread: `library-view.bin` (float32: each window's 2-D
+point and score, the mean and the two projection rows) and `library-view.json` (the layout). A
+served answer lands in the same coordinates: `(e − mean) · row`. Not LDA, as in the OSM skill:
+the library is one class, normal. It is a recomputed drawing, not the detector: the detector's
+own PCA is in the registry artifact, and it scores in more dimensions, with the per-channel
+features too. The trail leaving the cloud is evidence; the trail staying in it is not evidence
+of nothing.
 
 ## Path 2 pitfalls
 
@@ -789,7 +868,8 @@ For stored data, deliver in batch.
 - **`threshold` as a list of floats is a 422**; use one value or `{"type": "float_range", "min", "max"}`.
 - **The eval number and the delivery number measure different things.** Evals scores windows
   at the trial's threshold and stride; the delivery is scored per incident, with a delay, at
-  stride 1 and a calibrated threshold. Report both.
+  stride 1 and a calibrated threshold. Report both, and the calibrated threshold's false-alarm
+  rate on the delivery's normal windows next to the rate it was set for.
 - **Don't trust `completed` for the output, or `failed` for the run**: `deliver.py` downloads
   until the output reaches the input's end, and a run reported failed can still have one.
 - **A key exported in your shell beats `.env`**; keys are per deployment. The helper checks the
@@ -844,8 +924,9 @@ skills/atai-anomaly-discovery-agent/
 │       ├── deliver.py          Step 3: bundle from the blueprint → one run per file → complete outputs
 │       ├── score.py            Step 4: detection, delay, AUROC, false alarms, at two thresholds
 │       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
-│       ├── cleanup.py          the agents and bundles of steps 3 and 5, from the ids in out/
-│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py)
+│       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a PCA 1-2 view for an app
+│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6, from the ids in out/
+│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py, library_embeddings.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
     └── test_lifecycle.py     ← Path 2: network-free unit tests

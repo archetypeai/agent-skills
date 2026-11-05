@@ -26,6 +26,7 @@ Run:
 """
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -450,6 +451,131 @@ class QueryRetry(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.run_request()
 
+@unittest.skipIf(library_embeddings is None, "numpy not installed")
+class TestLibraryServing(unittest.TestCase):
+    """--serving cuts the library's windows as the platform does and saves them in batch's shape."""
+
+    def test_windows_skip_the_joins_between_pieces(self):
+        self.assertEqual(library_embeddings.firsts(12, 4, 2), [0, 2, 4, 6, 8])
+        # two pieces of 6 rows: the window at row 4 crosses the join at row 6 and is left out
+        pieces = [{"row": 0, "rows": 6}, {"row": 6, "rows": 6}]
+        self.assertEqual(library_embeddings.firsts(12, 4, 2, pieces), [0, 2, 6, 8])
+
+    EMB = {"id": "blp_emb", "key": "bp-embeddings"}
+
+    def serve(self, *args, out=None, session_bp="blp_emb", answer=None, failing_query=False, key="bp",
+              serving=True):
+        """main (--serving unless serving=False) against a fake platform; returns out, the windows
+        asked, the other calls. The embeddings blueprint is already made (in library_state.json)."""
+        roles, out = tempfile.mkdtemp(), out or tempfile.mkdtemp()
+        os.makedirs(os.path.join(roles, "library"))
+        manifest = {"channels": ["x", "y"], "states": ["a", "b"], "library": {"files": []}}
+        for state, rows in (("a", 8), ("b", 8)):
+            with open(os.path.join(roles, "library", f"{state}.csv"), "w") as fh:
+                fh.write("timestamp,x,y\n" + "".join(f"{100 + i * 0.02:.3f},{i},{-i}\n" for i in range(rows)))
+            manifest["library"]["files"].append({"file": f"library/{state}.csv", "state": state, "rows": rows})
+        asked, calls = [], []
+
+        def fake(method, url, body=None, idempotent=None, **_):
+            if url.endswith("/query"):
+                if failing_query:
+                    raise RuntimeError("POST /query failed (500)")
+                asked.append(body["events"][0]["event_data"]["contents"])
+                if answer:
+                    return {"response": {"data": [answer]}}
+                x0 = body["events"][0]["event_data"]["contents"][0][0]
+                vec = list(np.random.default_rng(int(x0) + len(asked)).normal(size=6))
+                return {"response": {"data": [{"invalid": "false", "embedding_x": vec[:3], "embedding_y": vec[3:]}]}}
+            path = url.split("/api/agents")[1]
+            calls.append((method, path))
+            if "/blueprints/" in path:
+                return {"document": {"values": {"window_size": 4, "step_size": 4}}}
+            if method == "POST" and path in ("/packages", "/deployments", "/sessions"):
+                return {"id": {"/packages": "pkg_s", "/deployments": "dpl_s", "/sessions": "ses_s"}[path]}
+            if method == "GET" and path.startswith("/packages/"):
+                return {"id": path.split("/")[-1], "status": "ready", "blueprint_ids": [session_bp]}
+            if method == "GET" and path.startswith("/deployments/"):
+                return {"id": path.split("/")[-1], "status": "ready", "package_id": "pkg_app"}
+            if method == "GET" and path.startswith("/sessions/"):
+                return {"id": path.split("/")[-1], "status": "running", "deployment_id": "dpl_app"}
+            return {}
+        json.dump({"blueprint": {"key": key, "id": "blp_" + key}}, open(os.path.join(out, "test_state.json"), "w"))
+        lib = os.path.join(out, "library_state.json")
+        if not os.path.exists(lib):
+            json.dump({"endpoint": "https://x", "embeddings_blueprint": self.EMB}, open(lib, "w"))
+        fakes = dict(request=fake, agents=lambda: "https://x/api/agents", root=lambda: "https://x")
+        with mock.patch.multiple(library_embeddings, load_dotenv=lambda: None, check_auth=lambda log: None,
+                                 load_manifest=lambda roles: manifest, **fakes), \
+                mock.patch.multiple(atai_http, **fakes), mock.patch.object(atai_http.time, "sleep", lambda s: None):
+            library_embeddings.main(["--roles", roles, "--out", out, *(["--serving"] if serving else []), *args])
+        return out, asked, calls
+
+    def test_serving_route_writes_what_the_view_reads(self):
+        out, asked, _ = self.serve("--session", "ses_app")
+        self.assertIn([[4.0, 5.0, 6.0, 7.0], [-4.0, -5.0, -6.0, -7.0]], asked)   # queries run 4 at a time
+        with open(os.path.join(out, "library_embeddings", "a.csv")) as fh:
+            rows = list(csv.DictReader(fh))
+        self.assertEqual([(r["start_timestamp"], r["finish_timestamp"]) for r in rows],
+                         [("100.000", "100.060"), ("100.080", "100.140")])
+        summary = json.load(open(os.path.join(out, "library_embeddings.json")))
+        self.assertEqual((summary["windows"], summary["per_state"]), (4, {"a": 2, "b": 2}))
+        self.assertEqual(summary["route"], "through a serving session")
+        # rerun with every output already there: the route stays the one that made them
+        summary["route"] = "in batch"
+        json.dump(summary, open(os.path.join(out, "library_embeddings.json"), "w"))
+        self.serve("--session", "ses_app", out=out)
+        self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"], "in batch")
+
+    def test_its_own_session_deployment_and_package_are_deleted_however_the_run_ends(self):
+        out, _, calls = self.serve()
+        self.assertIn(("POST", "/packages"), calls)
+        deleted = [c[1] for c in calls if c[0] == "DELETE"]
+        self.assertEqual(deleted, ["/sessions/ses_s", "/deployments/dpl_s", "/packages/pkg_s"])
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+        out = tempfile.mkdtemp()                          # a query fails: they are deleted all the same
+        with self.assertRaises(RuntimeError):
+            _, _, calls = self.serve(out=out, failing_query=True)
+        self.assertFalse(os.path.exists(os.path.join(out, "library_serving_state.json")))
+
+    def test_a_left_serving_session_or_another_blueprint_stops_it(self):
+        out = tempfile.mkdtemp()
+        json.dump({"package": "pkg_old", "deployment": "dpl_old", "session": "ses_old"},
+                  open(os.path.join(out, "library_serving_state.json"), "w"))
+        with self.assertRaises(SystemExit) as e:
+            self.serve(out=out)
+        self.assertIn("cleanup.py", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.serve("--session", "ses_other", session_bp="blp_another")
+        self.assertIn("not the embeddings blueprint", str(e.exception))
+
+    def test_a_session_without_embeddings_is_refused(self):
+        with self.assertRaises(SystemExit) as e:
+            self.serve("--session", "ses_app", answer={"predicted_state": "a"})
+        self.assertIn("output_embeddings", str(e.exception))
+
+    def test_another_blueprints_outputs_stop_it_even_after_cleanup(self):
+        out, _, _ = self.serve("--session", "ses_app")
+        os.remove(os.path.join(out, "library_state.json"))    # moved aside: the summary still says
+        with self.assertRaises(SystemExit) as e:
+            self.serve("--session", "ses_app", out=out, key="new-bp")
+        self.assertIn("library_embeddings.json", str(e.exception))
+        out = tempfile.mkdtemp()                             # a batch run under way for another blueprint
+        json.dump({"endpoint": "https://x", "blueprint": "old-bp", "package": "pkg_l", "runs": {}},
+                  open(os.path.join(out, "library_state.json"), "w"))
+        for serving in (True, False):
+            with self.assertRaises(SystemExit) as e:
+                self.serve("--session", "ses_app", out=out, serving=serving)
+            self.assertIn("old-bp", str(e.exception))
+
+    def test_a_rerun_with_nothing_to_embed_starts_nothing_and_keeps_the_route(self):
+        out, _, _ = self.serve("--session", "ses_app")
+        for serving in (True, False):                       # --serving without --session, then batch
+            _, asked, calls = self.serve(out=out, serving=serving)
+            self.assertEqual((asked, [c for c in calls if c[0] != "GET"]), ([], []))
+            self.assertEqual(json.load(open(os.path.join(out, "library_embeddings.json")))["route"],
+                             "through a serving session")
+
 
 if __name__ == "__main__":
     unittest.main()
+

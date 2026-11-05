@@ -173,16 +173,21 @@ test        2 files from 7 recordings, 1,920 normal / 4,800 anomaly rows
 delivery    2 files from 12 recordings, 6,720 normal / 4,800 anomaly rows  (labels held back in labels/)
 ```
 
-- **z-score** from the library recordings only (never validation, test or delivery).
+- **z-score** from the library recordings only (never validation, test or delivery). With
+  `--scale-by COLUMN`, once per value of that index column (an operating condition), each
+  recording by its own condition's library statistics: see **Several operating levels** below.
 - **Library:** one file per recording segment, no label column. Joined, the windows
   across each boundary would be lost; separate, each recording stays identifiable.
 - **Validation / test:** the role's normal-only recordings joined into `<role>_normal.csv`,
   its incidents into `<role>_incidents_NN.csv` (`--per-file`, default 21), with a `label`
-  column and a one-day gap (`--seam-s`) between recordings: the platform abstains on the
-  windows across it instead of mixing two recordings.
+  column and a one-day gap (`--seam-s`) between recordings, and between the segments of a
+  recording split at a gap: the platform abstains on the windows across it instead of
+  mixing two recordings or bridging a gap.
 - **Delivery:** the role's recordings as they would arrive, no label column, plus
   `calibration.csv` (validation's normal-only file again, unlabelled): the deployed agent
-  scores it, and the scorer sets a false-alarm-rate threshold from those scores.
+  scores it, and the scorer sets a false-alarm-rate threshold from those scores. That
+  threshold means its rate only on normal operation like the calibration file's, so give
+  validation normal-only recordings from every operating condition the delivery has.
 - **`labels/`:** every scored file's sidecar (timestamp, label, recording, type).
 
 ### 4. `preflight_roles.py` — check every rule
@@ -192,7 +197,7 @@ python preflight_roles.py --roles roles --prepared prepared --index $S --window 
 ```
 
 Per file: manifest vs disk, header, timestamp format, finite values, an exact grid inside
-each recording and a rejected gap between joined ones, labels against their sidecar row
+each recording segment and a rejected gap between joined ones, labels against their sidecar row
 for row, no label in library or delivery. Per role: both classes in validation and test,
 no recording in two roles (calibration excepted), the z-score from the library only; with
 `--index`, no group in two roles; with `--prepared`, every library row normal; with
@@ -236,6 +241,19 @@ The ones that fail silently or expensively:
   separately; the detector itself never sees any incident either way.
 - **Normal varies.** Don't trim the library down to its quietest stretch: everything outside
   it becomes an alarm. Cover the operating conditions the asset normally runs in.
+- **Several operating levels: scale per level.** When normal runs at a few distinct set-points
+  (flow rates, speeds, products), one z-score over all of them is dominated by the distance
+  between levels, and a fault smaller than that distance looks like another level's normal.
+  On SKAB's water pump (three flow levels, 126, 76 and 32 L/min; 2026-10-31) one scale left
+  valve closures at chance (AUROC 0.50 and 0.55); scaling each level by its own library rows
+  lifted them to 0.80 and 0.73, and validation macro-F1 from 0.58 to 0.79, with the same
+  search. Add the level as an index column and pass `--scale-by` it; every condition needs
+  library recordings, and `build_roles.py` stops if one has none. **Only for a condition known
+  at run time** (a set-point, a recipe, a mode switch): the deployed agent must get data scaled
+  the same way, so the condition can't come from the data or its labels. Scaling is per
+  recording: a recording that changes set-point partway gets one condition's statistics, so
+  split it into one recording per set-point in the index first. One detector still fits every
+  level; the library should still cover each one.
 - **Don't renumber timestamps to hide gaps.** A window across a faked seam mixes two moments.
   Split instead; joining with a one-day gap is safe because the platform rejects it.
 

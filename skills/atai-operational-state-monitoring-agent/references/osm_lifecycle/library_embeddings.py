@@ -2,6 +2,8 @@
 """Path 2, step 6: the library's embeddings, and a 2-D view of them a live app can draw.
 
     python library_embeddings.py --roles roles --out out              # one batch run per library file, then the view
+    python library_embeddings.py --roles roles --out out --serving    # a serving agent, one query per window
+    python library_embeddings.py --roles roles --out out --serving --agent agt_...   # one already running
     python library_embeddings.py --roles roles --out out --view       # the view again from the saved outputs, no platform calls
     python library_embeddings.py --roles roles --out out --view-dir ../my-app/static
 
@@ -18,6 +20,15 @@ makes a blueprint that has it on: a 1-trial optimization at the promoted trial's
 depend only on the encoder and the windowing, so they are the promoted model's. Then a
 package of it, one batch deployment, and a session per library file.
 
+--serving gets the same embeddings from a serving agent instead, one window per /query, cut
+here as the platform cuts them: from each file's row 0 at the blueprint's step, leaving out
+the windows that cross a join between the file's pieces (training skips those). One agent for
+the whole library: no job slots, queue or 2-hour cap on the free trial. With --agent, an
+agent of the promoted blueprint already running with output_embeddings (a live app's) is used
+and left running; otherwise one is started and deleted at the end (ids in
+<out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
+(2026-10-31): the same 1,950 windows as batch, embeddings within 4.0e-6.
+
 The view is the two directions that best separate the states: each embedding scaled to unit
 length (the model compares by cosine), PCA to 50 dimensions, then linear discriminant analysis
 to 2, each axis scaled to unit spread. The two largest directions of spread (PCA 1-2) are
@@ -29,25 +40,98 @@ kNN decides in every dimension.
 Writes <out>/library_embeddings/<state>.csv (the batch outputs, large), <out>/library_embeddings.json
 (the summary) and <view-dir>/library-view.{json,bin} (default <out>). Ids go to
 <out>/library_state.json, so a rerun resumes and cleanup.py deletes the sessions, deployment
-and package (the embeddings blueprint and its optimization stay).
+and package (the embeddings blueprint and its optimization stay). A rerun for another
+blueprint stops rather than mixing two models' windows: it checks library_state.json and
+library_embeddings.json. A rerun with nothing new to embed starts nothing, and keeps the
+route the outputs were made by.
 """
 import argparse
 import csv
 import json
 import os
+import signal
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
                        list_trials, load_dotenv, open_session, package_ready, request, root, same_deployment,
-                       trial_setting, upload_all, wait)
+                       trial_setting, upload_all, wait, wait_for)
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
 from optimize import pinned_values, search_space  # noqa: E402
 from promote_and_test import promote  # noqa: E402
+from serve import MODEL, end, query_body, stop  # noqa: E402
+
+WORKERS = 4
+
+
+def firsts(rows, window, step, pieces=None):
+    """First row of each window the platform cuts from a library file: from row 0 every
+    `step` rows, leaving out windows that cross a join between pieces."""
+    bounds = [(p["row"], p["row"] + p["rows"]) for p in pieces] if pieces else [(0, rows)]
+    return [i for i in range(0, rows - window + 1, step) if any(a <= i and i + window <= b for a, b in bounds)]
+
+
+def start_serving(args, emb, sp):
+    """A serving session on the embeddings blueprint `emb`, once running: its package, a
+    serving deployment, a session. Each id is in `sp` before the script waits on it, so a kill
+    leaves them for cleanup.py."""
+    ex = {"endpoint": root(), "package": None, "deployment": None, "session": None}
+    for kind, make, ready in (("package", lambda: create_package(emb["id"], f"{args.name} library serving"), package_ready),
+                              ("deployment", lambda: deploy(ex["package"], "serving"), deployment_ready),
+                              ("session", lambda: open_session(ex["deployment"]), None)):
+        ex[kind] = make()["id"]
+        json.dump(ex, open(sp, "w"), indent=1)
+        if ready:
+            ready(ex[kind])
+    wait_for("sessions", ex["session"], "running", "pending", timeout_s=900)
+    log(f"serving session {ex['session']} running (deployment {ex['deployment']}, package {ex['package']})")
+    return ex
+
+
+def session_blueprints(session_id):
+    """The blueprint ids a session runs: its deployment's package's."""
+    dpl = request("GET", lifecycle_url("sessions", session_id))["deployment_id"]
+    pkg = request("GET", lifecycle_url("deployments", dpl))["package_id"]
+    return request("GET", lifecycle_url("packages", pkg)).get("blueprint_ids", [])
+
+
+def run_serving(args, files, session, window, step, channels):
+    """Each library file's windows, one /query each, saved in the batch output's shape."""
+    out_dir = os.path.join(args.out, "library_embeddings")
+    os.makedirs(out_dir, exist_ok=True)
+
+    def query(chunk):
+        rec = request("POST", lifecycle_url("sessions", session) + "/query", query_body(chunk, args.model),
+                      idempotent=True)["response"]["data"][0]
+        if missing := [c for c in channels if f"embedding_{c}" not in rec]:
+            sys.exit(f"the session's answer has no embedding_{missing[0]}: its blueprint needs output_embeddings: true")
+        return rec
+    t0, n = time.time(), 0
+    with ThreadPoolExecutor(WORKERS) as pool:
+        for f in files:
+            dst = os.path.join(out_dir, f"{f['state']}.csv")
+            if os.path.exists(dst):
+                continue
+            with open(os.path.join(args.roles, f["file"]), newline="") as fh:
+                rows = list(csv.DictReader(fh))
+            X = np.array([[float(r[c]) for c in channels] for r in rows], dtype=np.float32)
+            first = firsts(len(rows), window, step, f.get("pieces"))
+            recs = list(pool.map(query, [X[i:i + window] for i in first]))
+            with open(dst + ".part", "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["start_timestamp", "finish_timestamp", "invalid", *[f"embedding_{c}" for c in channels]])
+                for i, r in zip(first, recs):
+                    w.writerow([rows[i]["timestamp"], rows[i + window - 1]["timestamp"], str(r.get("invalid", False)).lower(),
+                                *[json.dumps(r[f"embedding_{c}"]) for c in channels]])
+            os.replace(dst + ".part", dst)
+            n += len(first)
+            log(f"  {f['state']}: {len(first):,} windows")
+    log(f"served {n:,} windows in {time.time() - t0:.0f} s")
 
 
 def embeddings_blueprint(args, manifest, test, state, save):
@@ -214,7 +298,7 @@ def write_view(args, manifest, meta, t0):
     per_state = {s: codes.count(i) for i, s in enumerate(states)}
     with open(os.path.join(view_dir, "library-view.json"), "w") as fh:
         json.dump({
-            "note": ("The promoted model's library, recomputed in batch with output_embeddings on, on the 2 "
+            "note": (f"The promoted model's library, recomputed {meta.get('route', 'in batch')} with output_embeddings on, on the 2 "
                      "directions that best separate the states: unit-length embeddings, PCA to 50, LDA to 2. "
                      "For drawing only."),
             "blueprint": meta["blueprint"], "channels": channels, "states": states,
@@ -237,6 +321,9 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="osm", help="prefixes the uploads and names the platform objects")
+    ap.add_argument("--serving", action="store_true", help="embed through a serving session, a query per window")
+    ap.add_argument("--session", help="with --serving: a session already running the embeddings blueprint")
+    ap.add_argument("--model", default=MODEL, help="the `model` a query names")
     ap.add_argument("--view", action="store_true", help="only rebuild the view from <out>/library_embeddings/")
     ap.add_argument("--view-dir", help="where library-view.{json,bin} go (default <out>)")
     args = ap.parse_args(argv)
@@ -244,7 +331,8 @@ def main(argv=None):
     t0 = time.time()
     if args.view:
         meta = json.load(open(os.path.join(args.out, "library_embeddings.json")))
-        return write_view(args, manifest, {k: meta[k] for k in ("blueprint", "window_size", "step_size")}, t0)
+        return write_view(args, manifest, {k: meta[k] for k in ("blueprint", "window_size", "step_size", "route")
+                                           if k in meta}, t0)
     load_dotenv()
     check_auth(log)
     ts_path = os.path.join(args.out, "test_state.json")
@@ -254,17 +342,55 @@ def main(argv=None):
     key = test["blueprint"]["key"]
     # by id: a key registered in a project resolves only with ?project_id=
     values = request("GET", f"{agents()}/blueprints/{test['blueprint']['id']}")["document"]["values"]
-    meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"]}
-
+    meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"],
+            "route": "through a serving session" if args.serving else "in batch"}
+    # library_embeddings.json outlives a moved or deleted library_state.json
+    summary = os.path.join(args.out, "library_embeddings.json")
+    made = json.load(open(summary)) if os.path.exists(summary) else {}
     sp = os.path.join(args.out, "library_state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
+    for what, bp, step in ((summary, made.get("blueprint"), made.get("step_size")),
+                           (sp, state.get("blueprint"), meta["step_size"])):
+        if bp and (bp, step) != (key, meta["step_size"]):
+            sys.exit(f"{what} and {args.out}/library_embeddings/ are for {bp} at step {step}, not the promoted "
+                     f"{key} at step {meta['step_size']}: move them aside (cleanup.py deletes the runs) so the "
+                     f"view holds one model's windows")
+    out_dir = os.path.join(args.out, "library_embeddings")
+    if all(os.path.exists(os.path.join(out_dir, f"{f['state']}.csv")) for f in manifest["library"]["files"]):
+        log("every library file has its embeddings: no agent or run started")
+        meta["route"] = made.get("route", meta["route"])         # keep how they were made
+        return write_view(args, manifest, meta, t0)
+
     if not same_deployment(state):
         sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: "
                  f"move it aside, or set .env to that deployment")
     save = lambda: json.dump(state, open(sp, "w"), indent=1)  # noqa: E731
-
     if state.get("bundle"):
         sys.exit(f"{sp} is from a bundle run: move it and {args.out}/library_embeddings/ aside")
+
+    if args.serving:
+        ssp = os.path.join(args.out, "library_serving_state.json")
+        if os.path.exists(ssp):
+            sys.exit(f"{ssp} exists: an earlier run's serving session may still be up; run cleanup.py --yes first")
+        emb = embeddings_blueprint(args, manifest, test, state, save)
+        state.setdefault("blueprint", key)
+        save()
+        if args.session and emb["id"] not in (bps := session_blueprints(args.session)):
+            sys.exit(f"session {args.session} runs {bps}, not the embeddings blueprint {emb['key']} ({emb['id']})")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, stop)
+        ex = None
+        try:
+            session = args.session or (ex := start_serving(args, emb, ssp))["session"]
+            run_serving(args, manifest["library"]["files"], session, meta["window_size"],
+                        meta["step_size"], manifest["channels"])
+        finally:
+            if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
+                ex = json.load(open(ssp))
+            if ex and end(ex):
+                os.remove(ssp)
+                log(f"deleted session {ex['session']}, deployment {ex['deployment']} and package {ex['package']}")
+        return write_view(args, manifest, meta, t0)
 
     def ensure_deployment():
         if not state.get("deployment"):
