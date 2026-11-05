@@ -10,7 +10,12 @@ detector). Then POST /agents/bundles/{id}/run per delivery file, --parallel at a
 --max-windows-per-run N splits a longer file into runs of at most N windows, for a
 deployment that caps a run's time (the free trial: 2 hours). Each run's rows overlap the
 next by window - step, so every window lies whole in one run; the runs' outputs are joined
-into the file's, the same windows as one run gives. Off by default: a run per file.
+into the file's, the same windows as one run gives. Off by default (a run per file), except
+on the free trial: there a file too long to finish well inside the cap is split from the start
+(see trial_max_windows), not after a run has spent 2 hours and died. --max-windows-per-run 0
+turns that off.
+A rerun at another N names its runs' files by row range, so it never reuses
+another split's; that split's runs are forgotten, any still going cancelled first.
 
 Each output is downloaded again every 15 s until its last window reaches the input's last
 timestamp: a run can report `completed` while its output is still being written. A
@@ -33,13 +38,24 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, files_url, load_dotenv, request, root, same_deployment, upload_file  # noqa: E402
+from atai_http import (TERMINAL, agents, check_auth, deployment, files_url, load_dotenv, request, root,  # noqa: E402
+                       same_deployment, upload_file)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 
 CHECKPOINTING_OFF = {"checkpointing": {"trigger_after_input_byte_size": 0, "trigger_after_delay_ms": 0}}
 NETWORK_WAIT_S, NETWORK_RETRIES = 60, 60
 lock = threading.Lock()
+TRIAL = "try.archetypeai.app"
+# Channel-windows a free-trial run gets through in well under its 2-hour cap. Measured there
+# (CPU): SKAB, 8 channels, ~80 windows a minute a run (640 channel-windows); the TEP sample,
+# 33 channels, 1,000 windows in 24-34 min (~1,000-1,400). 38,400 is 40-60 min across those.
+TRIAL_CHANNEL_WINDOWS_PER_RUN = 38_400
+
+
+def trial_max_windows(n_channels):
+    """Windows a free-trial run should hold so it ends well inside the 2-hour cap (in 100s)."""
+    return max(100, TRIAL_CHANNEL_WINDOWS_PER_RUN // max(1, n_channels) // 100 * 100)
 
 
 def last_ts(path, col):
@@ -62,6 +78,24 @@ def pieces(rows, window, step, max_windows):
         return [(0, rows)]
     return [(k * step, min(rows, (k + max_windows - 1) * step + window)) for k in range(0, n, max_windows)]
 
+
+
+def retire_other_splits(state, save, planned, names):
+    """Forget the runs of another split of a file delivered now: a rerun at another
+    --max-windows-per-run cuts it differently and never reads them. One still going would
+    hold a job slot until it ends (2 hours on the free trial), so it is cancelled first;
+    cleanup.py deletes them with the bundle."""
+    runs = state.get("agents", {})
+    for name in [n for n in runs if n not in names and n.split(" rows ")[0] in planned]:
+        agent = runs[name]
+        try:
+            if request("GET", f"{agents()}/instances/{agent}").get("status") not in TERMINAL:
+                request("POST", f"{agents()}/instances/{agent}/cancel", {})
+                log(f"{name}: cancelled agent {agent}, a run of another split")
+        except RuntimeError as e:
+            log(f"{name}: agent {agent}: {e}; cleanup.py deletes it")
+        del runs[name]
+    save()
 
 def join(parts, dst, window, step):
     """Concatenate the runs' outputs into dst; exit unless each run gave its windows, in order."""
@@ -145,8 +179,9 @@ def main(argv=None):
     ap.add_argument("--name", default="ad")
     ap.add_argument("--step", type=int, default=1, help="step_size for delivery (the trial's, if 0)")
     ap.add_argument("--threshold", type=float, help="label windows at this threshold instead of the trial's")
-    ap.add_argument("--max-windows-per-run", type=int, default=0, metavar="N",
-                    help="split a longer file into runs of at most N windows (default 0: a run per file)")
+    ap.add_argument("--max-windows-per-run", type=int, default=None, metavar="N",
+                    help="split a longer file into runs of at most N windows (default: a run per file; on the "
+                         "free trial, sized to finish well inside its 2-hour cap); 0 never splits")
     ap.add_argument("--parallel", type=int, default=3)
     add_background_flag(ap, "{out}/deliver.log")
     a = ap.parse_args(argv)
@@ -187,6 +222,11 @@ def main(argv=None):
     os.makedirs(out_dir, exist_ok=True)
     window = test["blueprint"]["values"]["window_size"]
     step = state["values"].get("step_size") or test["blueprint"]["values"]["step_size"]
+    max_windows = a.max_windows_per_run
+    if max_windows is None:
+        max_windows = 0
+        if deployment(root()) == TRIAL and m.get("channels"):
+            max_windows = trial_max_windows(len(m["channels"]))
 
     def one(job):
         """One agent run: job's source to its output (resume: a finished output is kept)."""
@@ -229,15 +269,19 @@ def main(argv=None):
                 log(f"{job[0]}: {text}; rerun to retry")
                 return None
 
-    jobs, split = [], {}            # split: a file's output -> [((first, end), the run's output)]
+    jobs, split, planned = [], {}, set()            # split: a file's output -> [((first, end), the run's output)]
     for f in m["delivery"]:
         src = os.path.join(a.roles, f["file"])
         dst = os.path.join(out_dir, os.path.basename(f["file"]))
         if os.path.exists(dst):
             continue
+        planned.add(f["file"])
         with open(src) as fh:
             header, *lines = fh.readlines()
-        parts = pieces(len(lines), window, step, a.max_windows_per_run)
+        if max_windows and a.max_windows_per_run is None and f["file"] in state.get("agents", {}):
+            parts = [(0, len(lines))]      # a run already started on the whole file: keep it
+        else:
+            parts = pieces(len(lines), window, step, max_windows)
         if len(parts) == 1:
             jobs.append((f["file"], src, dst))
             continue
@@ -245,14 +289,17 @@ def main(argv=None):
         os.makedirs(pdir, exist_ok=True)
         stem = os.path.basename(f["file"])[:-4]
         split[dst] = []
-        for i, (first, end) in enumerate(parts):
-            psrc = os.path.join(pdir, f"{stem}_run{i + 1:02d}.csv")
+        for first, end in parts:      # named by row range: another split's files never collide
+            psrc = os.path.join(pdir, f"{stem}_rows{first}-{end}.csv")
             if not os.path.exists(psrc):
                 with open(psrc, "w") as fh:
                     fh.writelines([header] + lines[first:end])
             jobs.append((f"{f['file']} rows {first}-{end}", psrc, psrc[:-4] + "_out.csv"))
             split[dst].append(((first, end), psrc[:-4] + "_out.csv"))
-        log(f"{f['file']}: {len(parts)} runs of at most {a.max_windows_per_run:,} windows")
+        log(f"{f['file']}: {len(parts)} runs of at most {max_windows:,} windows"
+            + ("" if a.max_windows_per_run else " (the free trial stops a run at 2 hours; "
+               "--max-windows-per-run 0 to deliver in one run)"))
+    retire_other_splits(state, save, planned, {name for name, _, _ in jobs})
     with ThreadPoolExecutor(a.parallel) as pool:
         list(pool.map(safe, jobs))
     for dst, parts in split.items():

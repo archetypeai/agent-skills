@@ -162,9 +162,15 @@ separation, or exactly `--channels ...`); short missing runs interpolated; every
 z-scored with the build-time normal rows; then:
 
 - **training:** `normal.csv` (the first `--normal-rows 8192` of a normal run before any
-  held-out incident) and one file per training incident, each one class, no label column;
+  held-out incident; a run is split at a gap, never taken across one) and one file per
+  training incident, each one class, no label column. `--every-normal-run` writes
+  `normal_01.csv`, `normal_02.csv`, … instead: the last `--normal-rows` of every such run,
+  for a recording whose set point changes between runs (see Pitfalls). Those rows sit away
+  from a set-point change at the run's start but can end at the next incident's onset,
+  where any pre-fault behaviour would show: check the incidents' lead-in first;
 - **validation, test:** one file per incident with `--context 4096` normal rows either
-  side, cut at the midpoint where incidents are closer, with a `label` column;
+  side, cut at the midpoint where incidents are closer and at the incident's segment (a
+  gap), with a `label` column;
 - **delivery:** the `--delivery` test incidents with `--delivery-context 1024` rows either
   side, no label column, labels in `labels/`; or `--tail-chunk N` for the rows after the
   last scored file, in chunks (new operation: false alarms per day).
@@ -227,6 +233,28 @@ here exercise:
   agent sees must be scaled the same way.
 - **More normal rows barely change a prototype** (it is a mean) but cost encoder time in
   every trial; `--normal-rows` is a cost knob more than an accuracy one.
+- **Label the event, not the time before it.** CARE to Compare's wind-turbine faults come
+  with a prediction window, the days before each logged fault. Labelled that way, Wind Farm
+  A's six hydraulic-group faults sat about 1 σ from normal per channel, mostly through wind
+  and power: validation F1 0.57 on one incident, then 0.20 on three held-out ones (chance;
+  the agent skill's Path 2 pitfalls have the numbers). A prototype needs the event to change
+  the readings.
+- **Look for what else moved during the incidents.** On PRONTO's multiphase flow rig the
+  first separation report put three separator channels at 8–11 σ: the rig's end-of-day
+  shutdown sat inside one leak's label, and slow drift through the day did the rest. Two
+  checks caught it before any platform time: compare each incident with the **same day's**
+  normal rows (not only the pooled build-time ones), and read a held-out separation
+  **larger** than the training one as a warning, not a bonus. Trim shutdowns and start-ups
+  out of event labels, and drop channels that drift with the clock.
+- **Normal must cover the operating points the events run at, and only those.** The
+  centroid of normal is a mean: normal from a set point no event ever runs at pulls it
+  away from the normal the agent will see, and normal from one set point only, beside an
+  event at another, lets the agent learn the set point. Drop the first (gaps are fine;
+  prep splits at them) and cover the second with `--every-normal-run`, one normal file
+  per run. On PRONTO (leaks at two air/water set points) that gave three normal files.
+- **A fault no sensor sees gives no prototype**, whatever the label says: PRONTO's air
+  blockage and diverted flow barely move its 1 Hz process data. Leave such an event out
+  rather than calling it normal or training it.
 
 ## Local Setup
 
