@@ -34,8 +34,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (TERMINAL, check_auth, create_package, deploy, lifecycle_url, load_dotenv, open_session,  # noqa: E402
-                       request, result_url, root, same_deployment, upload_file)
+from atai_http import (TERMINAL, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
+                       load_dotenv, open_session, package_ready, request, result_url, root, same_deployment,
+                       upload_file)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 
@@ -174,9 +175,11 @@ def main(argv=None):
         save()
         log(f"package {state['package']} on {key}")
     if "deployment" not in state:
+        package_ready(state["package"])
         state["deployment"] = deploy(state["package"], "batch")["id"]
         save()
         log(f"batch deployment {state['deployment']}")
+        deployment_ready(state["deployment"])
     out_dir = os.path.join(a.out, "delivery")
     os.makedirs(out_dir, exist_ok=True)
     window, step = test["blueprint"]["values"]["window_size"], test["blueprint"]["values"]["step_size"]
