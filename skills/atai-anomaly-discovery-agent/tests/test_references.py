@@ -133,7 +133,9 @@ def test_scoring_threshold_comes_from_the_blueprint(monkeypatch):
 
 def _lifecycle(monkeypatch, status, ended, results=None):
     monkeypatch.setattr(runner, "create_package", lambda bp, name: {"id": "pkg_1"})
+    monkeypatch.setattr(runner, "package_ready", lambda pid: {"id": pid, "status": "ready"})
     monkeypatch.setattr(runner, "deploy", lambda pkg, kind: {"id": "dpl_1", "kind": kind})
+    monkeypatch.setattr(runner, "deployment_ready", lambda did: {"id": did, "status": "ready"})
     monkeypatch.setattr(runner, "open_session", lambda dpl, fid: {"id": "ses_1"})
     monkeypatch.setattr(runner, "poll", lambda sid: {"status": status, "error": "boom"})
     monkeypatch.setattr(runner, "last_events", lambda sid: [])
@@ -158,6 +160,20 @@ def test_failed_session_still_tears_down(monkeypatch):
         runner.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
     assert "failed" in str(excinfo.value) and "boom" in str(excinfo.value)
     assert [k for k, _ in ended] == ["sessions", "deployments", "packages"]
+
+
+def test_failed_package_is_still_deleted(monkeypatch):
+    """A package that never becomes ready is recorded before the wait, so it is deleted too."""
+    ended = []
+    _lifecycle(monkeypatch, "completed", ended)
+
+    def failed(pid):
+        raise SystemExit(f"{pid} is failed, not ready: build error")
+
+    monkeypatch.setattr(runner, "package_ready", failed)
+    with pytest.raises(SystemExit):
+        runner.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
+    assert ended == [("packages", "pkg_1")]
 
 
 def test_download_reports_empty_results(monkeypatch, capsys):
