@@ -113,7 +113,23 @@ Why they exist:
   flatters the winner; the full example's +0.014 margin on its 6 search cycles was
   +0.001 on the 15 validation cycles the search never saw.
 
-## Bundles and runs
+## Packages, deployments and sessions
+
+- **One project holds everything:** an optimization takes its project from the blueprint it
+  searches, so `optimize.py` copies `osm` into the project first (`POST
+  /agents/blueprints/osm/copy`); promoted blueprints, packages, deployments and sessions follow.
+- **A package carries no values.** What a later step needs is pinned at Optimize
+  (`data_columns`, `timestamp_column`, `states`); an output such as `output_embeddings` needs
+  a blueprint of its own (a 1-trial optimization at the trial's point, promoted).
+- **A batch deployment is ready at once; a serving one in seconds,** and it holds a serving
+  worker until stopped. A batch session over several files writes one output per file.
+- **Delete in order:** sessions, then the deployment (stopped), then the package; each holds
+  the next. `GET /agents/deployments?package_id=` and `GET /agents/sessions?deployment_id=`
+  find what a rerun replaced; an unknown filter parameter is ignored, not rejected.
+- **Record an id before waiting on it:** a package that fails to build stays `failed`, and
+  only its id lets you delete it.
+
+## Bundles and runs (before packages and sessions)
 
 - **A bundle from your blueprint:** `POST /agents/bundles {"blueprint": "<key>"}`,
   then `POST /agents/bundles/{id}/run` with the files as source connectors. One run =
@@ -140,7 +156,7 @@ Why they exist:
   promoted kNN has no download route. Running the library files through the promoted
   blueprint recomputes the fit's reference windows (the same encoder and windows).
 
-## Agent serving (production 2026-10-29; first on Dev 2026-10-16 to 10-18, Staging 2026-10-24)
+## Agent serving (through bundles: production 2026-10-29; first on Dev 2026-10-16 to 10-18, Staging 2026-10-24)
 
 - **A bundle of the promoted blueprint** runs with `{"mode": "serving"}` and answers
   `POST /agents/instances/{id}/query`; the platform supplies the `atai-records` serving

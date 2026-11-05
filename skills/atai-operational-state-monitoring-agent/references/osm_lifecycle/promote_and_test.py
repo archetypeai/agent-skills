@@ -50,12 +50,9 @@ def best_trial(runs, trial_id=None):
 
 def promote(opt, trial, name):
     if trial.get("promoted_blueprint"):                             # promoted on an earlier, interrupted run
-        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['blueprint_key']}")
+        # by id: a key registered in a project resolves only with ?project_id=
+        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['id']}")
     key = blueprint_key(trial, name)
-    try:
-        return request("GET", f"{agents()}/blueprints/{key}")
-    except RuntimeError:
-        pass
     w, st, k, metric, weights = trial_setting(trial)
     url = f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote"
     body = {"name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",

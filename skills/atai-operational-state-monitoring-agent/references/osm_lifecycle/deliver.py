@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Path 2, step 3: run the tested model over new recordings, as a customer would.
 
-Creates one bundle from the blueprint promote_and_test.py made (<out>/test_state.json),
-unchanged, and runs it over the delivery files (no labels) in batches: one run by
-default, --files-per-run N for smaller batches (a failed run then costs less). Each run
-is one agent instance; the platform works through a run's files one at a time, and
-through several runs one at a time too.
+Packages the blueprint promote_and_test.py made (<out>/test_state.json), unchanged (a
+package carries no values), deploys it as `batch`, and runs it over the delivery files
+(no labels) in sessions: one by default, --files-per-run N for smaller batches (a failed
+session then costs less). Each session is one run over its files, given as source
+connectors; the platform works through a session's files one at a time.
 
 A run's outputs don't name their inputs, so every output row is matched to its delivery
 file by `finish_timestamp` (recordings must not overlap in time). Writes one predictions
-CSV per delivery file to <out>/delivery/, and <out>/delivery/runs.json (bundle, runs,
-each file's time range) as each run starts, so a rerun collects instead of starting over.
+CSV per delivery file to <out>/delivery/, and <out>/delivery/runs.json (package,
+deployment, sessions, each file's time range) as each session starts, so a rerun collects
+instead of starting over.
 
     python deliver.py --roles roles --background
     python deliver.py --roles roles --resume          # collect the runs in runs.json
@@ -26,7 +27,9 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, files_url, list_all, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
+from atai_http import (TERMINAL, check_auth, create_package, deploy, deployment_ready, lifecycle_url, list_all,  # noqa: E402
+                       load_dotenv, open_session, package_ready, request, result_url, root, same_deployment,
+                       upload_all)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, load_manifest, log, stamp  # noqa: E402
 
@@ -75,8 +78,9 @@ def match_rows(rows, finish_col, ranges):
     return out, unmatched
 
 
-def fetch(filename):
-    req = urllib.request.Request(f"{files_url()}/download/{filename}")
+def fetch(ref):
+    """A result file, by its `ref`: a root path (`/api/files/<fil_…>/content`) or a URL."""
+    req = urllib.request.Request(result_url(ref))
     req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
     with urllib.request.urlopen(req, timeout=600) as resp:
         return resp.read().decode("utf-8", errors="replace")
@@ -87,20 +91,22 @@ def start(args, manifest, state_path, test_state):
     paths = [os.path.join(args.roles, f) for f in files]
     ids = upload_all(paths, args.roles, cache_path(args.out), prefix=args.name, jobs=args.upload_jobs, log=log)
     key = test_state["blueprint"]["key"]
-    bundle = request("POST", f"{agents()}/bundles", body={
-        "blueprint": key, "name": f"{args.name} delivery {stamp()}",
-        "description": "the tested model, run over the delivery recordings"})
-    log(f"bundle {bundle['id']} from {key}")
-    per = args.files_per_run or len(files)
-    state = {"endpoint": root(), "bundle": bundle["id"], "blueprint": key, "runs": [],
+    state = {"endpoint": root(), "blueprint": key, "runs": [],
              "files": {f: dict(zip(("first_ms", "last_ms"), time_range(p))) for f, p in zip(files, paths)}}
+    state["package"] = create_package(test_state["blueprint"]["id"], f"{args.name} delivery {stamp()}")["id"]
+    json.dump(state, open(state_path, "w"), indent=1)
+    package_ready(state["package"])
+    state["deployment"] = deploy(state["package"], "batch")["id"]
+    json.dump(state, open(state_path, "w"), indent=1)
+    deployment_ready(state["deployment"])
+    log(f"package {state['package']} from {key}, batch deployment {state['deployment']}")
+    per = args.files_per_run or len(files)
     for i in range(0, len(files), per):
         batch = files[i:i + per]
-        run = request("POST", f"{agents()}/bundles/{bundle['id']}/run", body={
-            "connectors": {"source": [{"type": "file", "id": ids[os.path.join(args.roles, f)]} for f in batch]}})
-        state["runs"].append({"agent": run["id"], "files": batch})
+        ses = open_session(state["deployment"], [ids[os.path.join(args.roles, f)] for f in batch])
+        state["runs"].append({"session": ses["id"], "files": batch})
         json.dump(state, open(state_path, "w"), indent=1)
-        log(f"  run {run['id']} over {len(batch)} file(s) ({len(state['runs'])} of {-(-len(files) // per)})")
+        log(f"  session {ses['id']} over {len(batch)} file(s) ({len(state['runs'])} of {-(-len(files) // per)})")
     return state
 
 
@@ -117,11 +123,11 @@ def download(runs, ranges):
     would be a prefix, and a prefix is indistinguishable from a complete file once parsed."""
     per_file, header, unmatched = {}, None, 0
     for r in runs:
-        for item in list_all(f"{agents()}/instances/{r['agent']}/results"):
+        for item in list_all(lifecycle_url("sessions", r["session"]) + "/results"):
             status = artifact_status(item)
             if status is not None and status != "complete":
                 continue
-            body = list(csv.reader(io.StringIO(fetch(item["data"]["filename"]))))
+            body = list(csv.reader(io.StringIO(fetch(item["data"]["ref"]))))
             if not body:
                 continue
             if header is None:
@@ -146,13 +152,13 @@ def incomplete(names, state, per_file, header):
 
 def collect(args, state, state_path):
     ranges = [(v["first_ms"], v["last_ms"], n) for n, v in state["files"].items()]
-    pending = {r["agent"] for r in state["runs"] if r.get("status") not in TERMINAL}
+    pending = {r["session"] for r in state["runs"] if r.get("status") not in TERMINAL}
     finishing = {}                 # run -> deadline, once the platform says completed
     while pending:
         for aid in sorted(pending):
-            r = next(r for r in state["runs"] if r["agent"] == aid)
+            r = next(r for r in state["runs"] if r["session"] == aid)
             if aid not in finishing:
-                a = request("GET", f"{agents()}/instances/{aid}")
+                a = request("GET", lifecycle_url("sessions", aid))
                 if a["status"] not in TERMINAL:
                     continue
                 if a["status"] != "completed":

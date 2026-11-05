@@ -17,7 +17,8 @@ network. They lock in the invariants verified on the dev deployment (2026-09-30)
   * Serving (dev, 2026-10-16): the served copy swaps only the connectors, a query holds
     one list per channel, consecutive windows group up to --windows-per-query, and
     batch windows map back to their delivery rows.
-  * Cleanup deletes every agent before its bundle, from every script's state file.
+  * Cleanup deletes every session before its deployment, and every deployment before its
+    package, from every script's state file.
   * The library view's discriminant axes find states that differ along weak directions.
 
 Run:
@@ -158,15 +159,16 @@ class TestTimestamps(unittest.TestCase):
 
         def list_all(url):
             calls["results"] += 1
-            return [{"data": {"filename": "out"}}]
+            return [{"data": {"filename": "out", "ref": "/api/files/fil_x/content"}}]
 
         def fetch(name):        # the platform finishes writing the output on the 3rd download
             return f"finish_timestamp,predicted_state\n110.0,y\n{299.0 if calls['results'] >= 3 else 150.0},y\n"
 
-        state = {"runs": [{"agent": "agt_x", "files": ["b.csv"]}],
+        state = {"runs": [{"session": "ses_x", "files": ["b.csv"]}],
                  "files": {"b.csv": {"first_ms": 100_001, "last_ms": 300_000}}}
         with tempfile.TemporaryDirectory() as out, \
-                mock.patch.multiple(deliver, request=request, list_all=list_all, fetch=fetch, agents=lambda: "x"), \
+                mock.patch.multiple(deliver, request=request, list_all=list_all, fetch=fetch,
+                                    lifecycle_url=lambda kind, obj="": f"x/{kind}/{obj}"), \
                 mock.patch.object(deliver.time, "sleep"), mock.patch.object(deliver, "log"):
             os.makedirs(os.path.join(out, "delivery"))
             deliver.collect(mock.Mock(out=out), state, os.path.join(out, "delivery", "runs.json"))
@@ -177,13 +179,14 @@ class TestTimestamps(unittest.TestCase):
     def test_partial_outputs_are_skipped(self):
         def item(name, status):
             attrs = {"job_output": {"status": status}} if status else {}
-            return {"data": {"filename": name, "file_attributes": attrs}}
+            return {"data": {"filename": name, "ref": name, "file_attributes": attrs}}
         items = [item("done", "complete"), item("writing", "partial"), item("old", None)]
         body = "finish_timestamp,predicted_state\n150.0,y\n"
         fetched = []
-        with mock.patch.multiple(deliver, list_all=lambda url: items, agents=lambda: "x",
-                                 fetch=lambda name: fetched.append(name) or body):
-            per_file, _, _ = deliver.download([{"agent": "agt_x"}], [(100_000, 200_000, "b.csv")])
+        with mock.patch.multiple(deliver, list_all=lambda url: items,
+                                 lifecycle_url=lambda kind, obj="": f"x/{kind}/{obj}",
+                                 fetch=lambda ref: fetched.append(ref) or body):
+            per_file, _, _ = deliver.download([{"session": "ses_x"}], [(100_000, 200_000, "b.csv")])
         self.assertEqual(fetched, ["done", "old"])     # a platform reporting no status is read as before
         self.assertEqual(len(per_file["b.csv"]), 2)
 
@@ -227,18 +230,15 @@ class TestServing(unittest.TestCase):
 
 
 class TestCleanup(unittest.TestCase):
-    def test_agents_before_their_bundle_from_every_state_file(self):
-        found = {"app": {"bundle": "bA", "agents": ["a1", "a2"]},
-                 "library": {"bundle": "bL", "runs": {"fill": "l1"}},
-                 "serving": {"bundle": "bS", "agent": "s1"},
-                 "delivery": {"bundle": "bD", "runs": [{"agent": "d1"}]}}
-        out = cleanup.targets(found, lambda b: {"d0"} if b == "bD" else set())
-        ids = [t[2] for t in out]
-        self.assertEqual(ids, ["a1", "a2", "bA", "l1", "bL", "s1", "bS", "d0", "d1", "bD"])
-        self.assertEqual({t[1] for t in out if t[2].startswith("b")}, {"bundles"})
+    def test_sessions_before_deployments_before_their_package(self):
+        dpls = {"pA": ["dA"], "pL": ["dL"], "pD": ["dD1", "dD2"]}
+        sess = {"dA": ["sA1", "sA2"], "dL": ["sL"], "dD1": ["sD1"], "dD2": []}
+        out = cleanup.targets([("app", "pA"), ("library", "pL"), ("delivery", "pD")], dpls.get, sess.get)
+        self.assertEqual([t[2] for t in out], ["sA1", "sA2", "dA", "pA", "sL", "dL", "pL", "sD1", "dD1", "dD2", "pD"])
+        self.assertEqual({t[1] for t in out if t[2].startswith("p")}, {"packages"})
 
-    def test_nothing_without_a_bundle(self):
-        self.assertEqual(cleanup.targets({"serving": {}, "delivery": {"runs": []}}, lambda b: set()), [])
+    def test_nothing_without_a_package(self):
+        self.assertEqual(cleanup.targets([], lambda p: [], lambda d: []), [])
 
 
 @unittest.skipIf(library_embeddings is None, "numpy not installed")
@@ -440,7 +440,7 @@ class QueryRetry(unittest.TestCase):
         with mock.patch.dict(os.environ, {"ATAI_API_KEY": "k"}), \
                 mock.patch.object(atai_http.urllib.request, "urlopen", urlopen), \
                 mock.patch.object(atai_http.time, "sleep", lambda s: None):
-            return atai_http.request("POST", "https://x/api/agents/instances/a/query", {"data": []}, **kw), calls
+            return atai_http.request("POST", "https://x/api/agents/sessions/s/query", {"data": []}, **kw), calls
 
     def test_an_idempotent_post_is_retried(self):
         answer, calls = self.run_request(idempotent=True)
