@@ -79,9 +79,11 @@ def assign(report, training, validation, test, delivery=()):
     return roles
 
 
-def slice_bounds(incidents, n_rows, context):
+def slice_bounds(incidents, n_rows, context, segments=None):
     """{id: (lo, hi)}: `context` rows either side of each incident, cut at the midpoint to
-    a neighbouring incident, so no row is in two incidents' slices."""
+    a neighbouring incident, so no row is in two incidents' slices, and to the incident's
+    segment when `segments` is given, so no slice crosses a gap."""
+    seg_rows = {s["segment"]: s["rows"] for s in segments or []}
     out = {}
     for k, inc in enumerate(incidents):
         a, b = inc["rows"]
@@ -90,6 +92,8 @@ def slice_bounds(incidents, n_rows, context):
             lo = max(lo, (incidents[k - 1]["rows"][1] + a) // 2)
         if k + 1 < len(incidents):
             hi = min(hi, (b + incidents[k + 1]["rows"][0]) // 2)
+        if inc.get("segment") in seg_rows:
+            lo, hi = max(lo, seg_rows[inc["segment"]][0]), min(hi, seg_rows[inc["segment"]][1])
         out[inc["id"]] = (max(lo, 0), min(hi, n_rows))
     return out
 
@@ -100,7 +104,7 @@ def build_end(report, roles, context):
     held = [i for i in report["incidents"] if roles.get(i["id"]) in ("validation", "test")]
     if not held:
         return report["n_rows"]
-    bounds = slice_bounds(report["incidents"], report["n_rows"], context)
+    bounds = slice_bounds(report["incidents"], report["n_rows"], context, report.get("segments"))
     return min(bounds[i["id"]][0] for i in held)
 
 

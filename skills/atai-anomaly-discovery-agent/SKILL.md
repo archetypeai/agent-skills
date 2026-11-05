@@ -515,6 +515,8 @@ role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals
                  score on        project)                          └──► 5 serve: serving deployment
                  validation                                              → a session, a window per
                                                                            /query, checked against step 3
+                                                                    └──► 6 library view: the fit's windows
+                                                                         embedded again, for a live app
 ```
 
 ### The lifecycle the steps use
@@ -685,17 +687,32 @@ complete outputs`, 805 scored windows in `delivery_01.csv`.
 - **No delivery threshold.** `score.py` rescores at the trial's threshold and at a
   calibrated one from the scores, so nothing is lost; `predicted_label` in the output is the
   trial's.
-- **If a session hits a time limit** (`DeadlineExceeded`: the free trial stopped a bundle run
-  after 2 hours, with no output), a plain rerun hits it again: `--max-windows-per-run N`
-  delivers the same windows in sessions of at most N, each starting on a multiple of the step
-  and overlapping the next by window − step rows, and joins the outputs. Off by default.
+- **A session's time limit** (`DeadlineExceeded`: the free trial stopped a bundle run after 2
+  hours, with no output). A plain rerun hits it again. `--max-windows-per-run N` delivers the
+  same windows in sessions of at most N: each starts on a multiple of the step and overlaps
+  the next by window − step rows, and the outputs are joined, so the scores equal one
+  session's. **On the free trial it is on by default**, sized to 40–60 min a session at the
+  rates below: 38,400 ÷ channels windows (4,800 at 8 channels, 1,100 at 33), so a long file
+  is split before it starts, not after a session has spent 2 hours and died. Split sessions'
+  files are named by row range, so a rerun at another size never reuses a different split's
+  files; the earlier split's sessions are forgotten, and any still going is cancelled first,
+  so it doesn't hold a job slot for up to 2 hours. `--max-windows-per-run 0` turns it off;
+  elsewhere it is off unless you set it.
+
+  **On the free trial, through bundles** (CPU): a run got through roughly 640–1,400
+  channel-windows a minute. On 2026-10-30, the sample (33 channels) at step 1 stopped at 2 h on
+  both files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each. On 2026-10-31,
+  SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped at 2 h, and in
+  4 runs of at most 3,000 (37 min each) it finished in 75 min. Queued runs report `running`
+  too; whether queue time counts toward the limit is not known, so keep `--parallel` at 3.
 - **Embeddings from your own detector** need a blueprint with `output_embeddings: true`,
   since a package can't switch an output on: a 1-trial optimization pinning the winner's
   values plus the switch, promoted. Per channel it writes an `embedding_<channel>` column
   (768-d) and an `embedding_<channel>_features` column, each cell a JSON list, so keep it off
   for delivery (one TEP delivery file grew to 327 MB). Nothing else returns embeddings: a
   trial, an eval (predictions only) and the promoted detector (`aar_…`, no download route)
-  don't.
+  don't. To plot where the fit's normal sits, recompute the library's: Step 6 makes that
+  blueprint.
 - **A package lists its deployments, and a deployment its sessions**
   (`GET /agents/deployments?package_id=`, `GET /agents/sessions?deployment_id=`), so the
   sessions a rerun replaced are found too. `cleanup.py` uses them.
@@ -709,8 +726,10 @@ python score.py --roles $R --out out
 Each window is paired with the held-back label of its last row; windows the platform marked
 invalid are left out and counted. At the trial's threshold, and at one set to a 1%
 false-alarm rate on the calibration file's scores, per incident type: **window detection**,
-**detected** (3 consecutive windows over the threshold at or after onset), **delay** to that
-detection, and **AUROC** against every normal window; overall, the **false-alarm rate**.
+**detected** (3 consecutive windows over the threshold at or after onset, never across a gap
+in the recording), **delay** to that detection in operating hours (a gap counts as one
+sample, as in `serve.py`), and **AUROC** against every normal window; overall, the
+**false-alarm rate**.
 
 **Expect, on the sample** (dev, 2026-10-30, step 8):
 
@@ -740,6 +759,16 @@ calibration: 575 known-normal windows; 1.39% over the trial's threshold; thresho
 - **Step changes are caught within one to two hours, slow faults in hours** (IDV 13's drift 2.8 h).
 - The quickstart, on 4 delivery files of 21 runs each, reads 78.0% detection at 1.41% false
   alarms, AUROC 0.901, with all 17 detectable fault types caught in every run.
+- **The calibrated threshold is a 1% operating point only on data like the calibration
+  file.** That file is validation's normal-only recordings, so it inherits their operating
+  conditions. On SKAB (2026-10-31) they covered one of the pump's three flow levels: 0.70% of
+  calibration windows crossed the trial's 1.604, so "calibrating" lowered the threshold to
+  1.562, and the delivery's own normal windows then crossed it **4.94%** of the time (3.47% at
+  the trial's). On TEP, whose validation normal covers the plant's one operating point, the
+  calibrated threshold held: 0.38%. `score.py` prints a note when the delivery's normal windows
+  cross the calibrated threshold more than twice as often as `--far` (at least 10 windows).
+  The fix is in the role files: give validation normal-only recordings from every operating
+  condition the delivery will see.
 
 ## Step 5 — Serve it
 
@@ -755,7 +784,11 @@ stopped; free-trial accounts serve on CPU only, so answers can be slower than be
 
 1. **A package of the promoted blueprint, as it is** (`POST /agents/packages`). No served copy
    of the blueprint is needed: for a serving deployment, the platform supplies the
-   `atai-records` serving source and sink itself, in place of the CSV ones.
+   `atai-records` serving source and sink itself, in place of the CSV ones. **Step 6's
+   embeddings blueprint, served the same way**, carries `embedding_<channel>` (768 values per
+   channel) in each answer: what a live app needs to place each window among the library's.
+   SKAB's app (8 channels, free trial, through a bundle, 2026-10-31) got all 8 in every answer
+   at a 0.25 s median.
 2. **Deploy it for serving and open a session:** `POST /agents/deployments {"package_id": …,
    "kind": "serving"}`, wait until `ready` (the agent placed and loaded, seconds), then
    `POST /agents/sessions {"deployment_id": …}` with no connectors, and wait until the
@@ -804,11 +837,67 @@ more samples before asking. For stored data, deliver in batch.
 - **The client sets the cadence.** A one-window query can start on any row, so a live client
   can ask every sample even when the blueprint's step is 8; only the windows the replay
   compares against batch are the step-8 ones.
-- **Replay one recording at a time.** The served agent numbers the samples itself and can't
-  see a time gap, so a window across two joined recordings is scored as if it were
-  continuous, where batch marks it invalid.
+- **Replay one recording at a time, and one gap-free piece at a time.** The served agent
+  numbers the samples itself and can't see a time gap, so a window across two joined
+  recordings, or across a gap inside one recording, is scored as if it were continuous,
+  where batch marks it invalid. `serve.py` splits each recording wherever a step exceeds the
+  sample interval by more than 5%, starts a fresh window buffer after each gap, and measures
+  alarm times in operating hours, with the gap counted as one sample.
 - **A session that stops taking queries answers 409** (cancelled, or its deployment ended):
   open a new session, on a new deployment if the old one is no longer `ready`.
+
+## Step 6 — The library view, for a live app
+
+```sh
+python library_embeddings.py --roles $R --out out                     # batch: one session per library file
+python library_embeddings.py --roles $R --out out --serving           # or a serving session, a query per window
+python library_embeddings.py --roles $R --out out --serving --session ses_…   # one already running (a live app's)
+python library_embeddings.py --roles $R --out out --view --view-dir ../my-app/static
+```
+
+A live app is easier to read with the detector's normal behind each answer: where this window
+sits among the windows the detector was fitted on. **They can't be read back** (the promoted
+detector has no download route) **but can be recomputed**. A package carries no values, so
+the script first makes an **embeddings blueprint**: a 1-trial optimization of the project's
+copy of `ad` at the promoted trial's values plus `output_embeddings: true`, promoted (its ids
+in `out/library_state.json`, so a rerun reuses it). The same encoder on the same windows (the
+trial's window and step, tiled from each library file's row 0).
+
+**Two routes, the same points.** On SKAB (free trial, through bundles, 2026-10-31), the whole
+library both ways: 1,950/1,950 windows from 11 files with the same start timestamps,
+embeddings within 4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' points within 5×10⁻⁷.
+- **Batch (the default):** a package of the embeddings blueprint, a batch deployment, one
+  session per library file. The platform cuts the windows and the outputs are files; each
+  session takes a job slot (40 for the TEP quickstart's library).
+- **`--serving`:** a serving deployment of the embeddings blueprint and one session, the
+  windows cut client-side exactly as the platform cuts them and sent one per query, 4 at a
+  time. No job slots or queue, and on the free trial no 2-hour cap. SKAB's 1,950 windows took
+  5.6 min served, against 11.6 min for its 11 batch runs, 3 at a time. With `--session` it
+  uses a session already running the embeddings blueprint (it checks the package's
+  blueprint), and leaves it running; otherwise it makes the package, deployment and session
+  and deletes all three however the run ends, signals included (their ids stay in
+  `out/library_serving_state.json` until then, for `cleanup.py`).
+  Better when an app's agent is up, or on the trial; batch is better for a library of tens of
+  thousands of windows.
+
+The script checks each file's window count against the tiling and prints the library's score
+range: they are the windows the detector was fitted on, so they should sit under the
+threshold (SKAB: 0.928–1.377, median 1.003, none over 1.604).
+
+**A rerun resumes,** and starts nothing when every file already has its output: it only
+redraws the view, keeping the route the outputs were made by. **For another blueprint or step
+it stops** rather than mix two detectors' windows in one view: it checks `out/library_state.json`
+and, in case that was moved, `out/library_embeddings.json` too. Move both, and
+`out/library_embeddings/`, aside first.
+
+**The view is PCA 1–2** of the embeddings (every channel's 768 values, concatenated in the
+manifest's order), each axis at unit spread: `library-view.bin` (float32: each window's 2-D
+point and score, the mean and the two projection rows) and `library-view.json` (the layout). A
+served answer lands in the same coordinates: `(e − mean) · row`. Not LDA, as in the OSM skill:
+the library is one class, normal. It is a recomputed drawing, not the detector: the detector's
+own PCA is in the registry artifact, and it scores in more dimensions, with the per-channel
+features too. The trail leaving the cloud is evidence; the trail staying in it is not evidence
+of nothing.
 
 ## Path 2 pitfalls
 
@@ -818,10 +907,12 @@ more samples before asking. For stored data, deliver in batch.
 - **No default search space.** Leaving `search_space` out is a `400`; give at least one parameter.
 - **`threshold` as a list of floats is a 422**; use one value or `{"type": "float_range", "min", "max"}`.
 - **The eval number and the delivery number measure different things.** Evals scores windows
-  at the trial's threshold; the delivery is scored per incident, with a delay, at a
-  calibrated threshold. Both run at the trial's stride. Report both.
-- **Don't trust `completed` for the output**: `deliver.py` downloads until the output reaches
-  the input's end.
+  at the trial's threshold and stride; the delivery is scored per incident, with a delay, at
+  the trial's stride and a calibrated threshold. Report both, and the calibrated threshold's
+  false-alarm rate on the delivery's normal windows next to the rate it was set for.
+- **Don't trust `completed` for the output, or `failed` for the session**: `deliver.py`
+  downloads until the output reaches the input's end, and a session reported failed can still
+  have one.
 - **A result `ref` is a root path** (`/api/files/…/content`): prefixing it with `…/api` gives
   `/api/api/…` and a 404.
 - **A key exported in your shell beats `.env`**; keys are per deployment. The helper checks the
@@ -878,8 +969,9 @@ skills/atai-anomaly-discovery-agent/
 │       ├── deliver.py          Step 3: package → batch deployment → a session per file → complete outputs
 │       ├── score.py            Step 4: detection, delay, AUROC, false alarms, at two thresholds
 │       ├── serve.py            Step 5: package → serving deployment → a session, a query per window, against step 3
-│       ├── cleanup.py          the sessions, deployments and packages of steps 3 and 5, from out/
-│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py)
+│       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a PCA 1-2 view for an app
+│       ├── cleanup.py          the sessions, deployments and packages of steps 3, 5 and 6, from out/
+│       └── requirements.txt    numpy, pandas (score.py, promote_and_test.py, serve.py, library_embeddings.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests
     └── test_lifecycle.py     ← Path 2: network-free unit tests

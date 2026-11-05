@@ -10,11 +10,17 @@ the calibration file's scores (known-normal data, delivered for this) — it rep
   per incident type (the sidecar's `type`, else each recording):
     window detection   the share of post-onset windows over the threshold
     detected           recordings with a sustained crossing: --sustain consecutive windows
-                       over the threshold at or after onset (one spike does not count)
-    delay              hours from onset to that first sustained crossing
+                       over the threshold at or after onset (one spike does not count), all
+                       within one gap-free piece of the recording
+    delay              operating hours from onset to that first sustained crossing, a gap
+                       counted as one sample (as serve.py counts it)
     AUROC              the type's anomaly windows against every normal window: threshold-free
   overall:
     the false-alarm rate on normal windows, and the mean window detection over types
+
+The calibrated threshold means --far only on data like the calibration file (validation's
+normal-only recordings). If the delivery's own normal windows cross it far more often, the
+calibration file is not typical of the delivery's normal operation, and a note says so.
 
     python score.py --roles roles --out out
 """
@@ -31,13 +37,21 @@ from common import load_manifest  # noqa: E402
 
 
 def pair(roles, out, f):
-    """The output joined to its sidecar on the window's last row, invalid windows dropped."""
+    """The output joined to its sidecar on the window's last row, invalid windows dropped.
+    Each window also gets its last row's gap-free `piece` and `op_ms`, operating time since the
+    file's first row with a gap counted as one sample: found in the samples' timestamps, so a
+    window dropped for another reason doesn't split a piece."""
     o = pd.read_csv(os.path.join(out, "delivery", os.path.basename(f["file"])))
     s = pd.read_csv(os.path.join(roles, f["labels"]), dtype={"type": str}).fillna({"type": ""})
     o["ms"] = (o.finish_timestamp * 1000).round().astype(np.int64)
     s["ms"] = (s.timestamp * 1000).round().astype(np.int64)
+    dt = np.diff(s.ms.to_numpy())
+    interval = np.median(dt) if len(dt) else 0
+    gap = dt > 1.05 * interval
+    s["piece"] = np.r_[0, np.cumsum(gap)]
+    s["op_ms"] = np.r_[0, np.cumsum(np.where(gap, interval, dt))].astype(np.int64)
     invalid = o.invalid.astype(str).str.lower() == "true"
-    j = o[~invalid].merge(s[["ms", "label", "recording", "type"]], on="ms", how="left")
+    j = o[~invalid].merge(s[["ms", "label", "recording", "type", "piece", "op_ms"]], on="ms", how="left")
     return j, int(invalid.sum()), int(j.label.isna().sum())
 
 
@@ -48,10 +62,13 @@ def auroc(pos, neg):
     return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
 
 
-def sustained(over, n):
-    """Index of the first window that completes n consecutive crossings, or None."""
+def sustained(over, n, pieces=None):
+    """Index of the first window that completes n consecutive crossings, or None. With
+    `pieces`, the count restarts where the piece changes: no run spans a gap."""
     run = 0
     for i, v in enumerate(over):
+        if pieces is not None and i and pieces[i] != pieces[i - 1]:
+            run = 0
         run = run + 1 if v else 0
         if run >= n:
             return i
@@ -65,10 +82,12 @@ def evaluate(windows, threshold, sustain, step_ms):
         if not (g.label == "anomaly").any():
             continue
         g = g.sort_values("ms")
+        if "op_ms" not in g:                                  # no sidecar timing: one gap-free piece
+            g = g.assign(piece=0, op_ms=g.ms)
         onset = g.ms[g.label == "anomaly"].min()
         post = g[g.ms >= onset]
-        hit = sustained((post.anomaly_score > threshold).to_numpy(), sustain)
-        delay = (post.ms.iloc[hit] - onset) / 3.6e6 if hit is not None else None
+        hit = sustained((post.anomaly_score > threshold).to_numpy(), sustain, post.piece.to_numpy())
+        delay = (post.op_ms.iloc[hit] - post.op_ms.iloc[0]) / 3.6e6 if hit is not None else None
         r = rows.setdefault(typ or rec, {"windows": 0, "flagged": 0, "recordings": 0, "detected": 0, "delays": [],
                                          "scores": []})
         r["windows"] += len(post)
@@ -89,6 +108,23 @@ def evaluate(windows, threshold, sustain, step_ms):
             "false_alarm_rate": fa / max(len(normal), 1), "false_alarms": fa, "normal_windows": len(normal),
             "mean_window_detection": float(np.mean([v["window_detection"] for v in out.values()])) if out else None,
             "macro_auroc": float(np.nanmean([v["auroc"] for v in out.values()])) if out else None}
+
+
+def pct(rate):
+    """A rate as a percentage, without rounding a small one away: 0.01 -> 1%, 0.005 -> 0.5%."""
+    return f"{rate * 100:g}%"
+
+
+def calibration_note(calibrated, far, factor=2, min_alarms=10):
+    """A note when the delivery's normal windows cross the calibrated threshold well over --far
+    (factor times, and at least min_alarms windows), else None."""
+    rate = calibrated["false_alarm_rate"]
+    if rate <= factor * far or calibrated["false_alarms"] < min_alarms:
+        return None
+    return (f"note: the delivery's normal windows cross the calibrated threshold {rate:.2%} of the time, "
+            f"not the {pct(far)} it was set for. The calibration file (validation's normal-only recordings) is "
+            f"not typical of the delivery's normal operation: check that it covers every operating condition "
+            f"the delivery has. Until it does, the calibrated threshold is not a {pct(far)} operating point.")
 
 
 def show(name, r):
@@ -129,11 +165,15 @@ def main(argv=None):
         c = pd.concat(calib, ignore_index=True).anomaly_score.to_numpy()
         thr = float(np.quantile(c, 1 - a.far))
         print(f"calibration: {len(c):,} known-normal windows; {(c > trial_thr).mean():.2%} over the trial's "
-              f"threshold; threshold for {a.far:.0%} false alarms = {thr:.3f}")
+              f"threshold; threshold for {pct(a.far)} false alarms = {thr:.3f}")
         results["calibrated"] = evaluate(windows, thr, a.sustain, m["step_ms"])
     show("the trial's threshold", results["trial"])
     if "calibrated" in results:
-        show(f"calibrated to {a.far:.0%} false alarms on known-normal data", results["calibrated"])
+        show(f"calibrated to {pct(a.far)} false alarms on known-normal data", results["calibrated"])
+        results["calibrated"]["target_false_alarm_rate"] = a.far
+        if note := calibration_note(results["calibrated"], a.far):
+            print("\n" + note)
+            results["calibrated"]["note"] = note
     json.dump(results, open(os.path.join(a.out, "delivery", "scores.json"), "w"), indent=1, default=float)
     return 0
 
