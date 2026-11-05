@@ -36,8 +36,8 @@ import urllib.request
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "red_lifecycle"))
-from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, end,  # noqa: E402
-                       lifecycle_url, load_dotenv, open_session, project_url, request,
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
+                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
                        result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -259,11 +259,13 @@ def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: st
     """Package the blueprint, deploy it as batch, run one session over the file, download its
     output; then delete the session, deployment and package, which each hold the next."""
     t0 = time.time()
-    pkg = create_package(blueprint_id, name)
-    print(f"package {pkg['id']} ready ({time.time() - t0:.0f} s)")
-    dpl = ses = None
+    pkg = dpl = ses = None
     try:
+        pkg = create_package(blueprint_id, name)
+        package_ready(pkg["id"])
+        print(f"package {pkg['id']} ready ({time.time() - t0:.0f} s)")
         dpl = deploy(pkg["id"], "batch")
+        deployment_ready(dpl["id"])
         print(f"batch deployment {dpl['id']} ready")
         ses = open_session(dpl["id"], file_id)
         print(f"session {ses['id']}")

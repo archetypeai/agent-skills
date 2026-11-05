@@ -140,7 +140,9 @@ class LifecycleTests(unittest.TestCase):
 
     def _lifecycle(self, status, ended, results=None):
         for name, fn in (("create_package", lambda bp, name: {"id": "pkg_1"}),
+                         ("package_ready", lambda pid: {"id": pid, "status": "ready"}),
                          ("deploy", lambda pkg, kind: {"id": "dpl_1", "kind": kind}),
+                         ("deployment_ready", lambda did: {"id": did, "status": "ready"}),
                          ("open_session", lambda dpl, fid: {"id": "ses_1"}),
                          ("poll", lambda sid: {"status": status, "error": "boom"}),
                          ("last_events", lambda sid: []),
@@ -167,6 +169,19 @@ class LifecycleTests(unittest.TestCase):
             run_red_agent.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
         self.assertIn("boom", str(cm.exception))
         self.assertEqual([k for k, _ in ended], ["sessions", "deployments", "packages"])
+
+    def test_failed_package_is_still_deleted(self):
+        """A package that never becomes ready is recorded before the wait, so it is deleted too."""
+        ended = []
+        self._lifecycle("completed", ended)
+
+        def failed(pid):
+            raise SystemExit(f"{pid} is failed, not ready: build error")
+
+        with mock.patch.object(run_red_agent, "package_ready", failed), mock.patch("builtins.print"), \
+                self.assertRaises(SystemExit):
+            run_red_agent.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
+        self.assertEqual(ended, [("packages", "pkg_1")])
 
     def test_download_reports_empty_results(self):
         self.api({("GET", "/agents/sessions/ses_1/results"): {"data": []}})
