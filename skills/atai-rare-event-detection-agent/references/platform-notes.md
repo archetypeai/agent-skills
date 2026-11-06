@@ -66,8 +66,9 @@ on it there.
   (a display label, what the console's "Blueprint name" sets) was still ours. Production
   accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
   back on that 403.
-- **The free trial runs optimizations, evals and agent runs on GPU (since 2026-11-06; CPU
-  before) and agent serving on CPU, at most 3 jobs per org at once, each for at most 2 hours.**
+- **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
+  2026-11-06 (CPU before), and agent serving on CPU, at most 3 jobs per org at once, each for
+  at most 2 hours.**
   Further jobs queue, and a queued one already reports `running`. On 2026-10-30, on CPU, the
   sample's step-1 delivery (one 2,654-row file) took 28 min there against ~1 min on production, with
   the same scores; serving answered at a 340 ms median, as on production. A longer recording
