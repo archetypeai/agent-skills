@@ -265,9 +265,12 @@ Expect **~1–2 min** for the ~4,185 step-1 windows of the sample slice when the
 > 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
 > delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
 > `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
-> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
-> queued job already reports `running`, so with large library files that wait counts against
-> the trial's 2-hour job limit; `--serving` takes one serving agent instead.
+> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3, when
+> agent runs there were on CPU). A queued job already reports `running`, so with large library
+> files that wait counts against the trial's 2-hour job limit; `--serving` takes one serving
+> agent instead. Since 2026-11-06 the free trial runs evals and agent runs on GPU (serving
+> stays on CPU): the LARCO quickstart's eval took 3 min (34 on CPU), its delivery 3.5 (31),
+> and its 4 library runs 2.7 (6), with the same scores.
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
@@ -559,7 +562,8 @@ deletes it however the run ends, signals included, with its ids in
   cutting is the client's: when it matters, check the window count against one batch run.
 - **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
   windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
-  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. Not yet measured on an OSM
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs when batch ran on CPU (batch
+  is on GPU there since 2026-11-06, serving still on CPU). Not yet measured on an OSM
   blueprint.
 
 **A rerun resumes,** and starts nothing when every file already has its output: it only
