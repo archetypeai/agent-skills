@@ -62,14 +62,17 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   (a display label, what the console's "Blueprint name" sets) was still ours. Production
   accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
   back on that 403.
-- **The free trial runs on CPU, at most 3 jobs per org at once, each for at most 2 hours.**
-  Further jobs queue, and a queued one already reports `running`. On 2026-10-30 the sample's
-  eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
+- **The free trial runs optimizations, evals and agent runs on GPU (since 2026-11-06; CPU
+  before) and agent serving on CPU, at most 3 jobs per org at once, each for at most 2 hours.**
+  Further jobs queue, and a queued one already reports `running`. On 2026-10-30, on CPU, the
+  sample's eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
   ~13 min on production, was stopped on both files with no output: `DeadlineExceeded: stopped
   after reaching the platform's maximum runtime of 2 hours`. On the free trial, deliver at
   the trial's step (`deliver.py --step 0`: 2/2 files in 28 min) or at step 1 in runs of at
   most N windows (`--max-windows-per-run 1000`: 12 runs of 24–34 min, 2 h 15 min in all, the
-  production scores exactly).
+  production scores exactly). On GPU (2026-11-06) the TEP quickstart's step-1 delivery took
+  ~3.5 min a file (~20,000 windows × 33 channels; most of a short run is start-up) and its one
+  eval of 60,480 rows 3 min, with production's scores.
   `serve.py` replays at the delivery's step: at step 8 there, 805/805 windows matched batch
   (score within 2e-7, the same first alarms) at a 768 ms median per query, and at step 1, on
   the delivery made in 1,000-window runs, 1,826/1,826 in 27 min (851 ms median). A rerun of

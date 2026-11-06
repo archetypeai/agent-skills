@@ -428,8 +428,8 @@ class DeliverResume(unittest.TestCase):
         self.assertEqual(len(one), 9)
 
     def test_trial_run_size_scales_with_channels(self):
-        self.assertEqual(deliver.trial_max_windows(8), 4_800)      # SKAB: ~60 min at ~80 windows a minute
-        self.assertEqual(deliver.trial_max_windows(33), 1_100)     # TEP: its sample ran 1,000 in 24-34 min
+        self.assertEqual(deliver.trial_max_windows(8), 125_000)    # SKAB: its longest file (10,414) in one run
+        self.assertEqual(deliver.trial_max_windows(33), 30_300)    # TEP: a delivery file (~20,000) in one run
         self.assertEqual(deliver.trial_max_windows(10_000), 100)
 
     def on_trial(self, *args, running=None, completed=False, keep_state=False):
