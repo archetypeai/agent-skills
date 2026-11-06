@@ -370,6 +370,13 @@ class TestRequestShapes(unittest.TestCase):
         self.assertEqual(len(cur), 16)
         self.assertGreater(len(cur), len(old))
 
+    def test_current_sample_is_the_manual_the_lifecycle_reproduced(self):
+        """A batch session on dev (2026-11-05) returned this manual exactly."""
+        import hashlib
+        doc = json.load(open(os.path.join(DATA, "mga-output-current-16384.json")))
+        digest = hashlib.md5(json.dumps([doc], sort_keys=True, separators=(",", ":")).encode())
+        self.assertEqual(digest.hexdigest(), "866909a9315bce0e493db7ab1627749d")
+
     def test_previous_prompt_looped_and_current_one_does_not(self):
         """Silent 80 s clip, production, same values: the previous prompt emitted 2
         distinct texts in 16 steps; the current one 17 distinct in 17."""
