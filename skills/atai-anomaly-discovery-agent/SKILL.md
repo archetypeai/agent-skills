@@ -620,8 +620,8 @@ python promote_and_test.py --roles $R --out out --name ad-sample
 ```
 
 1. **Promote** the best trial: `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a
-   `blueprint_key` unique per trial (`<name>-<last 6 of the trial id>`). The blueprint pins the
-   trial's values and carries the fitted detector as a registry artifact (`aar_…`). On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `ad-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `name` and no key. The blueprint pins the trial's values and carries the fitted detector as a
+   registry artifact (`aar_…`). Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `ad-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, every test file and
    `emit_predictions: true`. An eval takes no value overrides: it runs at the trial's own
    threshold and step.
