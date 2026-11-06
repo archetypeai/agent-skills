@@ -7,101 +7,67 @@ where you run this:
     ATAI_API_KEY=<your API key>
     ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 
-    # verify a recording against a procedure
+    # verify a recording against a procedure (a batch session)
     python3 run_tva_agent.py --video assembly.mp4 --sop sop.txt
 
     # print the exact payloads and stop — no API calls, no key needed
     python3 run_tva_agent.py --video assembly.mp4 --sop sop.txt --dry-run
 
+    # load once, then one /query per clip (a serving deployment, released on exit)
+    python3 run_tva_agent.py --serve --video a.mp4 b.mp4 --sop sop.txt
+
+    # delete the sessions, deployments and packages this script recorded
+    python3 run_tva_agent.py --cleanup          # list
+    python3 run_tva_agent.py --cleanup --yes    # delete
+
     # score or re-read an output offline
     python3 run_tva_agent.py --score out.json
     python3 run_tva_agent.py --score out.json --labels 1_pass_2_pass_3_fail
 
+THE LIFECYCLE (Agent Lifecycle 2.0). For one setting — max_frames, size,
+max_new_tokens — the script finds or makes, in order, and records in
+tva-lifecycle.json so the next run at that setting reuses them:
+
+    project     "TVA skill"            found by name, else created
+    copy        tva-f64-s224-t5760     `tva` copied into the project, the values set on it
+    package     of that copy           its models resolved once
+    deployment  batch (or serving)     of that package
+
+then opens a SESSION per clip. A package, a deployment and a batch session take no
+values (a batch session given them is a 422), so the values live on the copy: one
+copy per setting.
+
 WHAT MAKES TVA DIFFERENT FROM MGA: the reference procedure arrives AT RUNTIME.
-The `tva` blueprint wires `source.text -> prepare.in` (PrepareSOPNode), so a run
-sends TWO source inputs — the video and the SOP as a `.txt`. MGA's blueprint sets
-`text_extensions: []` and takes its instruction from a bundle value, so its
-instruction is fixed for the life of a bundle; TVA's SOP travels with each run,
-and ONE BUNDLE SERVES EVERY SOP.
+The `tva` blueprint wires `source.text -> prepare.in` (PrepareSOPNode), so a session
+gets TWO source inputs — the video and the SOP as a `.txt`. MGA's blueprint sets
+`text_extensions: []` and takes its instruction from a value, fixed for the life of
+whatever carries it; TVA's SOP travels with each session, and ONE DEPLOYMENT SERVES
+EVERY SOP. MultiModalSource routes the two inputs by `format`, not by position.
 
-MultiModalSource routes the two inputs by their `format` field, not by position.
-
-THE TWO FAILURES THAT COST THE MOST, both verified end to end:
-
-  1. A blueprint whose SINK cannot be instantiated. The canonical `tva` was
-     republished with `format: json/per-request`, for which no connector is
-     registered, and every run dies at graph instantiation AFTER loading both
-     models — 996 s for zero output, with `status: ready` on the bundle and the
-     cause only in /logs. check_sink() below catches it in about a second.
-
-  2. The token budget spent inside the model's <think> block. f1-0 reasons before
-     answering, and the reasoning shares `max_new_tokens`. Run out inside the block
-     and you get `results: []` while the job reports `job.completed` with no ERROR
-     row. Observed at 2048 on a clip with a skipped step (2026-08) and at 8192/16384
-     on a 21-step SOP; NOT reproduced at any budget on 2026-08-20. There is no
-     threshold to rely on — check /results is non-empty every time.
-
-Both are silent at the HTTP layer. Neither is visible in the `status` field.
+THE FAILURE THAT COSTS THE MOST: the token budget spent inside the model's <think>
+block. The session still ends `completed`, with `results: []` in its output, and a
+session has no /logs to say why. Count the verdicts every time; this script exits
+non-zero when there are none.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
+import base64
 import datetime
+import hashlib
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 
-try:
-    from archetypeai import ArchetypeAI
-except ModuleNotFoundError:  # the only third-party dependency
-    sys.exit("This runner needs the official Archetype AI client:\n"
-             "    pip install -r requirements.txt   (from this directory)\n"
-             "    pip install archetypeai           (or just the package)")
-
 sys.stdout.reconfigure(line_buffering=True)
 
-_CLIENT = None
-
-
-def client() -> "ArchetypeAI":
-    """The official client, built once from the environment."""
-    global _CLIENT
-    if _CLIENT is None:
-        key, endpoint = env()
-        _CLIENT = build_client(key, endpoint)
-    return _CLIENT
-
-
-def api_root(endpoint: str) -> str:
-    """Return the deployment root, with any /api or /vX.Y suffix removed.
-
-    Accept every form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
-    and the console shows it bare.
-    """
-    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
-    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
-
-
-def build_client(api_key: str, endpoint: str) -> ArchetypeAI:
-    """The official client, pointed at the deployment's /api prefix.
-
-    Both API surfaces live under one versionless prefix — /api/agents and
-    /api/files — so a single client serves both. The client uses api_endpoint
-    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
-    """
-    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
-
-# Log event types that end a run. The instance `status` field is NOT usable for
-# this — it has read `running` 20+ minutes after a pod died with exit=1.
-TERMINAL_EVENTS = ("pod.terminated", "job.completed", "job.failed", "job.canceled")
+# A session's terminal statuses.
+TERMINAL = {"completed", "failed", "cancelled"}
 
 # The statuses TaskVerificationResultsParserNode emits.
 STATUSES = ("PASSED", "FAILED", "MISSING")
@@ -118,12 +84,13 @@ STATUSES = ("PASSED", "FAILED", "MISSING")
 KNOWN_GOOD_SINK_FORMATS = {"jsonl/per-request", "json/per-request"}
 KNOWN_BROKEN_SINK_FORMATS: set[str] = set()
 
-# Default output budget. Not the blueprint default (16384), so runs through this
-# script stay comparable to the measurements in SKILL.md. It was chosen in 2026-08
-# when 5760 was the only budget returning rows on a 21-step SOP; a 12-cell sweep on
-# 2026-08-20 found no budget-dependent difference on the shipped 3-step SOP, so treat
-# this as a stable default rather than a safe one. See SKILL.md, "The output budget is
-# shared with the reasoning block".
+# Default output budget, always set on the copy. A plain copy runs at the blueprint's
+# own default (8192 since 2026-10-15), so runs through this script stay comparable to
+# the measurements in SKILL.md only if it is sent. It was chosen in 2026-08 when 5760
+# was the only budget returning rows on a 21-step SOP; a 12-cell sweep on 2026-08-20
+# found no budget-dependent difference on the shipped 3-step SOP, so treat this as a
+# stable default rather than a safe one. See SKILL.md, "The output budget is shared
+# with the reasoning block".
 DEFAULT_MAX_NEW_TOKENS = 5760
 
 # Where a project is expected to keep its procedure: a `sop/` directory beside the
@@ -133,6 +100,16 @@ DEFAULT_MAX_NEW_TOKENS = 5760
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
 BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "sample_data", "oring-numbered.txt")
+
+PROJECT = "TVA skill"
+STATE_PATH = "tva-lifecycle.json"
+
+# A serving query: the whole request is capped at 2 MiB (the video goes inline as
+# base64), each query has a 58 s budget on the platform, and a request past this is lost.
+SERVING_BODY_CAP = 2 * 1024 * 1024
+QUERY_TIMEOUT_S = 120
+# A serving deployment took 693 s to become ready on 2026-11-06; leave room.
+SERVING_READY_S = 1800
 
 
 def resolve_sop(path: str | None) -> str:
@@ -158,12 +135,23 @@ def load_dotenv(path: str = ".env") -> None:
                 os.environ.setdefault(k.strip(), v.strip())
 
 
-def env() -> tuple[str, str]:
-    """(key, endpoint). The endpoint is normalised to a bare deployment root.
+def api_root(endpoint: str) -> str:
+    """Return the deployment root, with any /api or /vX.Y suffix removed.
 
-    Both API surfaces live under one /api prefix, which build_client appends.
-    A user pasting the /query base URL would otherwise produce
-    /v0.5/api/agents/... and 404 everywhere.
+    Accept every form so one .env works for every skill in this repo: the
+    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
+    and the console shows it bare.
+    """
+    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
+    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+
+
+def env() -> tuple[str, str]:
+    """(key, root). The endpoint is normalised to a bare deployment root.
+
+    Every surface lives under one versionless /api prefix on it — /api/projects,
+    /api/agents, /api/files. A user pasting the /query base URL would otherwise
+    produce /v0.5/api/agents/... and 404 everywhere.
     """
     key = os.environ.get("ATAI_API_KEY")
     endpoint = (os.environ.get("ATAI_API_ENDPOINT") or "").rstrip("/")
@@ -171,18 +159,57 @@ def env() -> tuple[str, str]:
         sys.exit("ATAI_API_KEY is not set (put it in .env)")
     if not endpoint:
         sys.exit("ATAI_API_ENDPOINT is not set (put it in .env)")
-    endpoint = api_root(endpoint)
-    return key, endpoint
+    return key, api_root(endpoint)
+
+
+def agents_url(path: str = "") -> str:
+    return f"{env()[1]}/api/agents{path}"
+
+
+def request(method: str, url: str, body=None, raw: bool = False,
+            allow_status: bool = False, timeout: int = 120, retries: int = 4):
+    """Call the API. Returns the parsed JSON (or bytes with raw=True).
+
+    allow_status=True returns (status, body) instead of exiting on an HTTP error:
+    a 404 during cleanup is a finding, not a crash. Network errors are retried for
+    GET and DELETE only — a repeated POST /sessions would start a second run.
+    """
+    key, _ = env()
+    data = json.dumps(body).encode() if body is not None else None
+    attempts = retries + 1 if method in ("GET", "DELETE") else 1
+    for attempt in range(attempts):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {key}")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                payload = resp.read()
+                out = payload if raw else json.loads(payload or b"null")
+                return (resp.status, out) if allow_status else out
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            if allow_status:
+                return e.code, detail
+            sys.exit(f"{method} {url} failed ({e.code}): {detail}")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if attempt == attempts - 1:
+                if allow_status:
+                    return 0, str(e)
+                sys.exit(f"{method} {url} failed: {e}")
+            wait = 5 * (2 ** attempt)
+            print(f"  network error ({e}); retrying in {wait}s")
+            time.sleep(wait)
 
 
 def run_suffix() -> str:
     """`<UTC timestamp>-<4 hex>`, generated ONCE per run and shared by its inputs.
 
     An org shares ONE FLAT file namespace and `file_id` IS the basename, so two people
-    running the same clip write to the same object. A run pins its inputs at
-    input-resolution time and a run can queue for an hour, so the second upload destroys
-    the first's queued run — surfacing minutes later, inside a run that already started,
-    as `S3 object not found` with `job.completed` on the job.
+    running the same clip write to the same object. A session pins its inputs when it
+    resolves them and can queue for an hour, so the second upload destroys the first's
+    queued input — surfacing minutes later, inside a run that already started, as
+    `S3 object not found`.
 
     Each part earns its place:
       the original stem  recognisable in an org-wide file list
@@ -197,11 +224,11 @@ def run_suffix() -> str:
 def pair_names(video: str, sop: str, suffix: str | None = None) -> tuple[str, str]:
     """The ids to upload under, as (video, sop). Stems MATCH and name the SOP.
 
-    A run's inputs arrive as ONE FLAT LIST of file ids with nothing saying which text
-    belongs to which video, so the pipeline infers it from the names — by SUBSTRING,
-    not equality: a `<stem>.txt` pairs with any video whose name CONTAINS `<stem>`.
-    With a single SOP, as here, it applies to the video whether or not the names
-    relate at all, so for a 1:1 run naming cannot break pairing.
+    A session's inputs arrive as ONE FLAT LIST of file ids with nothing saying which
+    text belongs to which video, so the pipeline infers it from the names — by
+    SUBSTRING, not equality: a `<stem>.txt` pairs with any video whose name CONTAINS
+    `<stem>`. With a single SOP, as here, it applies to the video whether or not the
+    names relate at all, so for a 1:1 run naming cannot break pairing.
 
     It still earns its keep. Including the SOP's stem records which procedure a run
     was checked against — the only such record, since the platform's file list holds
@@ -217,35 +244,41 @@ def pair_names(video: str, sop: str, suffix: str | None = None) -> tuple[str, st
     return f"{stem}.mp4", f"{stem}.txt"
 
 
-def upload(path: str, rename: str | None = None) -> str:
-    """POST a file to <root>/api/files, streamed from disk. Returns the file_id.
+def upload(path: str, name: str) -> str:
+    """POST a file to <root>/api/files under `name`. Returns the file_id.
 
     The DECLARED Content-Type is enforced against a MIME allowlist, not the bytes:
     `video/mp4` for the clip, `text/plain` for the SOP. The returned `file_id` is
     the BASENAME — that is what connectors.source[].id wants, not the `fil_...`
     `file_uid` in the same response.
 
-    IDEMPOTENT: if an object of the same name already holds the same bytes, this
-    SKIPS the upload. That is not an optimisation. A run pins its inputs at
-    input-resolution time and a run can queue for an hour, so re-uploading the same
-    name in that window kills whatever is already queued — it fails minutes later,
-    inside the run, as `S3 object not found` with `job.completed` on the job.
+    Every upload here carries a per-run <UTC>-<hex> suffix, so the name never
+    already exists and nothing queued can be overwritten.
     """
     if not os.path.exists(path):
         sys.exit(f"no such file: {path}")
-    # No "already uploaded?" probe. Every upload here is renamed with a
-    # per-run <UTC>-<hex> suffix, so the object can never already exist — the
-    # check could not fire, and probing for it means downloading the remote
-    # object in full just to compare bytes. (It was equally dead before this
-    # runner moved to the client; the client just logs the 404 loudly.)
-    name = rename or os.path.basename(path)
-    # The client uploads under the file's own basename, so an explicit name
-    # means staging a copy under that name first.
-    if name != os.path.basename(path):
-        staged = os.path.join(tempfile.mkdtemp(), name)
-        shutil.copyfile(path, staged)
-        path = staged
-    return client().files.local.upload(path)["file_id"]
+    key, root = env()
+    ctype = "video/mp4" if name.endswith(".mp4") else "text/plain"
+    boundary = uuid.uuid4().hex
+    with open(path, "rb") as fh:
+        content = fh.read()
+    body = b"".join([
+        f"--{boundary}\r\n".encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'.encode(),
+        f"Content-Type: {ctype}\r\n\r\n".encode(), content,
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+    req = urllib.request.Request(f"{root}/api/files", data=body, method="POST")
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    try:
+        with urllib.request.urlopen(req, timeout=900) as resp:
+            out = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"upload of {path} failed ({e.code}): {e.read().decode(errors='replace')}")
+    if not out.get("is_valid", True) or not out.get("file_id"):
+        sys.exit(f"upload of {path} was rejected: {json.dumps(out)}")
+    return out["file_id"]
 
 
 def load_sop(path: str) -> list[str]:
@@ -265,13 +298,18 @@ def load_sop(path: str) -> list[str]:
     return steps
 
 
+def sop_text(steps: list[str]) -> str:
+    return "\n".join(steps) + "\n"
+
+
 def inert_values(doc: dict, values: dict) -> list[str]:
     """Which of `values` the blueprint will accept and silently ignore.
 
     A value is honoured only if it is declared in the blueprint's `values` AND
-    referenced as ${values.<key>} by some node or connector. Setting an unwired
-    value returns 201 and echoes it straight back, so nothing in the response
-    tells you. Reads the document, so it needs no maintenance.
+    referenced as ${values.<key>} by some node or connector. A copy refuses an
+    undeclared key with a 400, but accepts a declared one that nothing references,
+    so nothing in the response tells you. Reads the document, so it needs no
+    maintenance.
     """
     wired = json.dumps({"nodes": doc.get("nodes"),
                         "connectors": doc.get("connectors")})
@@ -281,75 +319,220 @@ def inert_values(doc: dict, values: dict) -> list[str]:
 
 
 def check_sink(doc: dict) -> str | None:
-    """Warn if the blueprint's sink cannot be instantiated. See module docstring.
+    """Warn if the blueprint's sink cannot be instantiated.
 
-    This is the cheapest check in the file and the one that saves the most: the
-    platform validates the graph AFTER downloading and loading both models, so a
-    bad sink costs the full ~7-minute cold start and leaves no results.
+    The platform validates the graph AFTER downloading and loading both models, so
+    a bad sink costs the full ~7-minute cold start and leaves no results.
     """
     fmt = ((doc.get("connectors") or {}).get("sink") or {}).get("config", {}).get("format")
     if fmt in KNOWN_BROKEN_SINK_FORMATS:
         return (f"sink format {fmt!r} has NO REGISTERED CONNECTOR here. This run "
                 f"would load both models (~7 min) and then die at graph "
-                f"instantiation with no results. Target a blueprint whose sink is "
+                f"instantiation with no results. Copy a blueprint whose sink is "
                 f"one of {sorted(KNOWN_GOOD_SINK_FORMATS)}.")
     if fmt not in KNOWN_GOOD_SINK_FORMATS:
-        return (f"sink format {fmt!r} has not been seen to work. If the run dies "
-                f"at 'instantiating graph', this is why.")
+        return (f"sink format {fmt!r} has not been seen to work. If the session "
+                f"fails at 'instantiating graph', this is why.")
     return None
 
 
-def start_run(bundle_id: str, video_id: str, sop_id: str) -> str:
-    """Start a run with BOTH inputs. Returns the agent id.
+# --------------------------------------------------------------------------
+# lifecycle: project -> copy -> package -> deployment -> session
+# --------------------------------------------------------------------------
 
-    Both go in the same `connectors.source` list and MultiModalSource routes them
-    by `format`: `mp4` reaches source.video, `txt` reaches source.text. Order does
-    not matter. Omit the text input and the run starts, then the prompt generator
-    waits on an instruction that never arrives.
+def setting_key(values: dict, source: str = "tva") -> str:
+    """`tva-f64-s224-t5760`: the copy's key, named after its values.
 
-    Returns 202, not 201.
+    A copy of anything but `tva` is prefixed with the source's last six characters,
+    so two sources at one setting never share a key."""
+    prefix = "tva" if source == "tva" else "tva-" + re.sub(r"[^a-z0-9]", "", source.lower())[-6:]
+    return f"{prefix}-f{values['max_frames']}-s{values['size']}-t{values['max_new_tokens']}"
+
+
+def copy_body(project_id: str, key: str, values: dict) -> dict:
+    """A copy takes `overrides.values`: the one place left to set them."""
+    return {"project_id": project_id, "blueprint_key": key, "name": f"TVA {key}",
+            "overrides": {"values": values}}
+
+
+def package_body(blueprint_id: str, key: str) -> dict:
+    return {"blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": f"TVA {key}"}
+
+
+def deployment_body(package_id: str, kind: str) -> dict:
+    return {"package_id": package_id, "kind": kind}
+
+
+def session_body(deployment_id: str, video_id: str | None = None,
+                 sop_id: str | None = None) -> dict:
+    """A batch session over one video AND its SOP, or a serving session with neither.
+
+    Both inputs go in the same `connectors.source` list and MultiModalSource routes
+    them by `format`: `mp4` reaches source.video, `txt` reaches source.text. Order
+    does not matter. Omit the text input and the session starts, then the prompt
+    generator waits on an instruction that never arrives. No `values`: a batch
+    session given them is refused with a 422.
     """
-    _, endpoint = env()
-    agent = client().agents.bundles.run(bundle_id, source=[
-        {"type": "file", "id": video_id, "format": "mp4"},
-        {"type": "file", "id": sop_id, "format": "txt"},
-    ])
-    return agent["id"]
+    body = {"deployment_id": deployment_id}
+    if video_id:
+        body["connectors"] = {"source": [
+            {"type": "file", "id": video_id, "format": "mp4"},
+            {"type": "file", "id": sop_id, "format": "txt"},
+        ]}
+    return body
 
 
-def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 20) -> str:
-    """Stream /logs until terminal. Returns completed / failed / timeout, or
-    'empty-reasoning-overflow' when the parser reports it never got an answer.
+def query_body(video: bytes, sop: str) -> dict:
+    """A serving query: the SOP as `query`, the video inline."""
+    return {"model": "tv", "query": sop, "file_ids": ["base64:" + base64.b64encode(video).decode()]}
 
-    Polls /logs, NOT /events — /events carries only "run started" and
-    "dispatched to JOS". Ignores the `status` field entirely.
+
+def load_state() -> dict:
+    """tva-lifecycle.json, per deployment root: ids made on one root don't exist on another."""
+    state = json.load(open(STATE_PATH)) if os.path.exists(STATE_PATH) else {}
+    mine = state.setdefault(env()[1], {})
+    mine.setdefault("settings", {})
+    mine.setdefault("sessions", {})
+    return state
+
+
+def save_state(state: dict) -> None:
+    tmp = STATE_PATH + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(state, fh, indent=1)
+    os.replace(tmp, STATE_PATH)
+
+
+def _alive(url: str) -> dict | None:
+    status, obj = request("GET", url, allow_status=True)
+    return obj if status == 200 and isinstance(obj, dict) else None
+
+
+def wait_for(url: str, want: str, waiting: str, timeout_s: int, every_s: int = 5) -> dict:
+    """Poll while the status is `waiting`; exit unless it then reaches `want`."""
+    t0 = time.time()
+    obj = request("GET", url)
+    while obj["status"] == waiting:
+        if time.time() - t0 > timeout_s:
+            sys.exit(f"{obj['id']} still {waiting} after {timeout_s} s")
+        time.sleep(every_s)
+        obj = request("GET", url)
+    if obj["status"] != want:
+        sys.exit(f"{obj['id']} is {obj['status']}, not {want}: {obj.get('error')}")
+    return obj
+
+
+def project_id(state: dict) -> str:
+    mine = state[env()[1]]
+    if "project" not in mine:
+        root = env()[1]
+        found = [p for p in request("GET", f"{root}/api/projects?limit=1000")["data"]
+                 if p["name"] == PROJECT]
+        mine["project"] = found[0]["id"] if found else request(
+            "POST", f"{root}/api/projects",
+            body={"name": PROJECT, "description": "Task Verification (TVA) skill runs"})["id"]
+        save_state(state)
+        print(f"  project {mine['project']} ({PROJECT})")
+    return mine["project"]
+
+
+def agent(values: dict, kind: str, source: str = "tva") -> dict:
+    """The setting's record, with a `ready` deployment of `kind` in it.
+
+    Reuses whatever tva-lifecycle.json holds that still answers, and rebuilds only
+    what is gone. Every id is recorded BEFORE anything waits on it, so --cleanup
+    finds a package or deployment whose client died mid-wait.
     """
-    _, endpoint = env()
+    key = setting_key(values, source)
+    state = load_state()
+    pid = project_id(state)
+    rec = state[env()[1]]["settings"].setdefault(key, {"source": source, "values": values})
+
+    if not rec.get("blueprint") or not _alive(agents_url(f"/blueprints/{rec['blueprint']}")):
+        # A key in a project resolves only with ?project_id=.
+        found = request("GET", agents_url(f"/blueprints?project_id={pid}&key={key}"))["data"]
+        if found:
+            rec["blueprint"] = found[0]["id"]
+            print(f"  reusing copy {key} ({rec['blueprint']})")
+        else:
+            rec["blueprint"] = request("POST", agents_url(f"/blueprints/{source}/copy"),
+                                       body=copy_body(pid, key, values))["id"]
+            print(f"  copied {source} as {key} ({rec['blueprint']}) with {json.dumps(values)}")
+        rec.pop("package", None)
+        save_state(state)
+
+    pkg = _alive(agents_url(f"/packages/{rec['package']}")) if rec.get("package") else None
+    if not pkg or pkg["status"] not in ("ready", "building"):
+        pkg = request("POST", agents_url("/packages"), body=package_body(rec["blueprint"], key))
+        rec["package"] = pkg["id"]
+        for k in ("batch", "serving"):
+            rec.pop(k, None)
+        save_state(state)
+        print(f"  package {pkg['id']} building (models resolved once) ...")
+    if pkg["status"] != "ready":
+        wait_for(agents_url(f"/packages/{rec['package']}"), "ready", "building", 900)
+
+    dpl = _alive(agents_url(f"/deployments/{rec[kind]}")) if rec.get(kind) else None
+    if not dpl or dpl["status"] not in ("ready", "deploying"):
+        dpl = request("POST", agents_url("/deployments"), body=deployment_body(rec["package"], kind))
+        rec[kind] = dpl["id"]
+        save_state(state)
+        print(f"  {kind} deployment {dpl['id']}"
+              + (" (places and loads the agent on a GPU worker: ~12 min)" if kind == "serving" else ""))
+    if dpl["status"] != "ready":
+        wait_for(agents_url(f"/deployments/{rec[kind]}"), "ready", "deploying",
+                 SERVING_READY_S if kind == "serving" else 900, every_s=10)
+    return {"key": key, **rec}
+
+
+def record_session(session_id: str, **info) -> None:
+    """Note a session as soon as it exists, for --cleanup."""
+    state = load_state()
+    state[env()[1]]["sessions"][session_id] = {
+        **info, "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    save_state(state)
+
+
+def local_time(stamp) -> str:
+    """An event's UTC `created_at` as local HH:MM:SS, like the script's own lines."""
+    try:
+        return datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00")) \
+            .astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return str(stamp)[11:19]
+
+
+def print_events(session_id: str, seen: set) -> None:
+    """Print the session's events not printed yet. /events is newest first."""
+    status, body = request("GET", agents_url(f"/sessions/{session_id}/events?limit=100"),
+                           allow_status=True)
+    if status != 200 or not isinstance(body, dict):
+        return
+    for ev in reversed(body.get("data") or []):
+        marker = f"{ev.get('created_at')}|{ev.get('message')}"
+        if marker not in seen:
+            seen.add(marker)
+            print(f"  {local_time(ev.get('created_at'))} "
+                  f"{str(ev.get('level', 'info')):7} {ev.get('message')}")
+
+
+def poll(session_id: str, timeout_s: int = 3600, interval_s: int = 20) -> str:
+    """Poll a batch session until it ends, printing its events. Returns its status
+    (`completed`, `failed`, `cancelled`) or `timeout`.
+
+    A session has no /logs, only /events: opened, dispatched, failed with a reason —
+    not the model-load timings and parser messages an instance's /logs carried. So
+    a run whose budget went on reasoning still ends `completed`; count the verdicts.
+    """
     seen: set[str] = set()
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        rows = sorted(
-            client().agents.instances.get_logs(agent_id, limit=500)
-            .get("data", []), key=lambda r: str(r.get("created_at")))
-        for r in rows:
-            marker = f"{r.get('created_at')}|{r.get('event_type')}|{r.get('message')}"
-            if marker in seen:
-                continue
-            seen.add(marker)
-            print(f"  {str(r.get('created_at'))[11:19]} "
-                  f"{str(r.get('level')):7} {str(r.get('event_type')):26} "
-                  f"{r.get('message')}")
-        if rows and str(rows[-1].get("event_type")) in TERMINAL_EVENTS:
-            if any(str(r.get("level")) == "ERROR" for r in rows):
-                return "failed"
-            # A WARN naming the reasoning block means the budget was spent before
-            # any verdict was emitted. The job still reports completed and
-            # /results still returns a record — with an empty results list.
-            for r in rows:
-                if str(r.get("level")) == "WARN" and \
-                        "reasoning block" in str(r.get("message", "")):
-                    return "empty-reasoning-overflow"
-            return "completed"
+        ses = request("GET", agents_url(f"/sessions/{session_id}"))
+        print_events(session_id, seen)
+        if ses["status"] in TERMINAL:
+            if ses.get("error"):
+                print(f"  {session_id}: {ses['error']}")
+            return ses["status"]
         time.sleep(interval_s)
     return "timeout"
 
@@ -378,7 +561,7 @@ def wait_until_parses(save, out_path: str) -> bool:
         save()
 
 
-ARTIFACT_WAIT_S = 600          # how long to wait for artifacts after a run reports completed
+ARTIFACT_WAIT_S = 600          # how long to wait for artifacts after a session reports completed
 
 
 def artifact_status(item):
@@ -387,20 +570,14 @@ def artifact_status(item):
     A run reports `completed` while its artifacts are still being written. One
     measured instance: an output held 16,018 of an eventual 50,547 bytes at the
     moment its run reported completed -- 318 rows of ~997. Reading it gives a
-    well-formed file that is simply short, so nothing downstream notices. The
-    console shows the same pairing, run COMPLETED beside artifact PARTIAL.
+    well-formed file that is simply short, so nothing downstream notices.
     """
     return (item.get("data", {}).get("file_attributes", {})
                 .get("job_output", {}).get("status"))
 
 
 def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
-    """The run's outputs, once every one reports complete.
-
-    Needs nothing but the agent id -- unlike a content check, which has to
-    compare the output against the input and so only works for the client that
-    produced the run.
-    """
+    """The session's outputs, once every one reports complete."""
     deadline = time.time() + wait_s
     waited = False
     while True:
@@ -419,36 +596,109 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
         time.sleep(15)
 
 
-def fetch_results(agent_id: str, out_path: str) -> bytes | None:
-    """Save the first output. The `ref` is RELATIVE, resolves under <root>/api, and
-    needs the bearer token; an absolute ref is presigned and must not get it.
-    Run outputs do not expire, so this is re-fetchable later."""
-    _, endpoint = env()
+def result_url(ref: str, root: str) -> str:
+    """Where a result `ref` resolves. A session's ref is a ROOT path,
+    `/api/files/<fil_…>/content`, which already carries /api: appended to an
+    `…/api` endpoint it becomes /api/api/… and 404s. An absolute ref is used as is."""
+    if ref.startswith("http"):
+        return ref
+    return f"{root}{ref}" if ref.startswith("/api/") else f"{root}/api{ref}"
+
+
+def fetch_results(session_id: str, out_path: str) -> bytes | None:
+    """Save the session's output. Returns the bytes, or None when there are none."""
+    key, root = env()
     items = complete_results(
-        lambda: client().agents.instances.get_results(agent_id).get("data") or [])
+        lambda: request("GET", agents_url(f"/sessions/{session_id}/results")).get("data") or [])
     if not items:
-        print("  no results (a failed run leaves none)")
+        print("  no results (a failed session leaves none)")
         return None
-    inner = items[0].get("data") or {}
-    ref = inner.get("ref") or items[0].get("ref")
+    if len(items) > 1:
+        print(f"  WARNING: {len(items)} result files returned; saving only the first written")
+    inner = items[-1].get("data") or {}           # newest first: the last is the first written
+    ref = inner.get("ref")
     if not ref:
         print("  results carried no download ref")
         return None
+    url = result_url(ref, root)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     def save() -> None:
-        if ref.startswith("http"):
-            # A presigned S3 ref expires (~20 min), so fetch it directly.
-            with urllib.request.urlopen(ref, timeout=300) as resp:
-                payload = resp.read()
-            with open(out_path, "wb") as fh:
-                fh.write(payload)
-        else:
-            client().files.local.download(inner.get("filename") or ref.rsplit("/", 1)[-1], out_path)
+        req = urllib.request.Request(url)
+        if not ref.startswith("http"):            # a presigned URL must not get the bearer header
+            req.add_header("Authorization", f"Bearer {key}")
+        with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
+            fh.write(resp.read())
 
     save()
     wait_until_parses(save, out_path)
     return open(out_path, "rb").read()
+
+
+def end(kind: str, obj_id: str) -> bool:
+    """Cancel a session still going, or stop a deployment still up, then delete it;
+    a package is deleted as it is. True once it is gone (a 404 counts).
+
+    Never send DELETE to a session expecting a no-op: it removes the session and its
+    results. Cancel is /cancel."""
+    url = agents_url(f"/{kind}/{obj_id}")
+    status, obj = request("GET", url, allow_status=True)
+    if status == 404:
+        return True
+    if status == 200 and isinstance(obj, dict):
+        if kind == "sessions" and obj.get("status") not in TERMINAL:
+            request("POST", f"{url}/cancel", body={}, allow_status=True)
+        if kind == "deployments" and obj.get("status") not in ("stopped", "failed"):
+            request("POST", f"{url}/stop", body={}, allow_status=True)
+    status, _ = request("DELETE", url, raw=True, allow_status=True)
+    return 200 <= status < 300 or status == 404
+
+
+def forget(ids: set) -> None:
+    """Drop deleted ids from tva-lifecycle.json."""
+    state = load_state()
+    mine = state[env()[1]]
+    for rec in mine["settings"].values():
+        for k in ("package", "batch", "serving"):
+            if rec.get(k) in ids:
+                rec.pop(k)
+    mine["sessions"] = {s: x for s, x in mine["sessions"].items() if s not in ids}
+    save_state(state)
+
+
+def cleanup(yes: bool) -> int:
+    """Sessions, then deployments, then packages: each holds the next.
+
+    Starts from each recorded package and lists its deployments and their sessions,
+    so ones this script never recorded are found too. The project and its copies
+    stay; the next run at a setting packages its copy again."""
+    state = load_state()
+    mine = state[env()[1]]
+    targets = []
+    for key, rec in mine["settings"].items():
+        pkg = rec.get("package")
+        if not pkg or not _alive(agents_url(f"/packages/{pkg}")):
+            continue
+        dpls = [d["id"] for d in request(
+            "GET", agents_url(f"/deployments?package_id={pkg}&limit=1000"))["data"]]
+        targets += [("sessions", s["id"]) for d in dpls for s in request(
+            "GET", agents_url(f"/sessions?deployment_id={d}&limit=1000"))["data"]]
+        targets += [("deployments", d) for d in dpls] + [("packages", pkg)]
+    for kind in ("sessions", "deployments", "packages"):
+        print(f"  {sum(t[0] == kind for t in targets)} {kind}")
+    if mine.get("project"):
+        print(f"stays: project {mine['project']} ({PROJECT}) and its copies of tva "
+              f"({', '.join(mine['settings']) or 'none'})")
+    if not targets:
+        print("nothing recorded is still on the platform")
+        return 0
+    if not yes:
+        print("nothing deleted: rerun with --cleanup --yes")
+        return 0
+    gone = {obj for kind, obj in targets if end(kind, obj)}
+    forget(gone)
+    print(f"deleted {len(gone)} of {len(targets)}")
+    return 0 if len(gone) == len(targets) else 1
 
 
 def parse_labels(text: str) -> dict[int, bool]:
@@ -477,7 +727,7 @@ def show(path: str, labels: str | None = None) -> int:
     """Print a verification report, and score it if labels are available.
 
     Returns the number of verdicts, so a caller can tell an empty run from a
-    real one — which neither the job status nor the HTTP layer will do.
+    real one — which neither the session status nor the HTTP layer will do.
     """
     with open(path, "rb") as fh:
         raw = fh.read()
@@ -490,12 +740,12 @@ def show(path: str, labels: str | None = None) -> int:
         print(f"\nverification report for {rec.get('id', '?')} — "
               f"{len(rows)} verdict(s)")
         if not rows:
-            print("  NO VERDICTS. The run reported job.completed and returned an\n"
+            print("  NO VERDICTS. The session reported completed and returned an\n"
                   "  empty results list. The usual cause is the token budget being\n"
                   "  spent inside the model's <think> block, so nothing was ever\n"
-                  "  emitted. Check /logs for 'generation ended inside the model's\n"
-                  "  reasoning block' and raise --max-new-tokens. Clips where a step\n"
-                  "  was SKIPPED need a bigger budget than clean ones.")
+                  "  emitted. A session has no /logs to confirm it. Change\n"
+                  "  --max-new-tokens (one step, either way) and re-run: see SKILL.md,\n"
+                  "  'The output budget is shared with the reasoning block'.")
         for r in rows:
             # MISSING rows carry no timestamps by design — there is no interval to
             # point at for a step that never happened.
@@ -532,31 +782,200 @@ def show(path: str, labels: str | None = None) -> int:
     return total_rows
 
 
+def dry_run(args, values: dict, steps: list[str]) -> None:
+    """Print every request body in order, with no API call and no key needed."""
+    endpoint = os.environ.get("ATAI_API_ENDPOINT")
+    root = api_root(endpoint) if endpoint else "{root}"
+    key = setting_key(values, args.blueprint)
+    print(f"once per setting (reused while {STATE_PATH} holds it):\n")
+    print(f"POST {root}/api/projects            # unless a project named {PROJECT!r} exists")
+    print(json.dumps({"name": PROJECT, "description": "Task Verification (TVA) skill runs"}, indent=2))
+    print(f"\nPOST {root}/api/agents/blueprints/{args.blueprint}/copy")
+    print(json.dumps(copy_body("<the project>", key, values), indent=2))
+    print(f"\nPOST {root}/api/agents/packages     # then poll until ready")
+    print(json.dumps(package_body("<the copy>", key), indent=2))
+    kind = "serving" if args.serve else "batch"
+    print(f"\nPOST {root}/api/agents/deployments  # then poll until ready")
+    print(json.dumps(deployment_body("<the package>", kind), indent=2))
+    if args.serve:
+        print(f"\nPOST {root}/api/agents/sessions     # then poll until running")
+        print(json.dumps(session_body("<the deployment>"), indent=2))
+        for video in args.video:
+            size = os.path.getsize(video) if os.path.exists(video) else 0
+            over = size * 4 / 3 > SERVING_BODY_CAP
+            print(f"\nPOST {root}/api/agents/sessions/<id>/query   # {os.path.basename(video)}"
+                  + ("  ** over the 2 MiB request cap after base64: re-encode it smaller"
+                     if over else ""))
+            print(json.dumps({"model": "tv", "query": sop_text(steps),
+                              "file_ids": [f"base64:<{size:,} bytes of mp4>"]}, indent=2))
+        return
+    print("\nper clip:")
+    for video in args.video:
+        v_name, s_name = pair_names(video, args.sop, run_suffix())
+        print(f"\nPOST {root}/api/agents/sessions")
+        print(f"# stems match ({os.path.splitext(v_name)[0]}): the -<UTC>-<hex> tail keeps "
+              f"concurrent users from\n# overwriting each other's inputs. Generated per run, "
+              f"so the REAL run will differ.")
+        print(json.dumps(session_body("<the deployment>", v_name, s_name), indent=2))
+    print(f"\nSOP ({len(steps)} steps, one per line):")
+    for i, s in enumerate(steps, 1):
+        print(f"  {i}. {s}")
+
+
+def preflight(source: str, values: dict, force: bool) -> None:
+    """Read the source blueprint before anything is uploaded or built."""
+    bp = request("GET", agents_url(f"/blueprints/{source}"))
+    doc = bp.get("document") or {}
+    print(f"blueprint {bp['id']} (key={bp.get('blueprint_key')}, active={bp.get('is_active')})")
+    if not bp.get("is_active"):
+        print("  NOTE: this blueprint is superseded.")
+    inert = inert_values(doc, values)
+    for k, v in sorted(values.items()):
+        print(f"  {k:16} {str(v):8} -> "
+              f"{'NOT WIRED — ignored' if k in inert else 'honoured'}"
+              f"   (blueprint default: {doc.get('values', {}).get(k)})")
+    sink_warning = check_sink(doc)
+    if sink_warning:
+        print(f"  ** {sink_warning}")
+        if not force:
+            sys.exit("refusing to spend ~7 min of GPU on a run that cannot "
+                     "produce output. Pass --force to do it anyway.")
+
+
+def run_batch(args, values: dict, steps: list[str]) -> None:
+    """One batch session per clip on the setting's batch deployment."""
+    rec = agent(values, "batch", source=args.blueprint)
+    print(f"  {rec['key']}: copy {rec['blueprint']}  package {rec['package']}  "
+          f"deployment {rec['batch']}")
+    failed = []
+    for video in args.video:
+        clip = os.path.splitext(os.path.basename(video))[0]
+        out_path = args.output if args.output and len(args.video) == 1 \
+            else f"tva-output-{clip}.json"
+        print(f"\n{clip}: uploading ...")
+        v_name, s_name = pair_names(video, args.sop, run_suffix())
+        video_id = upload(video, v_name)
+        sop_id = upload(args.sop, s_name)
+        print(f"  video={video_id}  sop={sop_id}")
+
+        session_id = request("POST", agents_url("/sessions"),
+                             body=session_body(rec["batch"], video_id, sop_id))["id"]
+        record_session(session_id, setting=rec["key"], kind="batch", clip=clip, out=out_path)
+        print(f"session {session_id}\n  watching its status and /events "
+              f"(~7 min of model loading first) ...")
+        try:
+            status = poll(session_id)
+        except KeyboardInterrupt:
+            # Never leave a run on the GPU: an abandoned run blocks everyone behind it.
+            print(f"\ninterrupted — cancelling {session_id}")
+            request("POST", agents_url(f"/sessions/{session_id}/cancel"), body={},
+                    allow_status=True)
+            sys.exit(130)
+        print(f"\nsession {status}")
+        payload = fetch_results(session_id, out_path)
+        n = 0
+        if payload is not None:
+            print(f"  saved {out_path} ({len(payload)} bytes)")
+            n = show(out_path)
+        if status != "completed" or n == 0:
+            failed.append(f"{clip}: {status}" + ("" if n else ", no verdicts"))
+    if failed:
+        sys.exit("\n".join(failed) + f"\n  events: {agents_url('/sessions/<id>/events')}")
+
+
+def run_serving(args, values: dict, steps: list[str]) -> None:
+    """A serving deployment and one session on it, one /query per clip, then release.
+
+    The deployment holds the GPU worker, not the session: both are cancelled /
+    stopped and deleted on exit, Ctrl-C included, unless --keep."""
+    sop = sop_text(steps)
+    bodies = {}
+    for video in args.video:
+        with open(video, "rb") as fh:
+            body = query_body(fh.read(), sop)
+        size = len(json.dumps(body).encode())
+        if size > SERVING_BODY_CAP:
+            sys.exit(f"{video}: the query would be {size:,} bytes, over the 2 MiB cap. "
+                     f"Re-encode it smaller first, e.g.\n  ffmpeg -i {video} -vf scale=640:480 "
+                     f"-c:v libx264 -crf 28 -an small.mp4")
+        bodies[video] = body
+
+    t0 = time.time()
+    key = setting_key(values, args.blueprint)
+    session = deployment = None
+    try:
+        rec = agent(values, "serving", source=args.blueprint)
+        deployment = rec["serving"]
+        print(f"  serving deployment {deployment} ready after {time.time() - t0:.0f} s")
+        session = request("POST", agents_url("/sessions"), body=session_body(deployment))["id"]
+        record_session(session, setting=rec["key"], kind="serving")
+        wait_for(agents_url(f"/sessions/{session}"), "running", "pending", SERVING_READY_S)
+        print(f"  session {session} running")
+        seen: set[str] = set()
+        for video, body in bodies.items():
+            clip = os.path.splitext(os.path.basename(video))[0]
+            t = time.time()
+            for attempt in range(4):
+                code, answer = request("POST", agents_url(f"/sessions/{session}/query"),
+                                       body=body, allow_status=True, timeout=QUERY_TIMEOUT_S)
+                if code == 200 or not (code >= 500 or code == 0):
+                    break
+                print_events(session, seen)
+                print(f"  {code or 'no answer'}; retrying in 15 s")
+                time.sleep(15)
+            if code == 409:
+                sys.exit(f"the session no longer answers (409): {str(answer)[:200]}")
+            if code != 200:
+                sys.exit(f"query failed ({code}): {str(answer)[:300]}")
+            rows = (answer.get("response") or {}).get("data")
+            out_path = f"tva-output-{clip}.json"
+            with open(out_path, "w") as fh:
+                # batch's {"id", "results"} document, one line, so --score reads both
+                fh.write(json.dumps({"id": clip, "results": rows or []}) + "\n")
+            print(f"\n{clip}: {time.time() - t:.1f} s -> {out_path}")
+            show(out_path)
+    finally:
+        if args.keep:
+            print(f"\nleft running: session {session}, deployment {deployment} — it holds a "
+                  f"GPU worker until --cleanup --yes")
+        else:
+            # a deployment that failed to start (no capacity) is recorded but never returned
+            deployment = deployment or load_state()[env()[1]]["settings"].get(key, {}).get("serving")
+            gone = {i for kind, i in (("sessions", session), ("deployments", deployment))
+                    if i and end(kind, i)}
+            forget(gone)
+            print(f"\nreleased: {', '.join(sorted(gone))} ({time.time() - t0:.0f} s in all)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--video", help="the recording to verify (.mp4)")
+    ap.add_argument("--video", nargs="+", help="the recording(s) to verify (.mp4)")
     ap.add_argument("--sop", default=None,
                     help=f"reference procedure, ONE STEP PER LINE (.txt). Defaults to "
-                         f"{DEFAULT_SOP_PATH} if it exists, else the SOP bundled in "
+                         f"{DEFAULT_SOP_PATH} if it exists, else the SOP shipped in "
                          f"references/sample_data/.")
     ap.add_argument("--blueprint", default="tva",
-                    help="blueprint id or KEY (default: tva). A key resolves to "
-                         "whatever is canonical and active, but check the sink — "
-                         "the canonical version has shipped un-instantiable.")
+                    help="the blueprint to copy into the project, by id or key "
+                         "(default: tva). Check the sink — the canonical version has "
+                         "shipped un-instantiable.")
     ap.add_argument("--max-frames", type=int, default=64,
-                    help="frames uniformly sampled across the whole video "
-                         "(blueprint default 16; 64 is the reader batch size)")
+                    help="frames uniformly sampled across the whole video (1..64)")
+    ap.add_argument("--size", type=int, default=224,
+                    help="each frame is resized to size x size (224..2048)")
     ap.add_argument("--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS,
                     help=f"output budget, SHARED with the model's <think> block "
-                         f"(default {DEFAULT_MAX_NEW_TOKENS}). Too low returns an "
-                         f"empty result on exactly the clips that contain a defect.")
-    ap.add_argument("--name", default=None,
-                    help="bundle name. Defaults to 'tva <clip> mnt<budget>', which "
-                         "is what distinguishes your runs from each other in the "
-                         "console — every bundle carrying the same name is "
-                         "indistinguishable there, and bundles CANNOT be renamed "
-                         "later (PATCH/PUT return 405).")
-    ap.add_argument("--output", default=None, help="where to save the result JSON")
+                         f"(default {DEFAULT_MAX_NEW_TOKENS})")
+    ap.add_argument("--serve", action="store_true",
+                    help="a serving deployment: load once, one /query per --video, then "
+                         "release it")
+    ap.add_argument("--keep", action="store_true",
+                    help="with --serve: leave the session and deployment up (holds a GPU)")
+    ap.add_argument("--cleanup", action="store_true",
+                    help="list the sessions, deployments and packages recorded in "
+                         f"{STATE_PATH}; delete them with --yes")
+    ap.add_argument("--yes", action="store_true", help="with --cleanup: delete")
+    ap.add_argument("--output", default=None,
+                    help="where to save the result JSON (one batch --video only)")
     ap.add_argument("--score", metavar="FILE",
                     help="print and score an existing output, then stop — offline")
     ap.add_argument("--labels", metavar="1_pass_2_fail_3_pass",
@@ -572,97 +991,28 @@ def main() -> None:
     if args.score:
         show(args.score, args.labels)
         return
+    if args.cleanup:
+        sys.exit(cleanup(args.yes))
     if not args.video:
-        sys.exit("--video is required (or use --score to read an existing output)")
+        sys.exit("--video is required (or --score an existing output, or --cleanup)")
     args.sop = resolve_sop(args.sop)
-
     steps = load_sop(args.sop)
-    values = {"max_frames": args.max_frames,
+    values = {"max_frames": args.max_frames, "size": args.size,
               "max_new_tokens": args.max_new_tokens}
-    clip = os.path.splitext(os.path.basename(args.video))[0]
-    out_path = args.output or f"tva-output-{clip}.json"
-    # A bundle's name is set at creation and cannot be changed afterwards, so it
-    # is the only handle that tells two runs apart in the console. Derive it from
-    # the inputs that actually differ between runs.
-    if args.name is None:
-        args.name = f"tva {clip} mnt{args.max_new_tokens}"
 
     if args.dry_run:
-        _, endpoint = env()
-        print(f"POST {endpoint}/api/agents/bundles")
-        print(json.dumps({"blueprint": args.blueprint, "name": args.name,
-                          "values": values}, indent=2))
-        print(f"\nPOST {endpoint}/api/agents/bundles/<id>/run")
-        v_name, s_name = pair_names(args.video, args.sop, run_suffix())
-        print(f"# stems match ({os.path.splitext(v_name)[0]}): the pipeline pairs a "
-              f"video with its SOP by stem, and the -<UTC>-<hex> tail keeps concurrent "
-              f"users from\n# overwriting each other's inputs. Generated per run, so "
-              f"the REAL run will differ.")
-        print(json.dumps({"connectors": {"source": [
-            {"type": "file", "id": v_name, "format": "mp4"},
-            {"type": "file", "id": s_name, "format": "txt"},
-        ]}}, indent=2))
-        print(f"\nSOP ({len(steps)} steps, one per line):")
-        for i, s in enumerate(steps, 1):
-            print(f"  {i}. {s}")
+        dry_run(args, values, steps)
         return
 
-    _, endpoint = env()
-
-    # Preflight BEFORE uploading. Both checks are free and each one catches a
-    # failure that otherwise costs the full ~7-minute cold start.
-    bp = client().agents.blueprints.get(args.blueprint)
-    # NOT include_yaml=True: the published client accepts the kwarg and the
-    # call then fails with an empty `ApiError: {}`. `document` is returned
-    # regardless, which is all the preflight below needs.
-    doc = bp["document"]
-    print(f"blueprint {bp['id']} (key={bp.get('blueprint_key')}, "
-          f"active={bp.get('is_active')})")
-    if not bp.get("is_active"):
-        print("  NOTE: this blueprint is superseded — results cannot ship.")
-    inert = inert_values(doc, values)
-    if inert:
-        print(f"  WARNING: {inert} is not wired here and will be silently ignored.")
-    for k, v in sorted(values.items()):
-        print(f"  {k:16} {str(v):8} -> "
-              f"{'NOT WIRED — ignored' if k in inert else 'honoured'}"
-              f"   (blueprint default: {doc.get('values', {}).get(k)})")
-    sink_warning = check_sink(doc)
-    if sink_warning:
-        print(f"  ** {sink_warning}")
-        if not args.force:
-            sys.exit("refusing to spend ~7 min of GPU on a run that cannot "
-                     "produce output. Pass --force to do it anyway.")
+    preflight(args.blueprint, values, args.force)
     print(f"\n  SOP in force ({len(steps)} steps):")
     for i, s in enumerate(steps, 1):
         print(f"    {i}. {s}")
-
-    print(f"\nuploading ...")
-    v_name, s_name = pair_names(args.video, args.sop, run_suffix())
-    video_id = upload(args.video, rename=v_name)
-    sop_id = upload(args.sop, rename=s_name)
-    print(f"  stems match ({os.path.splitext(v_name)[0]}) — nothing else writes to "
-          f"this pair")
-    print(f"  video={video_id}  sop={sop_id}")
-
-    # No `artifacts` map: the tva blueprint pins newton-fusion:1.0 and
-    # whisper:large-v3 itself. Note the PLURAL /bundles — the singular 404s.
-    bundle = client().agents.bundles.create(
-        blueprint=args.blueprint, name=args.name, values=values)
-    print(f"bundle {bundle['id']} status={bundle.get('status')}")
-
-    agent_id = start_run(bundle["id"], video_id, sop_id)
-    print(f"run {agent_id}\n  watching /logs (~7 min of model loading first) ...")
-
-    verdict = poll(agent_id)
-    print(f"\nrun {verdict}")
-    payload = fetch_results(agent_id, out_path)
-    if payload is not None:
-        print(f"  saved {out_path} ({len(payload)} bytes)")
-        show(out_path)
-    if verdict != "completed":
-        sys.exit(f"run {verdict} — full log: "
-                 f"{endpoint}/api/agents/instances/{agent_id}/logs")
+    print(f"\nthe agent for {setting_key(values, args.blueprint)} ...")
+    if args.serve:
+        run_serving(args, values, steps)
+    else:
+        run_batch(args, values, steps)
 
 
 if __name__ == "__main__":
