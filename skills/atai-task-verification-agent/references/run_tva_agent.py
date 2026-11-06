@@ -98,7 +98,7 @@ DEFAULT_MAX_NEW_TOKENS = 5760
 # fall back to the SOP shipped in sample_data, and say which one is in force rather
 # than guessing silently.
 DEFAULT_SOP_PATH = "sop/oring-numbered.txt"
-BUNDLED_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+SAMPLE_SOP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "sample_data", "oring-numbered.txt")
 
 PROJECT = "TVA skill"
@@ -119,9 +119,9 @@ def resolve_sop(path: str | None) -> str:
     if os.path.exists(DEFAULT_SOP_PATH):
         print(f"  --sop not given -> {DEFAULT_SOP_PATH}")
         return DEFAULT_SOP_PATH
-    print(f"  --sop not given and no {DEFAULT_SOP_PATH} here -> the bundled sample\n"
-          f"    {BUNDLED_SOP_PATH}")
-    return BUNDLED_SOP_PATH
+    print(f"  --sop not given and no {DEFAULT_SOP_PATH} here -> the shipped sample\n"
+          f"    {SAMPLE_SOP_PATH}")
+    return SAMPLE_SOP_PATH
 
 
 def load_dotenv(path: str = ".env") -> None:
