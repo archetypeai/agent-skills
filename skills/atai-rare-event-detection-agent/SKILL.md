@@ -586,14 +586,15 @@ the test number optimistic.
   unchanged, so after a piece fails, a smaller N is a real retry. The old plan's evals still
   going aren't cancelled (no eval cancel route is known), so they count against `--parallel`
   until they end: the new pieces wait for those slots rather than queue behind them, on the
-  clock. Measured on the free trial (2026-10-31, CARE to Compare wind-turbine SCADA, window
-  128, 10 channels): one eval over three test files (16,323 rows) failed at 2 hours;
-  `--max-windows 2700` ran 7 pieces of about 25 minutes each.
-  **Choosing N:** an eval's time grows with windows × channels. CARE's pieces ran at about
-  1,080 windows × channels a minute, faster than the 690–950 measured elsewhere, so size
-  from the slow end: at ~700 a minute, a piece of an hour is about 42,000 windows ×
-  channels (N ≈ 42,000 / channels: 4,200 on 10 channels). An hour leaves room for a queued
-  job already on the clock.
+  clock. Measured on the free trial when evals ran on CPU (2026-10-31, CARE to Compare
+  wind-turbine SCADA, window 128, 10 channels): one eval over three test files (16,323 rows)
+  failed at 2 hours; `--max-windows 2700` ran 7 pieces of about 25 minutes each.
+  **Choosing N:** an eval's time grows with windows × channels. Since 2026-11-06 the free
+  trial runs evals on GPU: the pump quickstart's 5 evals of up to 9,000 windows × 10
+  channels took about 2 minutes each (on CPU, 68–87), so most tests need no N there. On
+  CPU, evals ran at 690–1,080 windows × channels a minute: size from the slow end, ~700 a
+  minute, for a piece of an hour, about 42,000 windows × channels (N ≈ 42,000 / channels:
+  4,200 on 10 channels). An hour leaves room for a queued job already on the clock.
 
 ## Step 3 — Deliver
 
@@ -614,9 +615,10 @@ output is still being written).
   Split runs' files are named by row range, so a rerun at another N never reuses another
   split's files; that split's runs are forgotten, and any still going is cancelled first, so
   it doesn't hold a job slot for up to 2 hours (`cleanup.py` deletes them with the bundle).
-  Off by default. The sample (2,654 rows) took 28 min on the free trial, so it doesn't need
-  it; at that rate a recording past ~10,000 rows at step 1 would. A larger `--step` also
-  fits, at a coarser delay.
+  Off by default. On the free trial since 2026-11-06 agent runs are on GPU: the pump
+  quickstart's two delivery files (4,652 windows of 10 channels at step 1) took about a
+  minute. On CPU the sample (2,654 rows) took 28 min, and a recording past ~10,000 rows at
+  step 1 would have needed it. A larger `--step` also fits, at a coarser delay.
 
 - **Embeddings from your own classifier.** `output_embeddings: true` in a bundle's values
   works on a promoted blueprint too: per channel, an `embedding_<channel>` column (10 × 768
@@ -780,8 +782,9 @@ library: 662 windows of 2,636 (normal 99, air_leakage 563), window 512, step 4 (
   PCA 1-2 explain 23.0% and 15.6% -> out/red-embedding-landscape.json
 ```
 
-Batch, the same files: 9 min (three normal files in 1 min side by side, the 2,760-row leak
-in 8). All 662 windows both ways, the same timestamps and the same `predicted_state`,
+Batch, the same files, on CPU: 9 min (three normal files in 1 min side by side, the
+2,760-row leak in 8); batch runs are on GPU on the free trial since 2026-11-06 (the pump
+quickstart's 3 training files: 1.5 min, against 22 on CPU). All 662 windows both ways, the same timestamps and the same `predicted_state`,
 embeddings within 4.5×10⁻⁶, and the same map (explained variance and prototypes to every
 printed digit). As on the AD skill's SKAB library (1,950 windows, within 4.0×10⁻⁶): served
 is batch, and through an agent already up it took 2 minutes, with no job slot.
