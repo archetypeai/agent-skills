@@ -560,7 +560,7 @@ class TestLifecycleAgainstAFakePlatform(unittest.TestCase):
         self.assertEqual([p for m, p, _ in fake.calls if m == "DELETE"],
                          ["/agents/sessions/ses_5", "/agents/deployments/dpl_4"])
         self.assertIn("released", out)
-        doc = load("tva-output-1_pass_2_pass_3_pass_A.json")[0]
+        doc = load("tva-serve-1_pass_2_pass_3_pass_A.json")[0]
         self.assertEqual(doc["results"], [{"step": 0, "status": "PASSED"}])
 
 

@@ -928,7 +928,8 @@ def run_serving(args, values: dict, steps: list[str]) -> None:
             if code != 200:
                 sys.exit(f"query failed ({code}): {str(answer)[:300]}")
             rows = (answer.get("response") or {}).get("data")
-            out_path = f"tva-output-{clip}.json"
+            out_path = args.output if args.output and len(args.video) == 1 \
+                else f"tva-serve-{clip}.json"      # never over a batch run's output
             with open(out_path, "w") as fh:
                 # batch's {"id", "results"} document, one line, so --score reads both
                 fh.write(json.dumps({"id": clip, "results": rows or []}) + "\n")
@@ -975,7 +976,8 @@ def main() -> None:
                          f"{STATE_PATH}; delete them with --yes")
     ap.add_argument("--yes", action="store_true", help="with --cleanup: delete")
     ap.add_argument("--output", default=None,
-                    help="where to save the result JSON (one batch --video only)")
+                    help="where to save the result JSON, for one --video (default "
+                         "tva-output-<clip>.json, or tva-serve-<clip>.json with --serve)")
     ap.add_argument("--score", metavar="FILE",
                     help="print and score an existing output, then stop — offline")
     ap.add_argument("--labels", metavar="1_pass_2_fail_3_pass",
