@@ -93,14 +93,14 @@ Why they exist:
 - **Status spelling:** a cancelled optimization is `"cancelled"`, not `"canceled"`.
 - **Promote** (`POST /agents/optimizations/{opt}/trials/{trial}/promote`) makes a
   blueprint with the trial's setting and fitted kNN attached; no S3, no classifier
-  artifact. Give each promotion a **unique `blueprint_key`** (ours ends in the trial
+  artifact. Each promotion needs a **unique key** (the platform's ends in the trial
   id): a key reused across runs makes a "promote or reuse" script test an older model.
-- **Choosing the key can need the admin role.** On the free trial (2026-10-29) a promote with a
-  `blueprint_key` answered 403, "choosing the `blueprint_key` of a promoted blueprint requires the
-  admin role"; without it the platform keyed the blueprint `osm-otr_<trial id>`, and the `name`
-  (a display label, what the console's "Blueprint name" sets) was still ours. Production
-  accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
-  back on that 403.
+- **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
+  from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
+  of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
+  projects it can't see). Without one the platform keys the blueprint `osm-otr_<trial id>`, and
+  the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
+  `promote_and_test.py` sends no key unless `--blueprint-key` is given.
 - **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
   2026-11-06 (CPU before), and agent serving on CPU, at most 3 jobs per org at once, each for
   at most 2 hours.**

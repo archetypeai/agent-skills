@@ -52,16 +52,15 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 
 ## Promote, Evals
 
-- **Promote** (`POST /agents/optimizations/{opt}/trials/{trial}/promote`, a unique
-  `blueprint_key`) returns a blueprint that pins the trial's values and names its fitted
+- **Promote** (`POST /agents/optimizations/{opt}/trials/{trial}/promote`) returns a blueprint that pins the trial's values and names its fitted
   detector as a registry artifact (`models.detection_head: aar_…`), not an `s3://` path.
   The API has no route to download it.
-- **Choosing the key can need the admin role.** On the free trial (2026-10-29) a promote with a
-  `blueprint_key` answered 403, "choosing the `blueprint_key` of a promoted blueprint requires the
-  admin role"; without it the platform keyed the blueprint `ad-otr_<trial id>`, and the `name`
-  (a display label, what the console's "Blueprint name" sets) was still ours. Production
-  accepted chosen keys with our accounts. `promote_and_test.py` tries its own key first and falls
-  back on that 403.
+- **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
+  from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
+  of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
+  projects it can't see). Without one the platform keys the blueprint `ad-otr_<trial id>`, and
+  the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
+  `promote_and_test.py` sends no key unless `--blueprint-key` is given.
 - **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
   2026-11-06 (CPU before), and agent serving on CPU, at most 3 jobs per org at once, each for
   at most 2 hours.**
