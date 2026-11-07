@@ -1,167 +1,124 @@
 #!/usr/bin/env python3
-"""End-to-end RED agent run over the Agents API.
+"""Run the platform's RED demo blueprint end to end, then score the output.
 
-Built on the official archetypeai python client (`pip install archetypeai`).
+    python3 run_red_agent.py                         # playground-red on the bundled slice
+    python3 run_red_agent.py --csv my_slice.csv      # your own prepared CSV
+    python3 run_red_agent.py --blueprint-id blp_...  # a blueprint in your project (Path 2's)
+    python3 run_red_agent.py --score-only red-output.csv
 
-upload CSV -> resolve the pre-packaged "RED Quick Start" bundle by name ->
-run -> poll -> download per-window predictions -> score against a
-ground-truth sidecar. Nothing to fit and no classifier to supply: the
-canonical bundle pins both. (To run your OWN classifier, create a bundle
-from the `red` blueprint — SKILL.md, "Bring your own classifier".)
+By default this copies the platform's demo blueprint `playground-red` into a project
+(created on first use, reused after), packages the copy, deploys the package as `batch`,
+runs one session over the input file and downloads its output. The session, deployment
+and package are deleted afterwards; the project and the copy are kept for the next run.
+
+`playground-red` is the canonical `red` blueprint with a pump-breakdown classifier the
+platform fitted, its windowing (window and step 200) and `output_embeddings` pinned. Its
+classes are `pump_nshot_normal` and `pump_nshot_pump_breakdown`; the scorer matches them
+to the sidecar's `normal` and `pump_breakdown`. For another asset, fit a classifier with
+Path 2 and pass its promoted blueprint's id.
 
 Scoring reports three views, because window averages mislead when the positive
 class is under 1% of windows: window-level P/R/F1 under the design's majority
 rule, per-incident detection with latency, and the false-alarm rate measured
 only on windows containing zero fault rows.
 
-Auth comes from the environment (a local .env is loaded if present):
-  ATAI_API_KEY, ATAI_API_ENDPOINT
-
-Usage:
-  python3 run_red_agent.py                 # quick-start bundle, sample data
-  python3 run_red_agent.py --embeddings    # + embedding_{variate} columns
-  python3 run_red_agent.py --bundle-id bnd_...   # pin one deployment's id
+Stdlib only, on the same HTTP helper as Path 2 (red_lifecycle/atai_http.py). Reads
+ATAI_API_KEY and ATAI_API_ENDPOINT from the environment or the nearest .env.
 """
 from __future__ import annotations
 
 import argparse
 import csv
-import json
 import os
-import re
-import shutil
 import sys
-import tempfile
 import time
 import urllib.request
 
-try:
-    from archetypeai import ArchetypeAI
-except ModuleNotFoundError:  # the only third-party dependency
-    sys.exit("This runner needs the official Archetype AI client:\n"
-             "    pip install -r requirements.txt   (from this directory)\n"
-             "    pip install archetypeai           (or just the package)")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "red_lifecycle"))
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
+                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
+                       result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
 
-_CLIENT = None
+DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "pump_eval_inc04.csv")
+
+# The platform's RED demo blueprint, resolved by key: its blp_ id differs per deployment.
+DEMO_BLUEPRINT = "playground-red"
+# Only a blueprint in a project can be packaged and deployed, so the demo is copied into
+# this project under this key once, and the copy reused.
+PROJECT = "RED skill Path 1"
+COPY_KEY = "playground-red-skill"
+# The demo's window, for scoring when the blueprint doesn't say.
+DEFAULT_WINDOW = 200
+# Class names are NOT hardcoded: `normal` is the conventional baseline label and
+# the rare-event class is inferred from the label sidecar, so this runner works
+# for any catalog. Override with --normal-class / --fault-class.
+DEFAULT_NORMAL = "normal"
 
 
-def client() -> ArchetypeAI:
-    """The official client, built once from the environment.
+# --------------------------------------------------------------------------
+# lifecycle: project -> copy -> package -> batch deployment -> session
+# --------------------------------------------------------------------------
 
-    Owns auth, retries and endpoint mounting. See build_client for why the
-    endpoint is normalised before it is handed over.
-    """
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = build_client(require_key(), api_base())
-    return _CLIENT
-
-
-def api_root(endpoint):
-    """Return the deployment root, with any /api or /vX.Y suffix removed.
-
-    Accept every form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
-    and the console shows it bare.
-    """
-    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
-    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
+def project_id(name: str = PROJECT) -> str:
+    """Your project of that name, created on first use."""
+    found = [p for p in request("GET", f"{project_url()}?limit=1000")["data"] if p["name"] == name]
+    if found:
+        return found[0]["id"]
+    pid = request("POST", project_url(), {"name": name})["id"]
+    print(f"created project {pid} ({name!r})")
+    return pid
 
 
-def build_client(api_key, endpoint):
-    """The official client, pointed at the deployment's /api prefix.
-
-    Both API surfaces live under one versionless prefix — /api/agents and
-    /api/files — so a single client serves both. The client uses api_endpoint
-    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
-    """
-    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
-
-
-def load_dotenv(path: str = ".env") -> None:
-    if not os.path.exists(path):
-        return
-    with open(path) as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            os.environ.setdefault(key.strip(), value.strip())
+def demo_copy(pid: str) -> dict:
+    """The project's copy of the demo blueprint, copied on first use. Copying needs only the
+    right to modify the project. A key in a project resolves only with ?project_id=."""
+    found = request("GET", f"{agents()}/blueprints?project_id={pid}&key={COPY_KEY}")["data"]
+    if found:
+        return found[0]
+    bp = request("POST", f"{agents()}/blueprints/{DEMO_BLUEPRINT}/copy",
+                 {"project_id": pid, "blueprint_key": COPY_KEY})
+    print(f"copied {DEMO_BLUEPRINT} into {pid} as {COPY_KEY} ({bp['id']})")
+    return bp
 
 
-def api_base() -> str:
-    endpoint = os.environ.get("ATAI_API_ENDPOINT", "").rstrip("/")
-    if not endpoint:
-        sys.exit("ATAI_API_ENDPOINT is not set")
-    return endpoint
+def blueprint_window(blueprint_id: str) -> int:
+    """The window the blueprint runs at, to rebuild each output row's span when scoring."""
+    doc = request("GET", f"{agents()}/blueprints/{blueprint_id}").get("document") or {}
+    return int((doc.get("values") or {}).get("window_size") or DEFAULT_WINDOW)
 
 
-def require_key() -> str:
-    key = os.environ.get("ATAI_API_KEY")
-    if not key:
-        sys.exit("ATAI_API_KEY is not set (put it in .env)")
-    return key
+def upload(path: str) -> str:
+    """Upload under a timestamped name and return the file id.
+
+    File ids ARE filenames, so re-uploading a name replaces the record and orphans the
+    object any in-flight run already resolved: that run then dies naming a UUID and
+    nothing else."""
+    stem = os.path.basename(path).rsplit(".", 1)[0]
+    return upload_file(path, f"{stem}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv")["file_id"]
 
 
-def upload_file(path: str, rename: str | None = None) -> dict:
-    """Upload via the client. Source connectors take the returned file_id."""
-    if rename:
-        # The client uploads under the file's basename, so a rename means
-        # staging a copy under the wanted name first.
-        staged = os.path.join(tempfile.mkdtemp(), rename)
-        shutil.copyfile(path, staged)
-        path = staged
-    return client().files.local.upload(path)
-
-
-def resolve_bundle(name: str) -> dict:
-    """Resolve a bundle by its stable name, preferring canonical bundles.
-
-    Bundle ids are deployment-scoped — the same pre-packaged bundle carries a
-    different bnd_… id in each deployment — so the NAME is the stable handle.
-    `GET /agents/bundles?query=` does a case-insensitive substring search over
-    name and id (`?name=`/`?search=` are silently ignored), so match the name
-    exactly client-side; canonical (platform) bundles win over same-named org
-    bundles.
-    """
-    page = client().agents.bundles.list(query=name, limit=100)
-    exact = [bundle for bundle in page.get("data", []) if bundle.get("name") == name]
-    for bundle in exact:
-        if bundle.get("is_canonical"):
-            return bundle
-    if exact:
-        return exact[0]
-    sys.exit(f"no bundle named '{name}' found — the pre-packaged bundles may "
-             f"not be published in the deployment you're pointed at. Pass "
-             f"--bundle-id for it as a fallback, or contact "
-             f"support@archetypeai.dev.")
-
-
-def poll_agent(agent_id: str, timeout_s: int, interval_s: int = 20) -> str:
-    """Poll until terminal, streaming new audit events as they appear.
-
-    Deliberately NOT client.agents.instances.wait_until_done(): that returns as
-    soon as `status` is terminal, and a run whose output exists can report
-    `failed` when the job poller flakes. Success is judged from /results.
-    """
+def poll(session_id: str, timeout_s: int = 2 * 3600, interval_s: int = 5) -> dict:
+    """The session, once terminal. A session's `status` is authoritative and reaches
+    completed, failed or cancelled, with `error` saying why."""
     deadline = time.time() + timeout_s
-    seen: set[str] = set()
-    status = "running"
-    while status == "running" and time.time() < deadline:
+    last = None
+    while time.time() < deadline:
+        ses = request("GET", lifecycle_url("sessions", session_id))
+        if ses.get("status") != last:
+            last = ses.get("status")
+            print(f"  {last}")
+        if last in TERMINAL:
+            return ses
         time.sleep(interval_s)
-        status = client().agents.instances.get(agent_id).get("status")
-        for ev in client().agents.instances.get_events(agent_id).get("data", []):
-            marker = f"{ev.get('created_at')}{ev.get('message')}"
-            if marker not in seen:
-                seen.add(marker)
-                print(f"  [{ev.get('level', 'info')}] {ev.get('created_at', '')}  "
-                      f"{ev.get('message', '')}")
-        print(f"  {time.strftime('%H:%M:%S')} status={status}")
-    return status
+    return {"status": "timeout"}
 
+
+def last_events(session_id: str, n: int = 5) -> list:
+    """The session's latest events, newest first."""
+    return request("GET", lifecycle_url("sessions", session_id) + "/events?limit=" + str(n)).get("data", [])
 
 
 # The platform can report a run completed while its output file is still being
@@ -185,7 +142,7 @@ def tail_row(path: str) -> tuple[list[str], list[str]]:
     correct only while every row fits inside it, and the failure is silent: a
     window narrower than one row yields a fragment of a field, which still
     parses as a number and reads as an output that stopped early. An
-    Embeddings row already runs to ~75 KB, so the margin is narrower than it
+    embeddings row already runs to ~85 KB, so the margin is narrower than it
     looks. Growing also reads LESS in the common case — 4 KiB rather than a
     megabyte.
     """
@@ -247,7 +204,7 @@ def artifact_status(item):
 def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
     """The run's outputs, once every one reports complete.
 
-    Needs nothing but the agent id -- unlike a content check, which has to
+    Needs nothing but the session id -- unlike a content check, which has to
     compare the output against the input and so only works for the client that
     produced the run.
     """
@@ -269,61 +226,66 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
         time.sleep(15)
 
 
-def download_results(agent_id: str, out_path: str, input_csv: str | None = None) -> str | None:
-    """Fetch /results and save the first output to out_path; with input_csv, wait
-    until the output reaches the input's end."""
+def fetch(ref: str, out_path: str) -> None:
+    req = urllib.request.Request(result_url(ref))
+    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
+        fh.write(resp.read())
+
+
+def download_results(session_id: str, out_path: str, input_csv: str | None = None) -> str | None:
     def _fetch():
-        r = client().agents.instances.get_results(agent_id)
-        return r.get("data", r if isinstance(r, list) else [])
+        return request("GET", lifecycle_url("sessions", session_id) + "/results").get("data", [])
 
     items = complete_results(_fetch)
     if not items:
-        print("  no results returned")
+        print("  /results is EMPTY — the session completed but produced nothing.")
         return None
-    # Each result nests the useful fields under an inner "data" object; the
-    # `ref` there is a presigned URL that expires (~20 min), so download now.
-    print(f"results ({len(items)}):")
-    for item in items:
-        inner = item.get("data") or {}
-        print(f"  {inner.get('filename') or item.get('id')}  "
-              f"({inner.get('num_bytes', '?')} bytes)")
+    # Each item nests its fields one level down: {id, port_name, data: {ref, filename,
+    # num_bytes, ...}}. `ref` is a root path, /api/files/<fil_…>/content, which already
+    # carries /api: result_url resolves it against the deployment root.
     inner = items[0].get("data") or {}
-    ref = inner.get("ref") or item.get("ref") or item.get("url")
-    filename = inner.get("filename")
-    # A fitted-artifact ref is an absolute presigned S3 URL that expires (~20
-    # min), so fetch it directly. A run output is a platform file — let the
-    # client download it by name.
-    if not (ref and ref.startswith("http")) and not filename:
-        print("  results carried no download ref")
+    if not inner.get("ref"):
+        print(f"  results present but no ref in the entry: {items[0]!r}")
         return None
-
-    def save() -> None:
-        if ref and ref.startswith("http"):
-            with urllib.request.urlopen(ref) as resp:
-                open(out_path, "wb").write(resp.read())
-        else:
-            client().files.local.download(filename, out_path)
-
-    save()
+    print(f"  results ({len(items)}): {inner.get('filename', '?')}  ({inner.get('num_bytes', '?')} bytes)")
+    fetch(inner["ref"], out_path)
     if input_csv:
-        wait_until_complete(save, out_path, input_csv)
-    print(f"saved output to {out_path}")
+        wait_until_complete(lambda: fetch(inner["ref"], out_path), out_path, input_csv)
     return out_path
 
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data", "pump_eval_inc04.csv")
+def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: str) -> str | None:
+    """Package the blueprint, deploy it as batch, run one session over the file, download its
+    output; then delete the session, deployment and package, which each hold the next."""
+    t0 = time.time()
+    pkg = dpl = ses = None
+    try:
+        pkg = create_package(blueprint_id, name)
+        package_ready(pkg["id"])
+        print(f"package {pkg['id']} ready ({time.time() - t0:.0f} s)")
+        dpl = deploy(pkg["id"], "batch")
+        deployment_ready(dpl["id"])
+        print(f"batch deployment {dpl['id']} ready")
+        ses = open_session(dpl["id"], file_id)
+        print(f"session {ses['id']}")
+        done = poll(ses["id"])
+        if done.get("status") != "completed":
+            for ev in last_events(ses["id"]):
+                print(f"  event: {ev}")
+            sys.exit(f"session did not complete: {done.get('status')} {done.get('error') or ''}")
+        print(f"  completed ({time.time() - t0:.0f} s from packaging)")
+        return download_results(ses["id"], out_path, input_csv)
+    finally:
+        for kind, obj in (("sessions", ses), ("deployments", dpl), ("packages", pkg)):
+            if obj:
+                end(kind, obj["id"])
+        print("deleted the session, deployment and package (the project and blueprint stay)")
 
-# Pre-packaged canonical bundles (classifier + windowing already pinned).
-# Names are the stable handles across deployments; ids are deployment-specific.
-QUICK_START_BUNDLE = "RED Quick Start (Pump Breakdown)"
-QUICK_START_BUNDLE_EMBEDDINGS = "RED Quick Start (Pump Breakdown, Embeddings)"
-# Class names are NOT hardcoded: `normal` is the conventional baseline label and
-# the rare-event class is inferred from the label sidecar, so this runner works
-# for any catalog. Override with --normal-class / --fault-class.
-DEFAULT_NORMAL = "normal"
-TIMEOUT_S = 2 * 60 * 60
 
+# --------------------------------------------------------------------------
+# scoring
+# --------------------------------------------------------------------------
 
 def read_csv_rows(path: str) -> list[dict]:
     with open(path, newline="") as f:
@@ -335,6 +297,13 @@ def pick(row: dict, *candidates: str) -> str | None:
         if c in row:
             return c
     return None
+
+
+def same_class(predicted: str, label: str) -> bool:
+    """Whether an output class is the sidecar's label. A blueprint's class names can carry a
+    prefix the sidecar doesn't: `playground-red` predicts `pump_nshot_pump_breakdown` for the
+    sidecar's `pump_breakdown`."""
+    return predicted == label or predicted.endswith("_" + label)
 
 
 def score(output_path: str, labels_path: str, window_size: int,
@@ -399,8 +368,7 @@ def score(output_path: str, labels_path: str, window_size: int,
         # Design-doc labelling: majority wins; if neither holds a majority the
         # rare event takes precedence over normal.
         truth_label = FAULT if n_fault * 2 >= len(span) else NORMAL
-        pred_label = row[pred_col].strip()
-        is_fault_pred = pred_label == FAULT
+        is_fault_pred = same_class(row[pred_col].strip(), FAULT)
 
         if truth_label == FAULT and is_fault_pred:
             tp += 1
@@ -420,7 +388,8 @@ def score(output_path: str, labels_path: str, window_size: int,
 
     scored = tp + fp + fn + tn
     print(f"\nevaluation vs {os.path.basename(labels_path)} "
-          f"({scored} scored windows, {invalid} invalid, {unmatched} unmatched)")
+          f"({scored} scored windows, {invalid} invalid, {unmatched} unmatched, "
+          f"window {window_size})")
     if not scored:
         return
 
@@ -476,26 +445,17 @@ def main() -> None:
                          "slice, resolved next to this script). A ground-truth "
                          "sidecar named <stem>_labels.csv next to it enables "
                          "scoring.")
-    ap.add_argument("--embeddings", action="store_true",
-                    help=f"run '{QUICK_START_BUNDLE_EMBEDDINGS}' instead — each "
-                         "prediction row also carries the Newton Omega encoder "
-                         "embedding for its window: one embedding_{variate} "
-                         "column per sensor channel, each a 768-d vector. "
-                         "Expect a much larger output file: 740 MB vs 381 KB "
-                         "on the sample slice")
-    ap.add_argument("--bundle-name", default=None,
-                    help="run a different bundle by its exact name (default: "
-                         f"'{QUICK_START_BUNDLE}'). Canonical bundles win when "
-                         "names collide.")
-    ap.add_argument("--bundle-id", default=None,
-                    help="pin a bundle by bnd_… id instead of resolving by "
-                         "name. Ids are environment-scoped — use only when the "
-                         "pre-packaged bundle isn't published in this "
-                         "environment yet.")
-    ap.add_argument("--window-size", type=int, default=64,
-                    help="the window the bundle's classifier was fit with. Used "
-                         "only to reconstruct window spans when scoring — the "
-                         "agent inherits windowing from the classifier snapshot")
+    ap.add_argument("--labels", default=None,
+                    help="ground-truth sidecar (default: <csv stem>_labels.csv)")
+    ap.add_argument("--blueprint-id", default=None,
+                    help="run this blueprint (blp_…, in one of your projects, e.g. Path 2's "
+                         f"promoted one) instead of the project's copy of {DEMO_BLUEPRINT}")
+    ap.add_argument("--project", default=PROJECT,
+                    help=f"the project to copy {DEMO_BLUEPRINT} into (default {PROJECT!r})")
+    ap.add_argument("--window-size", type=int, default=None,
+                    help="the window to rebuild each row's span with when scoring "
+                         f"(default: the blueprint's own, {DEFAULT_WINDOW} for the demo)")
+    ap.add_argument("--name", default="RED Path 1", help="name of the package built for the run")
     ap.add_argument("--output", default="red-output.csv")
     ap.add_argument("--normal-class", default=DEFAULT_NORMAL,
                     help="baseline class name in the label sidecar")
@@ -505,62 +465,39 @@ def main() -> None:
                     help="skip the platform, score an already-downloaded output")
     args = ap.parse_args()
 
-    labels_path = args.csv.replace(".csv", "_labels.csv")
+    labels = args.labels or args.csv.rsplit(".", 1)[0] + "_labels.csv"
 
     if args.score_only:
-        if not os.path.exists(labels_path):
-            sys.exit(f"no label sidecar at {labels_path}")
-        score(args.score_only, labels_path, args.window_size or 1024,
+        if not os.path.exists(labels):
+            sys.exit(f"no label sidecar at {labels}")
+        score(args.score_only, labels, args.window_size or DEFAULT_WINDOW,
               args.normal_class, args.fault_class)
         return
 
-    if args.bundle_id and args.bundle_name:
-        sys.exit("pass --bundle-id or --bundle-name, not both")
-    if args.embeddings and (args.bundle_id or args.bundle_name):
-        sys.exit("--embeddings picks a specific pre-packaged bundle; don't "
-                 "combine it with --bundle-id/--bundle-name")
-
     load_dotenv()
-    require_key()
+    check_auth()
 
-    print(f"uploading {args.csv} ...")
-    uploaded = upload_file(args.csv)
-    file_id = uploaded["file_id"]
+    if args.blueprint_id:
+        blueprint_id = args.blueprint_id
+        print(f"blueprint {blueprint_id}")
+    else:
+        pid = project_id(args.project)
+        blueprint_id = demo_copy(pid)["id"]
+        print(f"blueprint {blueprint_id} ({COPY_KEY}, the copy of {DEMO_BLUEPRINT} in {pid})")
+    window = args.window_size or blueprint_window(blueprint_id)
+
+    print(f"uploading {args.csv}")
+    file_id = upload(args.csv)
     print(f"  file_id={file_id}")
 
-    # The pre-packaged canonical bundle pins the classifier and its windowing —
-    # nothing to fit, nothing to create. (To run your OWN classifier, create a
-    # bundle from the `red` blueprint instead: SKILL.md, "Bring your own
-    # classifier".)
-    if args.bundle_id:
-        bundle = client().agents.bundles.get(args.bundle_id)
-        print(f"using bundle {bundle['id']}  name='{bundle.get('name')}'")
+    if not run(blueprint_id, file_id, args.output, args.csv, args.name):
+        sys.exit("no results to score")
+    print(f"  saved {args.output}")
+
+    if os.path.exists(labels):
+        score(args.output, labels, window, args.normal_class, args.fault_class)
     else:
-        name = args.bundle_name or (
-            QUICK_START_BUNDLE_EMBEDDINGS if args.embeddings else QUICK_START_BUNDLE)
-        bundle = resolve_bundle(name)
-        print(f"resolved bundle '{name}' -> {bundle['id']}"
-              f"{'  (canonical)' if bundle.get('is_canonical') else ''}")
-
-    agent = client().agents.bundles.run(
-        bundle["id"], source=[{"type": "file", "id": file_id, "format": "csv"}])
-    agent_id = agent["id"]
-    print(f"starting agent run ...\n  agent_id={agent_id}  status={agent.get('status')}")
-
-    status = poll_agent(agent_id, TIMEOUT_S)
-    print(f"agent finished: status={status}")
-    # A 'failed' status can hide a successful run when the job poller flakes —
-    # always check for results before concluding the run died.
-    saved = download_results(agent_id, args.output, args.csv)
-    if status != "completed" and not saved:
-        sys.exit(f"run ended '{status}' with no results — inspect the events "
-                 f"for {agent_id}")
-
-    if saved and os.path.exists(labels_path):
-        score(saved, labels_path, args.window_size or 1024,
-              args.normal_class, args.fault_class)
-    elif saved:
-        print(f"(no label sidecar at {labels_path} — skipping scoring)")
+        print(f"  no labels at {labels} — skipping scoring")
 
 
 if __name__ == "__main__":

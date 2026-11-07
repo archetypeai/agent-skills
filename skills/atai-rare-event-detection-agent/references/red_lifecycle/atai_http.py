@@ -1,4 +1,5 @@
-"""Stdlib HTTP helpers for Path 2 (Optimize → promote → Evals → bundle → run).
+"""Stdlib HTTP helpers for Path 2 (Optimize → promote → Evals → bundle → run), and Path 1's
+package → batch deployment → session.
 
 The same helpers as the OSM and AD skills' Path 2, with RED's metrics report (target
 `event`) and an upload cache keyed by file content.
@@ -127,6 +128,85 @@ def agents():
 
 def files_url():
     return f"{api()}/files"
+
+
+def project_url(project_id=""):
+    return f"{api()}/projects" + (f"/{project_id}" if project_id else "")
+
+
+def lifecycle_url(kind, obj_id=""):
+    """`packages`, `deployments` or `sessions`, or one of them by id."""
+    return f"{agents()}/{kind}" + (f"/{obj_id}" if obj_id else "")
+
+
+def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3):
+    """Poll a package, deployment or session while its status is `waiting`; exit unless it
+    then reaches `want` (a package `building` -> `ready`, a deployment `deploying` -> `ready`,
+    a serving session `pending` -> `running`)."""
+    t0 = time.time()
+    while True:
+        obj = request("GET", lifecycle_url(kind, obj_id))
+        if obj["status"] == want:
+            return obj
+        if obj["status"] != waiting or time.time() - t0 > timeout_s:
+            sys.exit(f"{obj_id} is {obj['status']}, not {want}: {obj.get('error')}")
+        time.sleep(every_s)
+
+
+def create_package(blueprint_id, name):
+    """Package one blueprint for the platform; it starts `building`. A package pins the
+    blueprint and the models it resolves to (the encoder `mdl_…`, the fitted classifier `aar_…`)
+    and carries no values: it runs the blueprint exactly as promoted. It lands in the
+    blueprint's project, and a deployment needs one. Record its id before `package_ready`, so
+    a build that fails or is interrupted can still be deleted."""
+    return request("POST", lifecycle_url("packages"),
+                   {"blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": name})
+
+
+def package_ready(package_id):
+    return wait_for("packages", package_id, "ready", "building", every_s=5)
+
+
+def deploy(package_id, kind):
+    """Deploy a ready package as `batch` (ready at once) or `serving` (the agent placed on a
+    worker and loaded, usually within seconds; it holds the worker until stopped). It starts
+    `deploying`: record its id before `deployment_ready`."""
+    return request("POST", lifecycle_url("deployments"), {"package_id": package_id, "kind": kind})
+
+
+def deployment_ready(deployment_id):
+    return wait_for("deployments", deployment_id, "ready", "deploying")
+
+
+def open_session(deployment_id, file_id=None):
+    """A batch session over one input file (one output, named after it), or a serving
+    session, queried over /sessions/{id}/query once `running`, when no file is given."""
+    body = {"deployment_id": deployment_id}
+    if file_id:
+        body["connectors"] = {"source": [{"type": "file", "id": file_id, "format": "csv"}]}
+    return request("POST", lifecycle_url("sessions"), body)
+
+
+def end(kind, obj_id):
+    """Cancel a session still going, or stop a deployment still up, then delete it; a package
+    is deleted as it is. True once it is gone (a 404 counts)."""
+    try:
+        obj = request("GET", lifecycle_url(kind, obj_id))
+        if kind == "sessions" and obj["status"] not in TERMINAL:
+            request("POST", lifecycle_url(kind, obj_id) + "/cancel", {}, idempotent=True)
+        if kind == "deployments" and obj["status"] not in ("stopped", "failed"):
+            request("POST", lifecycle_url(kind, obj_id) + "/stop", {}, idempotent=True)
+        request("DELETE", lifecycle_url(kind, obj_id), idempotent=True)
+    except RuntimeError as e:
+        if "(404)" not in str(e):
+            raise
+    return True
+
+
+def result_url(ref):
+    """A session result's `ref` is a root path, `/api/files/<fil_…>/content`, or an absolute URL:
+    resolve it against the deployment root, not against .../api."""
+    return ref if ref.startswith("http") else f"{root()}{ref}"
 
 
 def _unsent(e):
