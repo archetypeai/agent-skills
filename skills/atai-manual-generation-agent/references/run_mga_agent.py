@@ -711,10 +711,14 @@ def score(out_path: str, ref_path: str, keywords_path: str | None = None) -> Non
 
 
 def output_path(args, video: str) -> str:
-    """--output for one video; <output stem>-<video stem>.json for several."""
+    """--output for one video; <output stem>-<video stem>.json for several.
+
+    Without --output, serving writes mga-serve.json, never over a batch run's output.
+    """
+    out = args.output or ("mga-serve.json" if args.serve else "mga-output.json")
     if len(args.video) == 1:
-        return args.output
-    stem, ext = os.path.splitext(args.output)
+        return out
+    stem, ext = os.path.splitext(out)
     return f"{stem}-{os.path.splitext(os.path.basename(video))[0]}{ext or '.json'}"
 
 
@@ -938,8 +942,9 @@ def main() -> None:
                          "Say what to COVER, never how to format — the "
                          "results parser owns the template and a format-overriding "
                          "prompt makes it return zero steps")
-    ap.add_argument("--output", default="mga-output.json",
-                    help="where the manual goes; with several videos, <stem>-<video>.json")
+    ap.add_argument("--output", default=None,
+                    help="where the manual goes (default mga-output.json, or mga-serve.json "
+                         "with --serve); with several videos, <stem>-<video>.json")
     ap.add_argument("--cleanup", action="store_true",
                     help="list the sessions, deployments and packages in --state; with --yes, delete them")
     ap.add_argument("--yes", action="store_true", help="with --cleanup: delete")
