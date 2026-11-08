@@ -27,7 +27,7 @@ Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or c
 
 ### Models
 
-Direct Query API — one stateless `POST /api/lens/query` per request, for when you want control over the pipeline or the raw vectors to build on.
+Direct model calls, one request per input, for when you want control over the pipeline or the raw vectors to build on. Omega runs on Model Serving (`/api/inference/*`); the fusion model is still on the Direct Query API (`POST /api/lens/query`).
 
 | Skill | Description |
 |-------|-------------|
@@ -120,7 +120,7 @@ cp -r skills/* your-project/.claude/skills/
 /atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
 /atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
-# Models — Direct Query API
+# Models — Model Serving (Omega) and the Direct Query API (C 2.6)
 /atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
 /atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via Model Serving
 /atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
@@ -136,7 +136,15 @@ cp -r skills/* your-project/.claude/skills/
 
 Two API surfaces, one per skill family.
 
-**Models — the Direct Query API.** One stateless POST to `/api/lens/query` per request: no session lifecycle, no batch jobs, no SSE plumbing.
+**Models — direct model calls.** No batch jobs, no SSE plumbing.
+
+Omega is on Model Serving: open a session with your window length, then one query per window.
+
+```
+Omega:         POST /api/inference/sessions ──► POST /api/inference/sessions/{id}/query ──► embeddings
+```
+
+The C 2.6 fusion model is on the Direct Query API: one stateless POST to `/api/lens/query` per request.
 
 ```
 Text:          POST /api/lens/query ───────────────────────────────► response
@@ -179,7 +187,7 @@ The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). Ever
 https://platform.u1.archetypeai.app
 ```
 
-**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
+**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/inference`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
 
 **A wrong prefix is the most common way to lose a run, because it says nothing:** a 404 comes back with an empty body, which the client raises as `ApiError: {}` — no status, no URL, no message. To tell a wrong path from a wrong key, repeat the call **without the auth header**: 404 means the route isn't registered, 401 means it exists and your key or scope is the problem.
 
