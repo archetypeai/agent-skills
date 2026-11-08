@@ -1,16 +1,18 @@
 """
-Shared helpers for the Omega embedding examples (cloud Omega via /query),
-built on the official Archetype AI python client
+Shared helpers for the Omega embedding examples (Newton Omega 1.5 on Model
+Serving), built on the official Archetype AI python client
 (https://github.com/archetypeai/python-client).
 
 Omega is a time-series ENCODER: you send a window of sensor readings and get
-back a fixed-size embedding vector per channel — no text, no prompt. This is
-the cloud counterpart to running the encoder locally; here the model runs on
-the Archetype AI platform and you call it over the same /query endpoint the
-Newton fusion model uses.
+back a fixed-size embedding vector per channel — no text, no prompt.
 
-Each script creates one client via `make_client()` and passes it as the
-first argument to `embed()`.
+Two ways to call it:
+  * `OmegaSession` — open a Model Serving session with your `window_size`
+    (16-1024) and send windows to it. Use this for anything but 1024.
+  * `embed_once()` — one stateless `POST /api/inference/query`, fixed
+    1024-timestep window.
+
+Each script creates one client via `make_client()`.
 
 Credential lookup (first hit wins): ATAI_API_KEY / ATAI_API_ENDPOINT env vars
 (BOTH required — no default endpoint), then a .env found by walking up from
@@ -24,17 +26,23 @@ import json
 import os
 import re
 import sys
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from archetypeai.api_client import ArchetypeAI
+from archetypeai.api_client import ApiError, ArchetypeAI
 
-MODEL = "OmegaEncoder::omega_embeddings_1_4"
-MIN_WINDOW = 16  # shortest signal length the encoder is trained on
-WINDOW = 1024    # longest; inputs > 1024 are truncated to the LAST 1024 points (with a warning)
-EMBED_DIM = 768  # per-channel embedding dimension returned by omega_embeddings_1_4
+MODEL = "omega-embedding"  # Newton Omega 1.5 on Model Serving
+MIN_WINDOW = 16  # shortest window the encoder is trained on
+WINDOW = 1024    # longest, and the window used without a session
+EMBED_DIM = 768  # embedding dimension per channel
+# Request bodies are capped at 2 MiB (HTTP 413 above it): roughly 95 channels
+# x 1024 timesteps at full float precision. Wider windows are split into
+# requests of at most this many channels; Omega 1.5 encodes each channel
+# independently, so the joined result is the same vector.
+MAX_CHANNELS_PER_REQUEST = 64
+SESSION_ENDED = {"session_not_running", "not_found"}
 
 # Default header names treated as time columns (overridable per call —
 # pass your own `time_columns` to read_series / read_series_and_time).
@@ -80,79 +88,143 @@ def make_client() -> ArchetypeAI:
     return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 
-def _embed_channel(
-    client: ArchetypeAI, channel_values: list[float], normalize_input: bool
-) -> tuple[list[float], list[str]]:
-    """Embed ONE channel via /query. Returns (vector, warnings)."""
-    body = {
-        "query": "",
-        "model": MODEL,
-        "normalize_input": normalize_input,
-        "events": [{"type": "data.numeric_array", "event_data": {"contents": [channel_values]}}],
-    }
-    payload = client.requests_post(
-        f"{client.api_endpoint}/lens/query",
+def _post(client: ArchetypeAI, path: str, body: dict) -> dict:
+    return client.requests_post(
+        f"{client.api_endpoint}{path}",
         data_payload=json.dumps(body),
         additional_headers={"Content-Type": "application/json"},
     )
-    embeddings, warnings = extract_embeddings(payload)
-    # A single-channel response carries the vector flat; normalize the shape.
-    if embeddings and isinstance(embeddings[0], (int, float)):
-        embeddings = [embeddings]
-    return (embeddings[0] if embeddings else []), warnings
 
 
-def embed(
-    client: ArchetypeAI,
-    window: list[list[float]],
-    *,
-    normalize_input: bool = False,
-    max_workers: int = 8,
-) -> tuple[list[list[float]], list[str], int]:
-    """Embed one **channel-first** window with Omega 1.4 via /query.
+def _query_body(channels: list[list[float]]) -> dict:
+    return {
+        "model": MODEL,
+        "query": "",
+        "events": [{"type": "data.numeric_array", "event_data": {"contents": channels}}],
+    }
 
-    `window` is `[channels x timesteps]` — a list of `channels` lists, each a
-    per-channel time series. Returns (embeddings, warnings, elapsed_ms), where
-    `embeddings` is one ``EMBED_DIM``-length vector per input channel.
 
-    Channels are embedded with ONE API call per channel, fanned out in
-    parallel (`max_workers`). This is the recommended pattern: per-channel
-    requests cap the request/response payload size (a single request carrying
-    many channels eventually exceeds REST payload limits), and the parallel
-    fan-out keeps wall-clock close to a single call. Don't mix conventions
-    within one downstream model: per-channel and all-channels-in-one-request
-    embeddings differ slightly (~2e-2 per coordinate, measured), so a KNN
-    library and its inference windows must be built the same way.
+def _split_rows(rows: list[list[float]], channel_count: int) -> list[list[list[float]]]:
+    """[windows x (channels*768)] -> [windows][channel] -> 768-d vector."""
+    return [
+        [row[channel * EMBED_DIM:(channel + 1) * EMBED_DIM] for channel in range(channel_count)]
+        for row in rows
+    ]
 
-    Each channel goes in a `data.numeric_array` event (no `file_ids`, no
-    prompt). The encoder handles window lengths of MIN_WINDOW (16) to WINDOW
-    (1024) natively — sub-1024 windows are padded AND masked internally, so
-    the accompanying "padding with zeros" warning is informational. Lengths
-    below 16 are outside the trained range; lengths above 1024 are truncated
-    to the last 1024 points. Raises `archetypeai.ApiError` on a 4xx response.
-    """
-    start_time = time.time()
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(window))) as executor:
-        per_channel = list(
-            executor.map(
-                lambda channel_values: _embed_channel(client, channel_values, normalize_input),
-                window,
-            )
+
+def _rows_from(payload: dict, channel_count: int) -> list[list[float]]:
+    response = payload.get("response") or {}
+    # Input shorter than the window comes back as success=false with an
+    # empty response and no message.
+    if not response.get("success"):
+        raise RuntimeError(
+            "Omega returned success=false (is the input shorter than the window?)"
         )
-    elapsed_ms = int((time.time() - start_time) * 1000)
-    embeddings = [vector for vector, _ in per_channel]
-    warnings = [message for _, channel_warnings in per_channel for message in channel_warnings]
-    return embeddings, warnings, elapsed_ms
+    rows = response.get("response") or []
+    if not rows or any(len(row) != channel_count * EMBED_DIM for row in rows):
+        raise RuntimeError(f"unexpected embedding shape for {channel_count} channels")
+    return rows
 
 
-def extract_embeddings(payload: dict[str, Any]) -> tuple[list[list[float]], list[str]]:
-    """Pull (embeddings, warning_messages) from a /query response."""
-    response_field = payload.get("response")
-    if isinstance(response_field, dict):
-        return response_field.get("response") or [], response_field.get("warning_messages") or []
-    if isinstance(response_field, list):
-        return response_field, []
-    return [], []
+def _chunks(window: list[list[float]]):
+    for first in range(0, len(window), MAX_CHANNELS_PER_REQUEST):
+        yield window[first:first + MAX_CHANNELS_PER_REQUEST]
+
+
+def embed_once(client: ArchetypeAI, window: list[list[float]]) -> list[list[list[float]]]:
+    """Embed without a session: `POST /api/inference/query`, window fixed at 1024.
+
+    `window` is channel-first `[channels x timesteps]`. Input is cut into
+    back-to-back 1024-timestep windows (leftover timesteps are dropped), so
+    the result is `[windows][channel] -> 768-d vector`. Fewer than 1024
+    timesteps raises RuntimeError. For any other window length use
+    `OmegaSession`.
+    """
+    per_chunk = [
+        _split_rows(_rows_from(_post(client, "/inference/query", _query_body(chunk)), len(chunk)),
+                    len(chunk))
+        for chunk in _chunks(window)
+    ]
+    return [sum((chunk[index] for chunk in per_chunk), []) for index in range(len(per_chunk[0]))]
+
+
+class OmegaSession:
+    """A Model Serving session for Omega with a fixed window length.
+
+    Every request sent to the session is cut into `window_size`-timestep
+    windows, advancing `step_size` (default: `window_size`, so windows don't
+    overlap); each full window returns one 768-d vector per channel.
+    Use it as a context manager so the session is cancelled when you're done
+    (each org has a limit on open sessions per model):
+
+        with OmegaSession(client, window_size=256) as session:
+            vectors = session.embed(window)   # [channels] -> 768-d
+
+    A session ends when cancelled, when idle long enough, or when its server
+    is replaced; queries then fail with HTTP 409 `session_not_running`.
+    `embed()` reopens the session and retries once in that case.
+    """
+
+    def __init__(self, client: ArchetypeAI, window_size: int = WINDOW, step_size: int | None = None):
+        if not MIN_WINDOW <= window_size <= WINDOW:
+            raise ValueError(f"window_size must be {MIN_WINDOW}-{WINDOW}, got {window_size}")
+        self.client = client
+        self.values = {"window_size": window_size, "step_size": step_size or window_size}
+        self.session_id: str | None = None
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> "OmegaSession":
+        self.open()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+    def open(self, replace: str | None = None) -> str:
+        """Open the session (or reopen it if `replace` is the current id)."""
+        with self._lock:
+            if self.session_id is None or self.session_id == replace:
+                session = _post(self.client, "/inference/sessions",
+                                {"model": MODEL, "values": self.values})
+                self.session_id = session["id"]
+            return self.session_id
+
+    def close(self) -> None:
+        """Cancel the session, freeing its place under the org's limit."""
+        with self._lock:
+            session_id, self.session_id = self.session_id, None
+        if session_id:
+            try:
+                self.client.requests_post(
+                    f"{self.client.api_endpoint}/inference/sessions/{session_id}/cancel",
+                    data_payload=b"",
+                )
+            except Exception:  # noqa: BLE001 — an idle session expires anyway
+                pass
+
+    def _query(self, chunk: list[list[float]]) -> list[list[float]]:
+        session_id = self.open()
+        try:
+            payload = _post(self.client, f"/inference/sessions/{session_id}/query", _query_body(chunk))
+        except ApiError as error:
+            codes = {item.get("code") for item in (error.errors or [])}
+            if not codes & SESSION_ENDED:
+                raise
+            session_id = self.open(replace=session_id)
+            payload = _post(self.client, f"/inference/sessions/{session_id}/query", _query_body(chunk))
+        return _rows_from(payload, len(chunk))
+
+    def embed_all(self, window: list[list[float]]) -> list[list[list[float]]]:
+        """Embed a channel-first series: `[windows][channel] -> 768-d vector`."""
+        per_chunk = [_split_rows(self._query(chunk), len(chunk)) for chunk in _chunks(window)]
+        return [sum((chunk[index] for chunk in per_chunk), []) for index in range(len(per_chunk[0]))]
+
+    def embed(self, window: list[list[float]]) -> list[list[float]]:
+        """Embed ONE `[channels x window_size]` window: one 768-d vector per channel."""
+        windows = self.embed_all(window)
+        if len(windows) != 1:
+            raise ValueError(f"expected one window, got {len(windows)}; slice the input to window_size")
+        return windows[0]
 
 
 def _is_float(cell: str) -> bool:

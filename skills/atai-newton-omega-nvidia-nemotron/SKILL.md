@@ -1,8 +1,8 @@
 ---
 name: atai-newton-omega-nvidia-nemotron
 description: >
-  Pair Archetype AI's Omega encoder (`OmegaEncoder::omega_embeddings_1_4`
-  over `/query`) with NVIDIA Nemotron on NVIDIA's hosted API
+  Pair Archetype AI's Omega encoder (Newton Omega 1.5, `omega-embedding`
+  on Model Serving) with NVIDIA Nemotron on NVIDIA's hosted API
   (`integrate.api.nvidia.com`) — Omega + client-side KNN decide what state a
   sensor window is in, Nemotron explains it in operator language. Use this
   skill when the user wants an LLM to turn Omega/KNN verdicts into fault
@@ -22,7 +22,7 @@ description: >
 Omega turns sensor windows into embeddings; a client-side KNN turns those into a verdict (`healthy` / `fault`, `normal` / `attack`, …). That verdict is accurate but mute. This skill adds **NVIDIA Nemotron** as the explanation layer: when Omega flags something, Nemotron reads the verdict and plain window statistics and writes what an operator needs — what changed, the likely cause, what to check.
 
 ```
-sensor window ──► scale ──► Omega /query (one per channel) ──► KNN vs n-shot library ──► verdict + votes
+sensor window ──► scale ──► Omega session query (all channels) ──► KNN vs n-shot library ──► verdict + votes
                                                                                             │
                          window stats (+ healthy baseline or peer) ─────────────────────────┤
                                                                                             ▼
@@ -114,13 +114,13 @@ Nemotron output is a suggestion; treat it as untrusted input.
 
 ## Worked example — bearing sample
 
-[`explain_knn.py`](references/explain_knn.py) runs the whole pattern on the bundled NASA IMS bearing data: 14-window KNN library (56 Omega calls), two held-out windows, a brief for the degraded one. Measured output:
+[`explain_knn.py`](references/explain_knn.py) runs the whole pattern on the bundled NASA IMS bearing data: 14-window KNN library (14 Omega queries through one Model Serving session with `window_size` 256), two held-out windows, a brief for the degraded one. Measured output:
 
 ```
 window rows 0–255: healthy  votes={'healthy': 2, 'degraded': 1}
   healthy — no brief requested
 
-window rows 256–511: degraded  votes={'degraded': 3}
+window rows 256–511: degraded  votes={'healthy': 1, 'degraded': 2}
   Nemotron brief (1.2 s):
   {
     "observation": "Bearing 1 shows elevated std (0.133 vs 0.074), rms (0.134 vs 0.074), peak (0.471 vs 0.361)…",

@@ -32,7 +32,7 @@ Direct Query API — one stateless `POST /api/lens/query` per request, for when 
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/api/lens/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
+| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (Newton Omega 1.5, `omega-embedding`) on Model Serving (`/api/inference/*`) — a session with your window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
 
 ### Integrations
@@ -122,7 +122,7 @@ cp -r skills/* your-project/.claude/skills/
 
 # Models — Direct Query API
 /atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
-/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
+/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via Model Serving
 /atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
 # Integrations
@@ -145,10 +145,10 @@ Video (.mp4):  Upload file → POST /api/lens/query + max_frames ─────
 Video frames:  POST /api/lens/query (frames + query_metadata) ──────► response
 ```
 
-**Integrations** reuse the Direct Query API for the Newton side and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
+**Integrations** reuse the platform API for the Newton side (Model Serving for Omega) and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
 
 ```
-Omega:     POST /api/lens/query per channel ──► embeddings ──► local KNN ──► verdict
+Omega:     POST /api/inference/sessions/{id}/query ──► embeddings ──► local KNN ──► verdict
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
