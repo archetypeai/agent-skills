@@ -8,7 +8,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 ## Skills
 
-Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/api/lens/query` and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
+Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on Model Serving (`/api/inference/*`) and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
 
 ### Agents
 
@@ -27,13 +27,13 @@ Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or c
 
 ### Models
 
-Direct model calls, one request per input, for when you want control over the pipeline or the raw vectors to build on. Omega runs on Model Serving (`/api/inference/*`); the fusion model is still on the Direct Query API (`POST /api/lens/query`).
+Model Serving (`/api/inference/*`) — one request per input, for when you want control over the pipeline or the raw vectors to build on.
 
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (Newton Omega 1.5, `omega-embedding`) on Model Serving (`/api/inference/*`) — a session with your window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search |
-| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
+| [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call Newton-C 2.6 (`newton-c-2.6`, default) or Newton-Fusion 1.0 (`newton-fusion-1.0`) on Model Serving with text, image, or video in one stateless request — Direct Query, OpenAI Chat Completions or Responses — plus a script to compare the two models on your own inputs |
 
 ### Integrations
 
@@ -120,10 +120,10 @@ cp -r skills/* your-project/.claude/skills/
 /atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
 /atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
-# Models — Model Serving (Omega) and the Direct Query API (C 2.6)
+# Models — Model Serving
 /atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
 /atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via Model Serving
-/atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
+/atai-newton-fusion-model                           # Multimodal (text/image/video) queries on C 2.6 or Fusion 1.0
 
 # Integrations
 /atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
@@ -144,16 +144,17 @@ Omega is on Model Serving: open a session with your window length, then one quer
 Omega:         POST /api/inference/sessions ──► POST /api/inference/sessions/{id}/query ──► embeddings
 ```
 
-The C 2.6 fusion model is on the Direct Query API: one stateless POST to `/api/lens/query` per request.
+C 2.6 and Fusion 1.0 need no session: one stateless POST per request, on the Direct Query or an OpenAI-compatible API.
 
 ```
-Text:          POST /api/lens/query ───────────────────────────────► response
-Image(s):      Upload file(s) → POST /api/lens/query (file_ids) ────► response
-Video (.mp4):  Upload file → POST /api/lens/query + max_frames ─────► response
-Video frames:  POST /api/lens/query (frames + query_metadata) ──────► response
+Text:          POST /api/inference/query | chat/completions | responses ──────► response
+Image(s):      Upload → POST /api/inference/query (file_ids: [fil_…]) ─────────► response
+               or a data URI part on chat/completions | responses ─────────────► response
+Video (.mp4):  Upload → POST /api/inference/query (file_ids: [fil_…]) ─────────► response
+               or inline: base64:<mp4> on query, a data URI part on the others ► response
 ```
 
-**Integrations** reuse the platform API for the Newton side (Model Serving for Omega) and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
+**Integrations** reuse Model Serving for the Newton side and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
 
 ```
 Omega:     POST /api/inference/sessions/{id}/query ──► embeddings ──► local KNN ──► verdict
