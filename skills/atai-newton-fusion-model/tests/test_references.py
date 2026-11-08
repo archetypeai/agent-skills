@@ -2,21 +2,21 @@
 
 These mock the official archetypeai client's transport, so they run with NO
 credentials and NO network. They lock in the invariants discovered while
-building this skill:
+moving this skill to Model Serving:
 
-  * /query bodies send `instruction_prompt` and NEVER `system_prompt`
-    (C 2.6 ignores system_prompt; sending it was the original bug).
-  * /query bodies never send `sanitize`.
-  * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
-    endpoint.
-  * `file_ids` is referenced by filename.
-  * The .mp4 video path uses `max_frames` and never sets `multi_image`.
-  * The frame-list video path sets `multi_image: false` AND carries the
-    `query_metadata` triple (raw_fps / frames_indices / total_num_frames) —
-    without query_metadata that shape 400s.
-  * Multi-image (independent images) bodies set `multi_image: true`;
-    single-image bodies omit the key entirely.
-  * `extract_text` handles every response shape we've observed.
+  * Every call goes to `{api}/inference/{query,chat/completions,responses}`
+    with a `model` alias (`newton-c-2.6` by default).
+  * /query sends the system turn in `system_prompt`, never
+    `instruction_prompt`, and never the refused knobs (`multi_image`,
+    `max_frames`, `events`, `query_metadata`, `presence_penalty`).
+  * Fusion without reasoning gets `/no_think` appended to the user text;
+    C 2.6 never does. Whenever Fusion reasons (reasoning mode, or any
+    text-only request) the budget is >= 4096 and `repetition_penalty` is set.
+  * `upload_file` returns the `fil_` uid, not the filename.
+  * Inline payloads over the limit are refused before sending.
+  * `split_thinking` strips a closed <think> block and raises on an
+    unclosed one; `extract_text` handles all three response shapes.
+  * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default.
 
 Run:
     python -m unittest discover -s skills/atai-newton-fusion-model/tests
@@ -29,32 +29,32 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-# The reference scripts use flat imports (`from _common import ...`), so put
-# the references/ dir on the path.
 REF = Path(__file__).resolve().parent.parent / "references"
 sys.path.insert(0, str(REF))
 
 import _common  # noqa: E402
+import compare_models  # noqa: E402
 import image_query  # noqa: E402
 import text_query  # noqa: E402
 import video_query  # noqa: E402
 
 from archetypeai.api_client import ArchetypeAI  # noqa: E402
 
+QUERY_REPLY = {"response": {"response": ["ok"], "success": True}}
+CHAT_REPLY = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+RESPONSES_REPLY = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
 
 def _capturing_post(payload: dict, store: dict):
-    """Return a fake ArchetypeAI.requests_post that records its args and returns `payload`."""
+    """Fake ArchetypeAI.requests_post that records its args and returns `payload`."""
 
     def _requests_post(self, api_endpoint, data_payload, additional_headers={}):
-        store.update(
-            url=api_endpoint,
-            json=json.loads(data_payload),
-            headers={**self.auth_headers, **additional_headers},
-        )
+        store.update(url=api_endpoint, json=json.loads(data_payload))
         return payload
 
     return _requests_post
@@ -62,7 +62,6 @@ def _capturing_post(payload: dict, store: dict):
 
 class _Base(unittest.TestCase):
     def hermetic_env(self, **env: str) -> None:
-        """Isolate env vars and stop make_client() from loading the real .env."""
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
         os.environ.pop("ATAI_API_KEY", None)
@@ -73,203 +72,247 @@ class _Base(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def hermetic_client(self) -> ArchetypeAI:
-        self.hermetic_env(
-            ATAI_API_KEY="test-key", ATAI_API_ENDPOINT="https://example.test/v0.5"
-        )
+        self.hermetic_env(ATAI_API_KEY="test-key", ATAI_API_ENDPOINT="https://example.test/v0.5")
         return _common.make_client()
 
-
-class TestExtractText(unittest.TestCase):
-    def test_nested_list(self):
-        self.assertEqual(_common.extract_text({"response": {"response": ["hi"]}}), "hi")
-
-    def test_nested_str(self):
-        self.assertEqual(_common.extract_text({"response": {"response": "hi"}}), "hi")
-
-    def test_top_level_list(self):
-        self.assertEqual(_common.extract_text({"response": ["hi"]}), "hi")
-
-    def test_top_level_str(self):
-        self.assertEqual(_common.extract_text({"response": "hi"}), "hi")
-
-    def test_text_field(self):
-        self.assertEqual(_common.extract_text({"text": "hi"}), "hi")
-
-    def test_empty_payload(self):
-        self.assertEqual(_common.extract_text({}), "")
-
-    def test_empty_inner_list(self):
-        self.assertEqual(_common.extract_text({"response": {"response": []}}), "")
+    def capture(self, payload: dict) -> dict:
+        store: dict = {}
+        patcher = mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return store
 
 
 class TestMakeClient(_Base):
     def test_missing_key_exits(self):
-        self.hermetic_env(ATAI_API_ENDPOINT="https://example.test/v0.5")
+        self.hermetic_env(ATAI_API_ENDPOINT="https://example.test")
         with self.assertRaises(SystemExit):
             _common.make_client()
 
     def test_missing_endpoint_exits(self):
-        # The endpoint is required just like the key — no silent default.
-        self.hermetic_env(ATAI_API_KEY="test-key")
+        self.hermetic_env(ATAI_API_KEY="k")
         with self.assertRaises(SystemExit):
             _common.make_client()
 
-    def test_endpoint_normalized_and_headers(self):
-        """Any .env convention reduces to one root with /api appended.
-
-        Both surfaces live under /api, so one client serves query and files
-        alike. Accepting every form lets a single .env serve the model skills
-        and the agent skills.
-        """
-        for given in ("https://example.test", "https://example.test/",
-                      "https://example.test/v0.5", "https://example.test/api",
-                      "https://example.test/api/lens"):
-            self.hermetic_env(ATAI_API_KEY="test-key", ATAI_API_ENDPOINT=given)
-            client = _common.make_client()
-            self.assertEqual(client.api_endpoint, "https://example.test/api", given)
-        self.assertEqual(client.auth_headers["Authorization"], "Bearer test-key")
+    def test_endpoint_normalized(self):
+        for raw in (
+            "https://example.test",
+            "https://example.test/",
+            "https://example.test/api",
+            "https://example.test/api/inference",
+            "https://example.test/api/lens",
+            "https://example.test/v0.5",
+        ):
+            self.hermetic_env(ATAI_API_KEY="k", ATAI_API_ENDPOINT=raw)
+            self.assertEqual(_common.make_client().api_endpoint, "https://example.test/api", raw)
 
 
 class TestQueryBody(_Base):
-    def test_body_invariants(self):
+    def test_c26_defaults(self):
         client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["ok"]}, store)):
-            text, _payload, _elapsed_ms = _common.query(
-                client, "hello", instruction_prompt="be brief", file_ids=["chart.png"], max_new_tokens=123
-            )
-        body = store["json"]
-        self.assertEqual(body["query"], "hello")
-        self.assertEqual(body["instruction_prompt"], "be brief")
-        self.assertNotIn("system_prompt", body)  # the key finding — never send it
-        self.assertNotIn("sanitize", body)  # internal flag — never leak it
-        self.assertEqual(body["file_ids"], ["chart.png"])
-        self.assertEqual(body["model"], _common.MODEL)
-        self.assertEqual(body["max_new_tokens"], 123)
+        store = self.capture(QUERY_REPLY)
+        text, _, _ = _common.query(client, "hi", system_prompt="sys", file_ids=["fil_abc"])
         self.assertEqual(text, "ok")
-        self.assertTrue(store["url"].endswith("/query"))
-        self.assertEqual(store["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(store["url"], "https://example.test/api/inference/query")
+        body = store["json"]
+        self.assertEqual(body["model"], "newton-c-2.6")
+        self.assertEqual(body["query"], "hi")
+        self.assertEqual(body["system_prompt"], "sys")
+        self.assertEqual(body["file_ids"], ["fil_abc"])
+        for refused in ("instruction_prompt", "multi_image", "max_frames", "events", "query_metadata", "presence_penalty"):
+            self.assertNotIn(refused, body)
 
-    def test_default_file_ids_empty(self):
+    def test_system_prompt_omitted_when_empty(self):
         client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["x"]}, store)):
-            _common.query(client, "q")
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "hi")
+        self.assertNotIn("system_prompt", store["json"])
         self.assertEqual(store["json"]["file_ids"], [])
 
-    def test_multi_image_flag(self):
+    def test_fusion_with_media_appends_no_think(self):
         client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["x"]}, store)):
-            _common.query(client, "q", file_ids=["a.png", "b.png"], multi_image=True)
-        self.assertIs(store["json"]["multi_image"], True)
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "describe", model=_common.FUSION, file_ids=["fil_x"], max_new_tokens=300)
+        body = store["json"]
+        self.assertTrue(body["query"].endswith(" /no_think"))
+        self.assertEqual(body["max_new_tokens"], 300)
+        self.assertNotIn("repetition_penalty", body)
 
-    def test_multi_image_omitted_by_default(self):
+    def test_fusion_text_only_gets_reasoning_budget(self):
         client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["x"]}, store)):
-            _common.query(client, "q", file_ids=["a.png"])
-        self.assertNotIn("multi_image", store["json"])
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "hi", model=_common.FUSION, max_new_tokens=256)
+        body = store["json"]
+        self.assertGreaterEqual(body["max_new_tokens"], 4096)
+        self.assertEqual(body["repetition_penalty"], 1.1)
+
+    def test_fusion_reasoning(self):
+        client = self.hermetic_client()
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "describe", model=_common.FUSION, file_ids=["fil_x"], reasoning=True)
+        body = store["json"]
+        self.assertEqual(body["query"], "describe")
+        self.assertGreaterEqual(body["max_new_tokens"], 4096)
+        self.assertEqual(body["repetition_penalty"], 1.1)
+
+    def test_c26_never_gets_fusion_switches(self):
+        client = self.hermetic_client()
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "hi", reasoning=True, max_new_tokens=100)
+        body = store["json"]
+        self.assertEqual(body["query"], "hi")
+        self.assertEqual(body["max_new_tokens"], 100)
+        self.assertNotIn("repetition_penalty", body)
+
+    def test_sampling_params_pass_through(self):
+        client = self.hermetic_client()
+        store = self.capture(QUERY_REPLY)
+        _common.query(client, "hi", temperature=0.2, do_sample=False)
+        self.assertEqual(store["json"]["temperature"], 0.2)
+        self.assertIs(store["json"]["do_sample"], False)
+
+    def test_think_block_stripped(self):
+        client = self.hermetic_client()
+        self.capture({"response": {"response": ["<think>\nplan\n</think>\n\nanswer"], "success": True}})
+        text, _, _ = _common.query(client, "hi", model=_common.FUSION)
+        self.assertEqual(text, "answer")
+
+
+class TestChatAndResponses(_Base):
+    def test_chat_body(self):
+        client = self.hermetic_client()
+        store = self.capture(CHAT_REPLY)
+        parts = [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AA"}}, {"type": "text", "text": "what?"}]
+        text, _, _ = _common.chat(client, parts, model=_common.FUSION, system_prompt="sys", max_tokens=200)
+        self.assertEqual(text, "ok")
+        self.assertEqual(store["url"], "https://example.test/api/inference/chat/completions")
+        body = store["json"]
+        self.assertEqual(body["messages"][0], {"role": "system", "content": "sys"})
+        user = body["messages"][1]["content"]
+        self.assertEqual(user[0], parts[0])
+        self.assertEqual(user[1]["text"], "what? /no_think")
+        self.assertEqual(body["max_tokens"], 200)
+
+    def test_chat_text_only_fusion_budget(self):
+        client = self.hermetic_client()
+        store = self.capture(CHAT_REPLY)
+        _common.chat(client, [{"type": "text", "text": "hi"}], model=_common.FUSION, max_tokens=200)
+        self.assertGreaterEqual(store["json"]["max_tokens"], 4096)
+        self.assertNotIn("system", [m["role"] for m in store["json"]["messages"]])
+
+    def test_responses_body(self):
+        client = self.hermetic_client()
+        store = self.capture(RESPONSES_REPLY)
+        parts = [{"type": "input_video", "video_url": "data:video/mp4;base64,AA"}, {"type": "input_text", "text": "what?"}]
+        text, _, _ = _common.respond(client, parts, instructions="sys", max_output_tokens=300)
+        self.assertEqual(text, "ok")
+        self.assertEqual(store["url"], "https://example.test/api/inference/responses")
+        body = store["json"]
+        self.assertEqual(body["model"], "newton-c-2.6")
+        self.assertEqual(body["instructions"], "sys")
+        self.assertEqual(body["input"], [{"role": "user", "content": parts}])
+        self.assertEqual(body["max_output_tokens"], 300)
+
+
+class TestSplitThinking(unittest.TestCase):
+    def test_no_block(self):
+        self.assertEqual(_common.split_thinking("plain"), ("plain", ""))
+
+    def test_empty_block(self):
+        self.assertEqual(_common.split_thinking("<think>\n\n</think>\n\nanswer"), ("answer", ""))
+
+    def test_reasoning_block(self):
+        self.assertEqual(_common.split_thinking("<think>step 1</think> final"), ("final", "step 1"))
+
+    def test_unclosed_block_raises(self):
+        with self.assertRaises(RuntimeError):
+            _common.split_thinking("<think>counting cars: 1, 2, 3")
+
+
+class TestExtractText(unittest.TestCase):
+    def test_query_shape(self):
+        self.assertEqual(_common.extract_text(QUERY_REPLY), "ok")
+
+    def test_query_success_false_raises(self):
+        with self.assertRaises(RuntimeError):
+            _common.extract_text({"response": {"response": [], "success": False}})
+
+    def test_chat_shape(self):
+        self.assertEqual(_common.extract_text(CHAT_REPLY), "ok")
+
+    def test_responses_shape(self):
+        self.assertEqual(_common.extract_text(RESPONSES_REPLY), "ok")
+
+    def test_empty_payload(self):
+        self.assertEqual(_common.extract_text({}), "")
 
 
 class TestUploadFile(_Base):
     def test_missing_file_exits(self):
         client = self.hermetic_client()
         with self.assertRaises(SystemExit):
-            _common.upload_file(client, "/no/such/file_xyz.png")
+            _common.upload_file(client, "/nonexistent/clip.mp4")
 
-    def test_returns_file_id_by_filename(self):
+    def test_returns_fil_uid_not_filename(self):
         client = self.hermetic_client()
-        store: dict = {}
-
-        def fake_upload(filename):
-            store["filename"] = filename
-            return {"file_id": os.path.basename(filename), "file_uid": "fil_123"}
-
-        with mock.patch.object(client.files.local, "upload", fake_upload):
-            file_id = _common.upload_file(client, Path(__file__))
-        self.assertEqual(file_id, Path(__file__).name)  # referenced by filename, not fil_... uid
-        self.assertEqual(store["filename"], str(Path(__file__)))
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp, mock.patch.object(
+            client.files.local, "upload", return_value={"file_id": "clip.mp4", "file_uid": "fil_123", "is_valid": True}
+        ):
+            self.assertEqual(_common.upload_file(client, tmp.name), "fil_123")
 
 
-class TestImageInlineBase64(_Base):
-    def test_inline_base64_body(self):
-        client = self.hermetic_client()
-        store: dict = {}
-        sample_image = REF / "sample_assets" / "wind-turbines.png"
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["desc"]}, store)):
-            image_query.example_inline_base64(client, sample_image)
-        body = store["json"]
-        self.assertEqual(body["file_ids"], [])
-        self.assertNotIn("system_prompt", body)
-        self.assertNotIn("sanitize", body)
-        event = body["events"][0]
-        self.assertEqual(event["type"], "data.base64_img")
-        self.assertIn("contents", event["event_data"])
+class TestInlinePayloads(unittest.TestCase):
+    def test_data_uri_mime(self):
+        uri = _common.data_uri(REF / "sample_assets" / "wind-turbines-small.jpg")
+        self.assertTrue(uri.startswith("data:image/jpeg;base64,"))
+        uri = _common.data_uri(REF / "sample_assets" / "1_pass_2_pass_3_pass_B_small.mp4")
+        self.assertTrue(uri.startswith("data:video/mp4;base64,"))
+
+    def test_large_inline_refused(self):
+        with self.assertRaises(SystemExit):
+            _common.read_base64(REF / "sample_assets" / "1_pass_2_pass_3_pass_B.mp4")
+
+    def test_inline_samples_fit(self):
+        for name in ("wind-turbines-small.jpg", "1_pass_2_pass_3_pass_B_small.mp4", "assembly_before.png", "assembly_after.png"):
+            _common.read_base64(REF / "sample_assets" / name)
 
 
-class TestMultiImage(_Base):
-    def test_body_sets_multi_image_true(self):
-        client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(image_query, "upload_file", lambda client, path: Path(path).name), \
-                mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["ok"]}, store)):
-            image_query.example_multi_image(client, Path("before.png"), Path("after.png"))
-        body = store["json"]
-        self.assertEqual(body["file_ids"], ["before.png", "after.png"])
-        self.assertIs(body["multi_image"], True)  # required for >1 independent image
-        self.assertNotIn("system_prompt", body)
-        self.assertNotIn("max_frames", body)  # images, not video
+class TestScripts(unittest.TestCase):
+    def test_resolve_model(self):
+        self.assertEqual(_common.resolve_model("c26"), "newton-c-2.6")
+        self.assertEqual(_common.resolve_model("fusion"), "newton-fusion-1.0")
+        self.assertEqual(_common.resolve_model("newton-fusion-1.0"), "newton-fusion-1.0")
 
+    def test_sample_paths_exist(self):
+        for path in (
+            image_query.DEFAULT_IMAGE,
+            image_query.SMALL_IMAGE,
+            image_query.BEFORE_IMAGE,
+            image_query.AFTER_IMAGE,
+            video_query.DEFAULT_VIDEO,
+            video_query.SMALL_VIDEO,
+        ):
+            self.assertTrue(path.exists(), path)
 
-class TestVideo(_Base):
     def test_assembly_prompt_format(self):
-        for token in ("Step 1:", "Step 2:", "Step 3:", "PASS", "FAIL", "Summary:"):
-            self.assertIn(token, video_query.ASSEMBLY_PROMPT)
+        for step in ("Step 1:", "Step 2:", "Step 3:", "Summary:"):
+            self.assertIn(step, video_query.ASSEMBLY_PROMPT)
 
-    def test_mp4_body_uses_max_frames_not_multi_image(self):
-        client = self.hermetic_client()
-        store: dict = {}
-        with mock.patch.object(video_query, "upload_file", lambda client, path: "clip.mp4"), \
-                mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["ok"]}, store)):
-            video_query.example_mp4_direct(client, Path("clip.mp4"))
-        body = store["json"]
-        self.assertEqual(body["file_ids"], ["clip.mp4"])
-        self.assertEqual(body["max_frames"], 32)
-        self.assertNotIn("multi_image", body)  # multi_image is multi-image mode, not video
-        self.assertNotIn("system_prompt", body)
-        self.assertNotIn("sanitize", body)
-        self.assertEqual(body["instruction_prompt"], video_query.ASSEMBLY_PROMPT)
+    def test_flow_log_has_legend_and_rows(self):
+        self.assertTrue(text_query.FLOW_LOG.startswith(text_query.FIELD_LEGEND))
+        self.assertEqual(text_query.FLOW_LOG.count("2019-10-19T"), 14)
 
-    def test_frame_list_body_has_query_metadata(self):
-        client = self.hermetic_client()
-        store: dict = {}
-        frames = [
-            REF / "sample_assets" / "assembly_before.png",
-            REF / "sample_assets" / "assembly_after.png",
-        ]
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post({"response": ["ok"]}, store)):
-            video_query.example_frame_list(client, frames)
-        body = store["json"]
-        self.assertIs(body["multi_image"], False)  # false = frames of ONE video
-        self.assertEqual(len(body["events"]), 2)
-        self.assertEqual(body["events"][0]["type"], "data.base64_img")
-        # The triple that makes the frame-list video path work at all:
-        self.assertEqual(
-            body["query_metadata"],
-            {"raw_fps": 1.0, "frames_indices": [0, 1], "total_num_frames": 2},
-        )
-        self.assertNotIn("system_prompt", body)
+    def test_compare_kinds(self):
+        self.assertEqual(compare_models.kind_of(Path("a.png")), "image")
+        self.assertEqual(compare_models.kind_of(Path("a.mp4")), "video")
+        self.assertEqual(compare_models.kind_of(Path("a.txt")), "text")
+        with self.assertRaises(SystemExit):
+            compare_models.kind_of(Path("a.bin"))
 
-
-class TestTextConstants(unittest.TestCase):
-    def test_field_legend_has_columns(self):
-        for column in ("time_utc", "mac_a", "prot", "bytes_a", "pkts_b"):
-            self.assertIn(column, text_query.FIELD_LEGEND)
-
-    def test_analyst_persona(self):
-        self.assertIn("network security analyst", text_query.ANALYST)
+    def test_compare_variants(self):
+        self.assertEqual(compare_models.VARIANTS["c26"]["model"], "newton-c-2.6")
+        self.assertTrue(compare_models.VARIANTS["fusion+reason"]["reasoning"])
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

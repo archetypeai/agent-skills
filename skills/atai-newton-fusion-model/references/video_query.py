@@ -1,34 +1,33 @@
 """
-Video examples for Newton C 2.6 fusion model via /query (prod).
+Video examples on Model Serving: Newton-C 2.6 (default) or Newton-Fusion 1.0.
 
-C 2.6 reasons over video on /query, two ways:
+Video goes in as an encoded clip (.mp4); the model's video reader samples up
+to 16 frames at 224 px. That budget is fixed: `max_frames` in the request is
+refused, and a session cannot change it either. Four ways in:
 
-  (a) Attach an .mp4 by file_id and set `max_frames` (default 32, max 64) —
-      GPQ decodes + uniformly samples the clip server-side. No client-side
-      video tooling needed.
+  1. /inference/query — upload via the files API, put the `fil_...` uid in
+     `file_ids`. The only way for clips too big to send inline (the full
+     7.8 MB sample works this way).
+  2. /inference/query — the clip inline: `file_ids: ["base64:<mp4 bytes>"]`.
+  3. /inference/chat/completions — a `video_url` part with a data URI.
+  4. /inference/responses — an `input_video` part with a data URI.
 
-  (b) Send frames you sampled yourself: N x `data.base64_img` events with
-      `multi_image: false` PLUS a `query_metadata` block carrying the
-      video-metadata triple (`raw_fps`, `frames_indices`,
-      `total_num_frames`). Without query_metadata this shape fails with
-      400 query_failed. Example 3 below demonstrates it.
+Inline clips count toward the request body: keep them under ~1.5 MB as
+base64 (a ~10 MB body hung). The small re-encode in sample_assets is for the
+inline examples.
 
-This is the capability that distinguishes C 2.6 from the C 2.4 / 2.5 text
-checkpoints, which accept an .mp4 but ignore the frames ("I can't see
-videos").
-
-Note: `multi_image: true` is NOT a video knob — it switches the model to
-multi-image mode (attached images treated as independent images, not video
-frames). See image_query.py for that.
+No frame lists: `data.base64_img` events, `multi_image`, and
+`query_metadata` are gone. If you have frames, mux them into an .mp4 first
+(e.g. `ffmpeg -framerate 2 -i f%03d.jpg -c:v libx264 -pix_fmt yuv420p clip.mp4`).
 
 The demo uses a worker-assembly PASS/FAIL inspection prompt; ground truth for
 the sample clip (named 1_pass_2_pass_3_pass) is all three steps PASS.
 
 Usage:
     cp .env.example .env  # then fill in ATAI_API_KEY and ATAI_API_ENDPOINT
-    python video_query.py
-    # or point at your own .mp4:
-    python video_query.py /path/to/your.mp4
+    python video_query.py                       # Newton-C 2.6
+    python video_query.py --model fusion        # Newton-Fusion 1.0
+    python video_query.py /path/to/your.mp4     # upload path uses your clip
 """
 
 from __future__ import annotations
@@ -37,14 +36,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from archetypeai import utils
 from archetypeai.api_client import ArchetypeAI
 
-from _common import banner, make_client, query, upload_file
+from _common import banner, chat, data_uri, make_client, model_arg, query, read_base64, resolve_model, respond, upload_file
 
 ASSETS = Path(__file__).parent / "sample_assets"
 DEFAULT_VIDEO = ASSETS / "1_pass_2_pass_3_pass_B.mp4"
-SAMPLE_FRAMES = [ASSETS / "assembly_before.png", ASSETS / "assembly_after.png"]
+SMALL_VIDEO = ASSETS / "1_pass_2_pass_3_pass_B_small.mp4"
 
 ASSEMBLY_PROMPT = (
     "You are observing a worker doing an assembly job.\n"
@@ -61,71 +59,60 @@ ASSEMBLY_PROMPT = (
     "Summary: <2-3 sentences>"
 )
 QUERY = "Evaluate the assembly steps shown in the attached video."
+DESCRIBE = "Describe what the person does in this video, in order. Three sentences."
 
 
-def example_mp4_direct(client: ArchetypeAI, video_path: Path) -> None:
-    """Upload the .mp4, let GPQ decode + sample it server-side."""
-    banner("1. Video via .mp4 file_id + max_frames (server-side sampling)")
-    file_id = upload_file(client, video_path)
-    print(f"Uploaded → file_id={file_id}")
-
+def example_upload_query(client: ArchetypeAI, video_path: Path, **model_kw) -> None:
+    banner(f"1. /inference/query with an uploaded clip (fil_ uid)\n   {video_path.name}")
+    file_uid = upload_file(client, video_path)
+    print(f"Uploaded → file_uid={file_uid}")
     text, _, elapsed_ms = query(
         client,
         user_query=QUERY,
-        instruction_prompt=ASSEMBLY_PROMPT,
-        file_ids=[file_id],
+        system_prompt=ASSEMBLY_PROMPT,
+        file_ids=[file_uid],
         max_new_tokens=500,
-        max_frames=32,  # frames GPQ samples uniformly from the video (default 32, max 64)
+        **model_kw,
     )
     print(f"[{elapsed_ms} ms]\n{text}\n")
 
 
-def example_max_frames_tradeoff(client: ArchetypeAI, video_path: Path) -> None:
-    """Same clip at two frame budgets — more frames = more temporal detail, more latency."""
-    banner("2. max_frames tradeoff (8 vs 32 frames)")
-    file_id = upload_file(client, video_path)
-    for frame_budget in (8, 32):
-        text, _, elapsed_ms = query(
-            client,
-            user_query=QUERY,
-            instruction_prompt=ASSEMBLY_PROMPT,
-            file_ids=[file_id],
-            max_new_tokens=500,
-            max_frames=frame_budget,
-        )
-        print(f"--- max_frames={frame_budget:>2}  [{elapsed_ms} ms] ---\n{text}\n")
-
-
-def example_frame_list(client: ArchetypeAI, frame_paths: list[Path]) -> None:
-    """Client-sampled frames as ONE video: base64 events + query_metadata."""
-    banner(
-        "3. Video via client-sampled frames (base64 events + query_metadata)\n"
-        f"   {', '.join(frame_path.name for frame_path in frame_paths)}"
-    )
-    events = [
-        {
-            "type": "data.base64_img",
-            "event_data": {"contents": utils.base64_encode(str(frame_path))},
-        }
-        for frame_path in frame_paths
-    ]
-    frame_count = len(events)
+def example_inline_query(client: ArchetypeAI, video_path: Path, **model_kw) -> None:
+    banner(f"2. /inference/query with the clip inline (base64:)\n   {video_path.name}")
     text, _, elapsed_ms = query(
         client,
-        user_query=(
-            "This is a short video of an assembly task. Describe the sequence "
-            "of actions in order, in two sentences."
-        ),
-        instruction_prompt="Refer to the frames as one continuous video.",
-        multi_image=False,  # false = the images are frames of ONE video
-        events=events,
-        # Required for the frame-list video path; omitting it → 400 query_failed.
-        query_metadata={
-            "raw_fps": 1.0,
-            "frames_indices": list(range(frame_count)),
-            "total_num_frames": frame_count,
-        },
-        max_new_tokens=150,
+        user_query=DESCRIBE,
+        file_ids=[f"base64:{read_base64(video_path)}"],
+        max_new_tokens=300,
+        **model_kw,
+    )
+    print(f"[{elapsed_ms} ms]\n{text}\n")
+
+
+def example_chat_video(client: ArchetypeAI, video_path: Path, **model_kw) -> None:
+    banner(f"3. /inference/chat/completions with a video_url part\n   {video_path.name}")
+    text, _, elapsed_ms = chat(
+        client,
+        [
+            {"type": "video_url", "video_url": {"url": data_uri(video_path)}},
+            {"type": "text", "text": DESCRIBE},
+        ],
+        max_tokens=300,
+        **model_kw,
+    )
+    print(f"[{elapsed_ms} ms]\n{text}\n")
+
+
+def example_responses_video(client: ArchetypeAI, video_path: Path, **model_kw) -> None:
+    banner(f"4. /inference/responses with an input_video part\n   {video_path.name}")
+    text, _, elapsed_ms = respond(
+        client,
+        [
+            {"type": "input_video", "video_url": data_uri(video_path)},
+            {"type": "input_text", "text": DESCRIBE},
+        ],
+        max_output_tokens=300,
+        **model_kw,
     )
     print(f"[{elapsed_ms} ms]\n{text}\n")
 
@@ -136,18 +123,21 @@ def main() -> None:
         "video",
         nargs="?",
         default=str(DEFAULT_VIDEO),
-        help=f"Path to an .mp4 file. Defaults to {DEFAULT_VIDEO.name}.",
+        help=f"Clip for the upload example. Defaults to {DEFAULT_VIDEO.name}.",
     )
+    model_arg(parser)
     args = parser.parse_args()
     video_path = Path(args.video).resolve()
     if not video_path.exists():
         sys.exit(f"Video not found: {video_path}")
+    model_kw = {"model": resolve_model(args.model), "reasoning": args.reasoning}
 
     client = make_client()
-    example_mp4_direct(client, video_path)
-    example_max_frames_tradeoff(client, video_path)
-    if all(frame_path.exists() for frame_path in SAMPLE_FRAMES):
-        example_frame_list(client, SAMPLE_FRAMES)
+    print(f"model={model_kw['model']} reasoning={args.reasoning}\n")
+    example_upload_query(client, video_path, **model_kw)
+    example_inline_query(client, SMALL_VIDEO, **model_kw)
+    example_chat_video(client, SMALL_VIDEO, **model_kw)
+    example_responses_video(client, SMALL_VIDEO, **model_kw)
 
 
 if __name__ == "__main__":
