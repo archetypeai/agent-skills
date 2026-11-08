@@ -135,6 +135,8 @@ curl -X POST $ROOT/api/files -H "Authorization: Bearer $ATAI_API_KEY" -F "file=@
 }
 ```
 
+**Every image reaches the model as a 224 × 224 square**, whatever size you send. Both blueprints set `size: 224` for the image reader as well as the video reader, and it can't be changed per request or per session. Measured: on a 1024 px image, both models read a 110 px code but not 14 px or 10 px ones — exactly what they did with the same image pre-shrunk to 224 px — and read the small codes correctly once those lines were cropped and enlarged. **For fine detail (labels, gauges, small parts, text), crop to the region of interest before sending**, or send several crops as separate images. Sending a larger image doesn't help and only costs upload or request size.
+
 **Several independent images** (before/after, multi-view): put several `image_url` parts in one chat message. `multi_image` on `/query` is refused.
 
 **Refused for images** (each a bare 400): inline `data.base64_img` events, `base64:<image>` in `file_ids`, the upload's **filename** in `file_ids`, `multi_image: true`, and a `fil_` uid as a chat `image_url`.
@@ -257,6 +259,7 @@ Every refusal is a bare `400` with no reason, so check this table first when old
 - **Fusion answer is empty or cut off.** It ran out of tokens while reasoning. Raise the budget (≥ 4,096) and set `repetition_penalty: 1.1`, or add ` /no_think` when the request has media.
 - **Fusion is slow on plain text.** It always reasons without media. Use C 2.6 for text-only work unless Fusion's answers are measurably better.
 - **Showing `<think>` to users.** Strip it from every Fusion reply.
+- **Expecting fine detail from a large image.** Images and video frames are squashed to 224 × 224 before the model sees them. Crop to what matters. When it couldn't read small text, C 2.6 answered "?", but **Fusion invented plausible digits** — validate anything Fusion reads from small print.
 - **Expecting more than 16 frames.** Long clips are sampled down to 16 frames (the Direct Query API allowed 64). Split long videos into shorter clips when the action is brief or the check is fine-grained.
 - **JSON wrapped in markdown fences.** Parse defensively or restate the no-fences rule in both `system_prompt` and the query.
 - **Shell variables beat `.env`.** `ATAI_API_*` exported in your shell override `.env` (`load_dotenv(override=False)`). Unset them if the scripts hit the wrong environment.
