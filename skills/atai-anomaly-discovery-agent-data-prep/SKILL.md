@@ -52,6 +52,9 @@ generalised; the platform rules in it were measured on the dev deployment (2026-
 **Do not use this skill when:**
 - You only want to run the maintained AD Quick Start bundle on one CSV — that's
   [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md), Path 1
+- You have no normal reference and no labelled incidents, only unlabeled data to search
+  for what's unusual — use
+  [`atai-label-free-anomaly-discovery-agent-data-prep`](../atai-label-free-anomaly-discovery-agent-data-prep/SKILL.md)
 - Your labels are **operating states** (fill / wash / spin, drilling / tripping) — use
   [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md)
 - Your raw data first needs heavy cleaning (imputing dropouts, diagnosing sensors) — do
