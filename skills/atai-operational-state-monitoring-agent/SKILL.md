@@ -313,9 +313,12 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 > 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
 > delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
 > `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
-> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
-> queued job already reports `running`, so with large library files that wait counts against
-> the trial's 2-hour job limit; `--serving` takes one serving agent instead.
+> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3, when
+> agent runs there were on CPU). A queued job already reports `running`, so with large library
+> files that wait counts against the trial's 2-hour job limit; `--serving` takes one serving
+> agent instead. Since 2026-11-06 the free trial runs evals and agent runs on GPU (serving
+> stays on CPU): the LARCO quickstart's eval took 3 min (34 on CPU), its delivery 3.5 (31),
+> and its 4 library runs 2.7 (6), with the same scores.
 >
 > **Path 2 still delivers and serves through bundles and agent instances**, which are being
 > removed: some deployments of the platform already answer 404 for them, and the rest keep
@@ -437,10 +440,9 @@ python promote_and_test.py --roles $R --out out --name osm-sample --background  
 ```
 
 1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
-   `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `blueprint_key`, `name` and
-   `description` returns a **blueprint with the setting and the fitted kNN attached**: a reusable
-   model with no S3 artifact to build. Keys must be **unique per trial**: the script uses
-   `<name>-w512-s512-cosine-k5-uniform-<last 6 of the trial id>`. On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `osm-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `name` and `description`
+   returns a **blueprint with the setting and the fitted kNN attached**: a reusable model with no
+   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `osm-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
    one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
    `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file
@@ -612,7 +614,8 @@ deletes it however the run ends, signals included, with its ids in
   cutting is the client's: when it matters, check the window count against one batch run.
 - **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
   windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
-  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. Not yet measured on an OSM
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs when batch ran on CPU (batch
+  is on GPU there since 2026-11-06, serving still on CPU). Not yet measured on an OSM
   blueprint.
 
 **A rerun resumes,** and starts nothing when every file already has its output: it only

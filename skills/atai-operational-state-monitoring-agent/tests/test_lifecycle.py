@@ -6,8 +6,8 @@ network. They lock in the invariants verified on the dev deployment (2026-09-30)
     are `fitting` parameters, every spec categorical; max_trials defaults to the
     product's size up to 12 points (a grid), else 12 (a random search);
     step > window needs --allow-gaps.
-  * Blueprint keys are unique per trial (a rerun never reuses an older model),
-    and the promoted trial is the best completed one by objective_value.
+  * The promoted trial is the best completed one by objective_value, under the
+    platform's key unless one is asked for.
   * Scoring pairs each prediction with the label at its window's last row,
     skips invalid windows, and counts an absent state as F1 = 0.
   * Timestamps parse from epoch seconds, epoch ms and ISO 8601; output rows are
@@ -107,12 +107,6 @@ class TestSearchSpace(unittest.TestCase):
 
 
 class TestPromote(unittest.TestCase):
-    def test_key_is_unique_per_trial(self):
-        a = promote_and_test.blueprint_key(trial("otr_aaaaaaaaaa1abc12", 0.8), "larco")
-        b = promote_and_test.blueprint_key(trial("otr_bbbbbbbbbb2xyz34", 0.8), "larco")
-        self.assertEqual(a, "larco-w512-s512-cosine-k5-uniform-1abc12")
-        self.assertNotEqual(a, b)
-
     def test_best_completed_trial_wins(self):
         runs = [{"optimization": {"id": "opt_1"}, "trials": [trial("otr_x1", 0.79), trial("otr_x2", 0.83),
                                                              trial("otr_x3", None, status="failed")]}]
@@ -388,34 +382,36 @@ class TestSampleCommandsMatchThePrepSkill(unittest.TestCase):
 
 
 class Promote(unittest.TestCase):
-    """Choosing the key can need the admin role (the free trial): promote again without one."""
+    """Choosing the key needs the admin role outside projects: promote under the platform's unless asked."""
 
-    def promote(self, error):
+    def promote(self, key=None, trial=None):
         calls = []
 
         def fake(method, url, body=None):
+            calls.append((method, body))
             if method == "GET":
-                raise RuntimeError(f"GET {url} failed (404): not found")
-            calls.append(body)
-            if "blueprint_key" in body:
-                raise error(url)
-            return {"id": "blp_1", "blueprint_key": "osm-otr_abc123"}
+                return {"id": "blp_0", "blueprint_key": url.rsplit("/", 1)[1]}
+            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "osm-otr_abc123")}
         with mock.patch.object(promote_and_test, "request", fake), \
                 mock.patch.object(promote_and_test, "agents", lambda: "https://x/api/agents"), \
                 mock.patch.object(promote_and_test, "trial_setting", lambda t: (512, 512, 5, "cosine", "uniform")), \
                 mock.patch.object(promote_and_test, "log", lambda *a: None):
-            return promote_and_test.promote("opt_1", {"id": "otr_abc123"}, "osm-sample"), calls
+            return promote_and_test.promote("opt_1", trial or {"id": "otr_abc123"}, "osm-sample", key), calls
 
-    def test_a_forbidden_key_falls_back_to_the_platforms(self):
-        bp, calls = self.promote(lambda url: RuntimeError(f"POST {url} failed (403): choosing the `blueprint_key` of a promoted blueprint requires the admin role"))
-        self.assertIn("blueprint_key", calls[0])
-        self.assertNotIn("blueprint_key", calls[1])
-        self.assertEqual(calls[0]["name"], calls[1]["name"])
+    def test_the_platforms_key_by_default(self):
+        bp, calls = self.promote()
+        self.assertEqual([m for m, _ in calls], ["POST"])
+        self.assertNotIn("blueprint_key", calls[0][1])
         self.assertEqual(bp["blueprint_key"], "osm-otr_abc123")
 
-    def test_any_other_error_still_stops(self):
-        with self.assertRaises(RuntimeError):
-            self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
+    def test_a_chosen_key_when_asked(self):
+        bp, calls = self.promote("osm-mine")
+        self.assertEqual(calls[0][1]["blueprint_key"], "osm-mine")
+
+    def test_an_already_promoted_trial_is_reused(self):
+        bp, calls = self.promote(trial={"id": "otr_abc123", "promoted_blueprint": {"blueprint_key": "osm-otr_abc123"}})
+        self.assertEqual([m for m, _ in calls], ["GET"])
+        self.assertEqual(bp["blueprint_key"], "osm-otr_abc123")
 
 class QueryRetry(unittest.TestCase):
     """A serving query is retried after a timeout; any other POST is not (it could duplicate)."""
