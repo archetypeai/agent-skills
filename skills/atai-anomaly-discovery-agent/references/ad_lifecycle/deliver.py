@@ -49,9 +49,10 @@ NETWORK_WAIT_S, NETWORK_RETRIES = 60, 60
 lock = threading.Lock()
 TRIAL = "try.archetypeai.app"
 # Channel-windows a free-trial run gets through in well under its 2-hour cap. Measured there
-# (CPU): SKAB, 8 channels, ~80 windows a minute a run (640 channel-windows); the TEP sample,
-# 33 channels, 1,000 windows in 24-34 min (~1,000-1,400). 38,400 is 40-60 min across those.
-TRIAL_CHANNEL_WINDOWS_PER_RUN = 38_400
+# on GPU (2026-11-06): a TEP delivery file, ~20,000 windows x 33 channels, in ~3.5 min
+# (>= 190,000 a minute). 1,000,000 is ~5 min at that rate and under 2 h at a twentieth of it.
+# On CPU (before 2026-11-06) it was 640-1,400 a minute, and this was 38,400.
+TRIAL_CHANNEL_WINDOWS_PER_RUN = 1_000_000
 
 
 def trial_max_windows(n_channels):

@@ -653,8 +653,8 @@ python promote_and_test.py --roles $R --out out --name ad-sample
 ```
 
 1. **Promote** the best trial: `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a
-   `blueprint_key` unique per trial (`<name>-<last 6 of the trial id>`). The blueprint pins the
-   trial's values and carries the fitted detector as a registry artifact (`aar_…`). On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `ad-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `name` and no key. The blueprint pins the trial's values and carries the fitted detector as a
+   registry artifact (`aar_…`). Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `ad-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, every test file and
    `emit_predictions: true`. An eval takes no value overrides: it runs at the trial's own
    threshold and step.
@@ -714,20 +714,23 @@ complete outputs`, 805 scored windows in `delivery_01.csv`.
   hours, with no output). A plain rerun hits it again. `--max-windows-per-run N` delivers the
   same windows in sessions of at most N: each starts on a multiple of the step and overlaps
   the next by window − step rows, and the outputs are joined, so the scores equal one
-  session's. **On the free trial it is on by default**, sized to 40–60 min a session at the
-  rates below: 38,400 ÷ channels windows (4,800 at 8 channels, 1,100 at 33), so a long file
-  is split before it starts, not after a session has spent 2 hours and died. Split sessions'
+  session's. **On the free trial it is on by default**, sized to about 5 min a session at the
+  rate below: 1,000,000 ÷ channels windows (125,000 at 8 channels, 30,300 at 33), so only a
+  very long file is split, before it starts, not after a session has spent 2 hours and died. Split sessions'
   files are named by row range, so a rerun at another size never reuses a different split's
   files; the earlier split's sessions are forgotten, and any still going is cancelled first,
   so it doesn't hold a job slot for up to 2 hours. `--max-windows-per-run 0` turns it off;
   elsewhere it is off unless you set it.
 
-  **On the free trial, through bundles** (CPU): a run got through roughly 640–1,400
-  channel-windows a minute. On 2026-10-30, the sample (33 channels) at step 1 stopped at 2 h on
-  both files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each. On 2026-10-31,
-  SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped at 2 h, and in
-  4 runs of at most 3,000 (37 min each) it finished in 75 min. Queued runs report `running`
-  too; whether queue time counts toward the limit is not known, so keep `--parallel` at 3.
+  **On the free trial, through bundles** (GPU since 2026-11-06): the TEP quickstart's step-1
+  delivery took ~3.5 min a file (~20,000 windows × 33 channels, at least 190,000
+  channel-windows a minute), with production's scores; at step 8, ~3 min a file, most of it
+  start-up, so splitting a file into many short sessions costs more than it saves. On CPU
+  (2026-10-30/31) a run got through 640–1,400 channel-windows a minute: the sample (33
+  channels) at step 1 stopped at 2 h on both files and finished in runs of at most 1,000
+  windows (12 runs of 24–34 min); SKAB's 10,414-window file (8 channels) stopped at 2 h too
+  and finished in runs of at most 3,000 (75 min). Queued runs report `running` too; whether
+  queue time counts toward the limit is not known, so keep `--parallel` at 3.
 - **Embeddings from your own detector** need a blueprint with `output_embeddings: true`,
   since a package can't switch an output on: a 1-trial optimization pinning the winner's
   values plus the switch, promoted. Copying the promoted blueprint with
@@ -898,7 +901,9 @@ embeddings within 4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' p
 - **`--serving`:** a serving deployment of the embeddings blueprint and one session, the
   windows cut client-side exactly as the platform cuts them and sent one per query, 4 at a
   time. No job slots or queue, and on the free trial no 2-hour cap. SKAB's 1,950 windows took
-  5.6 min served, against 11.6 min for its 11 batch runs, 3 at a time. With `--session` it
+  5.6 min served, against 11.6 min for its 11 batch runs, 3 at a time, when batch ran on CPU
+  (2026-10-31); batch now runs on GPU and serving on CPU (the TEP quickstart's 40 library
+  runs: 36 min on CPU, 10 on GPU). With `--session` it
   uses a session already running the embeddings blueprint (it checks the package's
   blueprint), and leaves it running; otherwise it makes the package, deployment and session
   and deletes all three however the run ends, signals included (their ids stay in
