@@ -299,8 +299,8 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 
 > **Status: on projects, packages, deployments and sessions, verified end to end on dev
 > (2026-10-30, and again 2026-11-04 with a member key in a new project: validation 0.7920, test
-> 0.8463, delivery 0.7431, 367/367 served as batch, the same library view).** Only dev serves
-> deployments and sessions so far; production, staging and the free trial still run bundles
+> 0.8463, delivery 0.7431, 367/367 served as batch, the same library view).** Dev and staging serve
+> deployments and sessions (staging since 2026-11-09); production and the free trial still run bundles
 > and agent instances until their next platform release. Check first: `GET
 > /agents/sessions?limit=1` answers 200, not 404. The bundle
 > version was verified end to end on production, staging, Tokyo (2026-10-01) and dev
