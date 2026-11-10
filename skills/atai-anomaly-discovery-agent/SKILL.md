@@ -498,7 +498,7 @@ clear queue, and minutes when workers are contended. The runner self-scores agai
 
 > **Status: on projects, packages, deployments and sessions, verified end to end on dev
 > (2026-10-30; Steps 1–6 again on 2026-11-04 with a member key in a new project, the same
-> numbers as below).** Only dev serves deployments and sessions so far; production, staging
+> numbers as below).** Dev and staging serve deployments and sessions (staging since 2026-11-09); production
 > and the free trial still run bundles and agent instances until their next platform release,
 > and the bundle version of these steps was verified on production (2026-10-28/29). Check
 > first: `GET /agents/sessions?limit=1` answers 200, not 404. Built on the Tennessee Eastman Process:
@@ -708,7 +708,10 @@ complete outputs`, 805 scored windows in `delivery_01.csv`.
   too; whether queue time counts toward the limit is not known, so keep `--parallel` at 3.
 - **Embeddings from your own detector** need a blueprint with `output_embeddings: true`,
   since a package can't switch an output on: a 1-trial optimization pinning the winner's
-  values plus the switch, promoted. Per channel it writes an `embedding_<channel>` column
+  values plus the switch, promoted. Copying the promoted blueprint with
+  `overrides.values: {output_embeddings: true}` is refused: a blueprint with a fitted
+  detector takes no value override unless the detector is dropped (`400 … has a fitted
+  trainable head in detection_head`, dev, 2026-11-06). Per channel it writes an `embedding_<channel>` column
   (768-d) and an `embedding_<channel>_features` column, each cell a JSON list, so keep it off
   for delivery (one TEP delivery file grew to 327 MB). Nothing else returns embeddings: a
   trial, an eval (predictions only) and the promoted detector (`aar_…`, no download route)
