@@ -434,8 +434,8 @@ runs the whole build, including the channel-leakage audits this data requires.
 > skills' Path 2) because the official client doesn't cover these APIs yet.
 >
 > **On projects, packages, deployments and sessions: verified on dev (2026-11-04, a member
-> key in a new project; see each step).** Only dev serves deployments and sessions so far;
-> production, staging and the free trial still run bundles and agent instances until their
+> key in a new project; see each step).** Dev and staging serve deployments and sessions (staging since 2026-11-09);
+> production and the free trial still run bundles and agent instances until their
 > next platform release, and the production numbers below were taken through bundles. Check
 > first: `GET /agents/sessions?limit=1` answers 200, not 404.
 
