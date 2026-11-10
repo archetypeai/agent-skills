@@ -3,9 +3,10 @@
 
 1. Promote the best completed trial across optimize.py's runs (a tie goes to the
    optimization that tried more points; --trial picks one): POST
-   /agents/optimizations/{opt}/trials/{trial}/promote with a blueprint_key unique per
-   trial. The blueprint pins the trial's values, `events` and `background`, and carries
-   the fitted prototypes as a registry artifact (`aar_…`).
+   /agents/optimizations/{opt}/trials/{trial}/promote under the platform's key,
+   `red-otr_<trial id>` (--blueprint-key chooses one, which needs the admin role). The
+   blueprint pins the trial's values, `events` and `background`, and carries the fitted
+   prototypes as a registry artifact (`aar_…`).
 2. Test once: POST /agents/evals with the blueprint and every test file, with predictions.
    An eval takes no value overrides: it runs at the trial's window and step.
 3. Check before reporting. The platform scores each row once: a window answers for the
@@ -66,7 +67,7 @@ def best(runs, trials_of=list_trials):
     return top[1], top[2]
 
 
-def promote(run, trial, name):
+def promote(run, trial, name, key=None):
     vals = {**run["pinned"], **(trial.get("trial_values") or {}).get("values", {})}
     if trial.get("promoted_blueprint"):
         bp = trial["promoted_blueprint"]
@@ -74,13 +75,8 @@ def promote(run, trial, name):
     url = f"{agents()}/optimizations/{run['optimization']}/trials/{trial['id']}/promote"
     body = {"name": f"{name} (window {vals.get('window_size')}, step {vals.get('step_size')}, {vals.get('metric')})",
             "description": f"Promoted from {run['optimization']}, trial {trial['id']}."}
-    try:
-        bp = request("POST", url, {"blueprint_key": f"{name}-{trial['id'][-6:]}", **body})
-    except RuntimeError as e:
-        # choosing the key needs the admin role (a free-trial org has none): let the platform choose it
-        if "(403)" not in str(e) or "blueprint_key" not in str(e):
-            raise
-        bp = request("POST", url, body)
+    # the platform's key unless one is asked for: choosing it needs the admin role outside projects
+    bp = request("POST", url, {**body, "blueprint_key": key} if key else body)
     return {"id": bp["id"], "key": bp["blueprint_key"], "trial": trial["id"], "values": vals}
 
 
@@ -249,6 +245,7 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="red")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <blueprint>-otr_<trial id>")
     ap.add_argument("--trial", help="promote this trial instead of the best")
     ap.add_argument("--max-windows", type=int, default=0,
                     help="test in pieces of at most this many windows, one eval each (0: one eval)")
@@ -274,7 +271,7 @@ def main(argv=None):
         run, trial = best(runs)
         if a.trial:
             run, trial = next((r, t) for r in runs for t in list_trials(r["optimization"]) if t["id"] == a.trial)
-        state["blueprint"] = promote(run, trial, a.name)
+        state["blueprint"] = promote(run, trial, a.name, a.blueprint_key)
         json.dump(state, open(sf, "w"), indent=1)
         log(f"promoted {trial['id']} -> {state['blueprint']['key']} ({state['blueprint']['id']})")
     bp = state["blueprint"]

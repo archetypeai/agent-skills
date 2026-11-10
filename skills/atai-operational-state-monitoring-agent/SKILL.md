@@ -320,9 +320,12 @@ manifest (the skill's scripts read only the data-prep skill's). A deployment wit
 > 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
 > delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
 > `library_embeddings.py` starts one run per library file at once; the free trial runs 3 jobs
-> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3). A
-> queued job already reports `running`, so with large library files that wait counts against
-> the trial's 2-hour job limit; `--serving` takes one serving session instead.
+> at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3, when
+> agent runs there were on CPU). A queued job already reports `running`, so with large library
+> files that wait counts against the trial's 2-hour job limit; `--serving` takes one serving
+> session instead. Since 2026-11-06 the free trial runs evals and agent runs on GPU (serving
+> stays on CPU): the LARCO quickstart's eval took 3 min (34 on CPU), its delivery 3.5 (31),
+> and its 4 library runs 2.7 (6), with the same scores.
 >
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
@@ -359,9 +362,9 @@ the blueprint into your project (`POST /agents/blueprints/osm/copy`) and optimiz
 - **Blueprints in a project resolve by key only with `?project_id=`**; the scripts look them up
   by their `blp_` id.
 - **No admin-only call.** Registering a blueprint and choosing a promoted blueprint's key take
-  the org-admin role; the scripts do neither unless allowed (`promote_and_test.py` falls back to
-  the platform's key). The 2026-10-30 run used an admin key; a run with a member key is still to
-  be confirmed.
+  the org-admin role; the scripts do neither unless asked (`promote_and_test.py` takes the
+  platform's key unless `--blueprint-key` is given). The 2026-10-30 run used an admin key, the
+  2026-11-04 run a member key.
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
 
@@ -471,10 +474,9 @@ python promote_and_test.py --roles $R --out out --name osm-sample --background  
 ```
 
 1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
-   `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `blueprint_key`, `name` and
-   `description` returns a **blueprint with the setting and the fitted kNN attached**: a reusable
-   model with no S3 artifact to build. Keys must be **unique per trial**: the script uses
-   `<name>-w512-s512-cosine-k5-uniform-<last 6 of the trial id>`. On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `osm-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `name` and `description`
+   returns a **blueprint with the setting and the fitted kNN attached**: a reusable model with no
+   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `osm-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
    one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
    `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file
@@ -653,7 +655,8 @@ included, with their ids in `out/library_serving_state.json` until then for `cle
   cutting is the client's: when it matters, check the window count against one batch run.
 - **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
   windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
-  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs. On this skill's sample (dev,
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs when batch ran on CPU
+  (batch is on GPU there since 2026-11-06, serving still on CPU). On this skill's sample (dev,
   2026-11-04, an OSM embeddings blueprint): all 1,600 windows with batch's timestamps, each
   embedding within 0.04% of batch's (cosine ≥ 0.9999999), the same view (84% nearest their
   own state's centre); 6.0 min served, against about 2 min for 4 batch sessions running at once.
