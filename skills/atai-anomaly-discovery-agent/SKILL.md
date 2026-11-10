@@ -620,8 +620,8 @@ python promote_and_test.py --roles $R --out out --name ad-sample
 ```
 
 1. **Promote** the best trial: `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a
-   `blueprint_key` unique per trial (`<name>-<last 6 of the trial id>`). The blueprint pins the
-   trial's values and carries the fitted detector as a registry artifact (`aar_…`). On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `ad-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `name` and no key. The blueprint pins the trial's values and carries the fitted detector as a
+   registry artifact (`aar_…`). Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `ad-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, every test file and
    `emit_predictions: true`. An eval takes no value overrides: it runs at the trial's own
    threshold and step.
@@ -664,9 +664,9 @@ network outage is waited out instead of failing every file. **Expect, on the sam
   - `--max-windows-per-run N`: the same windows, in runs of at most N. Each run starts on a
     multiple of the step and overlaps the next by window − step rows, and the outputs are
     joined, so the scores equal one run's. **On the free trial it is on by default**, sized
-    to 40–60 min a run at the rates below: 38,400 ÷ channels windows (4,800 at 8 channels,
-    1,100 at 33), so a long file is split before it starts, not after a run has spent 2 hours
-    and died. Split runs' files are named by row range, so a rerun at another size never
+    to about 5 min a run at the rate below: 1,000,000 ÷ channels windows (125,000 at 8
+    channels, 30,300 at 33), so only a very long file is split, before it starts, not after a
+    run has spent 2 hours and died. Split runs' files are named by row range, so a rerun at another size never
     reuses a different split's files. The earlier split's runs are forgotten, and any still
     going is cancelled first, so it doesn't hold a free-trial job slot for up to 2 hours;
     `cleanup.py` deletes them with the bundle.
@@ -674,12 +674,14 @@ network outage is waited out instead of failing every file. **Expect, on the sam
   - `--step 0`: deliver at the trial's step (8 on the sample): 1/8 of the windows, a delay
     measured in steps of 8 samples.
 
-  **On the free trial** (CPU): a run gets through roughly 640–1,400 channel-windows a minute.
-  On 2026-10-30, 3 runs at once, the sample (33 channels) at step 1 stopped at 2 h on both
-  files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each, 2 h 15 min in all,
-  and `score.py` printed exactly the numbers below. With `--step 0`, 2/2 files in 28 min. On
-  2026-10-31, SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped
-  at 2 h, and in 4 runs of at most 3,000 (37 min each, 2 at a time) it finished in 75 min.
+  **On the free trial** (GPU since 2026-11-06): the TEP quickstart's step-1 delivery took
+  ~3.5 min a file (~20,000 windows × 33 channels, at least 190,000 channel-windows a minute),
+  with production's scores; at step 8, ~3 min a file, most of it start-up, so splitting a file
+  into many short runs costs more than it saves. On CPU (2026-10-30/31) a run got through
+  640–1,400 channel-windows a minute: the sample (33 channels) at step 1 stopped at 2 h on
+  both files and finished in runs of at most 1,000 windows (2 h 15 min, `score.py` printing
+  exactly the numbers below); SKAB's 10,414-window file (8 channels) stopped at 2 h too and
+  finished in runs of at most 3,000 (75 min).
   Queued runs report `running` too; whether queue time counts toward the limit is not known,
   so keep `--parallel` at 3.
 - **Embeddings from your own detector.** `output_embeddings: true` in a bundle's values works
@@ -833,12 +835,13 @@ ways: 1,950/1,950 windows from 11 files with the same start timestamps, embeddin
 - **`--serving`:** one serving agent, the windows cut client-side exactly as the platform cuts
   them and sent one per query, 4 at a time. No job slots or queue, and on the free trial no
   2-hour cap. SKAB's 1,950 windows took 5.6 min served, against 11.6 min for its 11
-  batch runs, 3 at a time. With `--agent` it uses an agent already running the promoted
+  batch runs, 3 at a time, when batch ran on CPU (2026-10-31); batch now runs on GPU and
+  serving on CPU (the TEP quickstart's 40 library runs: 36 min on CPU, 10 on GPU). With `--agent` it uses an agent already running the promoted
   blueprint with embeddings on (it checks the blueprint), and leaves it running; otherwise it
   starts one and deletes it however the run ends, signals included (its ids stay in
   `out/library_serving_state.json` until then, for `cleanup.py`).
-  Better when an app's agent is up, or on the trial; batch is better for a library of tens of
-  thousands of windows.
+  Better when an app's agent is up; batch is better for a library of tens of thousands of
+  windows.
 
 The script checks each file's window count against the tiling and prints the library's score
 range: they are the windows the detector was fitted on, so they should sit under the
