@@ -24,9 +24,9 @@ description: >
 
 # Omega Encoder Agent: Omega Embeddings over Agent Lifecycle 2.0
 
-> **Dev-only preview** (verified on `platform.dev.u1.archetypeai.app`, developer key,
-> 2026-11-06). Agent Lifecycle 2.0 and the `omega-embeddings` blueprint aren't on
-> production yet.
+> **Preview: dev and staging** (verified with a developer key on `platform.dev.u1.archetypeai.app`,
+> 2026-11-06, and `platform.stage.u1.archetypeai.app`, 2026-11-09, with identical results).
+> Agent Lifecycle 2.0 and the `omega-embeddings` blueprint aren't on production yet.
 
 The **Omega Encoder agent** is the canonical `omega-embeddings` blueprint: a records source,
 a windowing node, the Omega 1.5 encoder and a JSONL sink. It answers one thing: for each
@@ -70,7 +70,7 @@ Worked example, the whole way, with a live app:
 - Your recordings aren't role files yet:
   [`atai-omega-encoder-agent-data-prep`](../atai-omega-encoder-agent-data-prep/SKILL.md) first.
 
-## What a developer key can do (dev, measured 2026-11-02 and 11-06)
+## What a developer key can do (dev, measured 2026-11-02 and 11-06; staging, 2026-11-09)
 
 | | |
 |---|---|
@@ -139,7 +139,7 @@ there, maps windows to files, and writes `out/embed/w<W>/<role>.npz`
 (`emb [segments, windows, channels, 768]`).
 
 **Expect** (the data-prep skill's sample: 88 AURSAD tightenings, 1,024 rows each; dev,
-2026-11-06), about a minute a session:
+2026-11-06, and the same on staging, 2026-11-09), about a minute a session:
 
 ```
 library @ 1024: 32 windows (32, 1, 12, 768) in 73s
@@ -179,7 +179,7 @@ chosen and frozen: window 256, channels screwdriver, PCA 16, k 1, match position
 With 11 normal and 8 faulty validation segments, these numbers show the mechanics, not the
 detector: a 5% false-alarm threshold on 11 normals is set by one segment. For real numbers
 (105 validation segments, 443 in all), see the
-[AURSAD quickstart](https://github.com/archetypeai/omega-encoder-example-aursad-quickstart#results-and-they-reproduce-dev-developer-key-2026-11-06).
+[AURSAD quickstart](https://github.com/archetypeai/omega-encoder-example-aursad-quickstart#results-and-they-reproduce).
 
 ### 3. Test once, deliver, in batch at the frozen window
 
@@ -239,7 +239,7 @@ package and a package before its blueprint, or the delete is a 409. Uploaded fil
 | Serving channels are **`channel_<i>`**, in the order sent | map them back with your channel list |
 | A serving session **closes after 30 idle minutes** (default `idle_timeout_secs: 1800`); on dev an idle serving deployment is **stopped after 20** | reopen a session, or a deployment; end both when done |
 | Serving deployment ready in **~5 s**; a 1,024-row, 12-channel query answered in **~0.6 s** at window 1,024, **~1.3–1.5 s** at window 256 (4 windows) | |
-| Batch: **~2 min** a session of 100–150 files on dev | |
+| Batch: **~2 min** a session of 100–150 files (dev and staging); ~1 min for 20–30 | |
 | A file id **is its file name**; uploading a name again replaces it | distinct names (the data-prep skill's are) |
 
 ## Pitfalls
@@ -260,7 +260,7 @@ package and a package before its blueprint, or the delete is a 409. Uploaded fil
 cd skills/atai-omega-encoder-agent/references
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # numpy, pandas
-cp .env.example .env                     # ATAI_API_KEY, ATAI_API_ENDPOINT (dev)
+cp .env.example .env                     # ATAI_API_KEY, ATAI_API_ENDPOINT (dev or staging)
 ```
 
 Run the tests (offline: no key, no network):
