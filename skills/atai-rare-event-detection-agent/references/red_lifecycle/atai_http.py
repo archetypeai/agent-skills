@@ -64,8 +64,11 @@ def load_dotenv(path=None):
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             key = key.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]             # KEY="value" or KEY='value'
             if not os.environ.get(key):         # unset, or set but empty: an empty export mustn't hide .env
-                os.environ[key] = value.strip()
+                os.environ[key] = value
                 SOURCE[key] = os.path.abspath(path)
 
 
