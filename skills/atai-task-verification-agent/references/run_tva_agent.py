@@ -132,7 +132,10 @@ def load_dotenv(path: str = ".env") -> None:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip())
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]                 # KEY="value" or KEY='value'
+                os.environ.setdefault(k.strip(), v)
 
 
 def api_root(endpoint: str) -> str:

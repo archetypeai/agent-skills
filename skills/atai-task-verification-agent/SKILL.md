@@ -22,8 +22,8 @@ description: >
 # TVA Agent — Managed Task Verification via the Agents API
 
 > **Draft: Agent Lifecycle 2.0.** This skill runs TVA on projects, blueprint copies,
-> packages, deployments and sessions. **Only dev serves these calls today**; production,
-> staging and the free trial keep bundles and agent instances until their next platform
+> packages, deployments and sessions. **Dev and staging serve these calls** (staging since 2026-11-09); production
+> and the free trial keep bundles and agent instances until their next platform
 > release. Check first: `GET {root}/api/agents/sessions?limit=1` answers 200, not 404.
 > Verified on dev on 2026-11-05/06 with the 12 clips and 3-step SOP below: a 12-clip batch
 > returned `results` equal to the production bundle outputs for **12 of 12 clips** (28/36
@@ -594,7 +594,7 @@ No uploads and no connectors. The SOP travels in `query`, so one session still s
 
 | Symptom | Cause |
 |---|---|
-| `404` on `/agents/sessions`, `/agents/deployments` or `/agents/packages` | This deployment of the platform doesn't serve Agent Lifecycle 2.0 yet — only dev does today; the others still run bundles and agent instances |
+| `404` on `/agents/sessions`, `/agents/deployments` or `/agents/packages` | This deployment of the platform doesn't serve Agent Lifecycle 2.0 yet — dev and staging do (2026-11-09); the others still run bundles and agent instances |
 | `404` on every `/agents` path | The endpoint is not `<root>/api` — a missing `/api`, or a `/vX.Y` prefix |
 | `404` on uploads or downloads only | A hand-built `/v0.5/files` URL. Files are at `<root>/api/files` |
 | `404` downloading a result, at `/api/api/files/…` | A session's result `ref` is a root path that already includes `/api`; resolve it against the root |
