@@ -32,9 +32,9 @@ video ─► sample frames ─┐
 MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion-1-0` and `whisper-base` on production as of 2026-10-27; older versions used `newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit, no optimization and no `artifacts` map to pass**. A run is upload → copy (with your values) → package → deploy → session → download.
 
 > **Draft: Agent Lifecycle 2.0.** This skill now runs on projects, packages,
-> deployments and sessions. Bundles and agent instances are being removed: only
-> Archetype AI's dev deployment serves the new calls so far, and production,
-> staging and the free trial keep bundles and instances until their next platform
+> deployments and sessions. Bundles and agent instances are being removed: dev and
+> staging serve the new calls (staging since 2026-11-09), and production
+> and the free trial keep bundles and instances until their next platform
 > release. Check yours first: `GET {endpoint}/agents/sessions?limit=1` answers
 > 200, not 404. Numbers below say which they were measured with.
 
