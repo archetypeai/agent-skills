@@ -31,32 +31,28 @@ video ─► sample frames ─┐
 
 MGA V1 is **zero-shot**. The `mga` blueprint pins its own models (`newton-fusion-1-0` and `whisper-base` on production as of 2026-10-27; older versions used `newton-fusion:1.0` and `whisper:large-v3`), so unlike `osm`/`red` there is **no classifier to fit, no optimization and no `artifacts` map to pass**. A run is upload → copy (with your values) → package → deploy → session → download.
 
-> **Draft: Agent Lifecycle 2.0.** This skill now runs on projects, packages,
-> deployments and sessions. Bundles and agent instances are being removed: dev and
-> staging serve the new calls (staging since 2026-11-09), and production
-> and the free trial keep bundles and instances until their next platform
-> release. Check yours first: `GET {endpoint}/agents/sessions?limit=1` answers
-> 200, not 404. Numbers below say which they were measured with.
+> **Agent Lifecycle 2.0.** This skill runs on projects, packages, deployments and
+> sessions; bundles and agent instances are gone. Check your endpoint first:
+> `GET {endpoint}/agents/sessions?limit=1` answers 200, not 404.
 
-> **Verified on the lifecycle (dev).** Batch, **2026-11-05**: one session on the
-> 173 s tire video (`i2JWkDyg26A`) returned production's reference manual,
-> `sample_data/mga-output-current-16384.json`, **exactly** — 16 steps over
-> 14–138 s, content md5 `866909a9315bce0e493db7ab1627749d` (of `[document]` as
-> sorted-key compact JSON, `id` set to the video's stem), so it scores the same: 11/11 reference
-> steps at IoU ≥ 0.3, 7/11 at IoU ≥ 0.5, mean IoU 0.56. **10.6 min** from
-> opening the session to `completed`. Serving, **2026-11-06**: a manual
-> byte-identical to the one the same video got from a serving bundle (15 steps,
-> 9/11 at IoU ≥ 0.3, 6/11 at IoU ≥ 0.5); the serving deployment took **881 s**
-> to start and the query **27.8 s**, 911 s in all.
+> **Verified on production** (`https://platform.u1.archetypeai.app/api`),
+> **2026-11-12**, with `run_mga_agent.py` on the 173 s tire video (`i2JWkDyg26A`):
 >
-> **With bundles, on production.** The canonical `mga` blueprint resolves by key
-> on production (`https://platform.u1.archetypeai.app/api`). Re-verified
-> **2026-10-27** on `blp_7vc935…`: four runs on the same 173 s video took
-> **610–618 s** each — ~13 s queued, whisper 2.9 s download + 1.3 s load,
-> newton-fusion **~5 min download + ~1 min 48 s load**, then ~3 min 15 s to
-> process the video (~1.1× realtime). Three runs with the same values returned
-> **byte-identical** output. If the blueprint key doesn't resolve, contact
-> support@archetypeai.dev.
+> - **Batch:** one session returned the reference manual,
+>   `sample_data/mga-output-current-16384.json`, **exactly**: 16 steps over 14–138 s,
+>   content md5 `866909a9315bce0e493db7ab1627749d` (of `[document]` as sorted-key
+>   compact JSON, `id` set to the video's stem). 11/11 reference steps at IoU ≥ 0.3,
+>   7/11 at IoU ≥ 0.5, mean IoU 0.56. **12.2 min** from opening the session to
+>   `completed`.
+> - **Serving (`--serve`):** the same video re-encoded under the 2 MiB cap returned
+>   15 steps, 9/11 at IoU ≥ 0.3, 6/11 at IoU ≥ 0.5. The serving deployment took
+>   **690 s** to start and the query **8.5 s**; the session and deployment were
+>   deleted on exit, 701 s in all.
+>
+> Generation is deterministic: runs with the same values return the same manual. The
+> worked example is
+> [manual-generation-agent-example](https://github.com/archetypeai/manual-generation-agent-example).
+> If the blueprint key doesn't resolve, contact support@archetypeai.dev.
 
 ## When to Apply
 
@@ -343,8 +339,8 @@ The key is `mga-f<max_frames>-t<max_new_tokens>-p<first 6 hex of md5(prompt)>`; 
 already in use in the project is a `409`, so look it up first
 (`GET {endpoint}/agents/blueprints?project_id=…&key=…`).
 
-**Set all three, every time.** A plain copy runs at the blueprint's own defaults, which on
-dev in 2026-11 were `max_new_tokens` **8192** and the instruction *"Generate a concise,
+**Set all three, every time.** A plain copy runs at the blueprint's own defaults:
+`max_new_tokens` **8192** and the instruction *"Generate a concise,
 ordered list of distinct steps with 10 steps or less."* — the ~10-step ceiling that halves
 the manual (see [What a caller-supplied `prompt` is worth](#what-a-caller-supplied-prompt-is-worth)).
 
@@ -424,7 +420,7 @@ input, so the instruction is the copy's `prompt`.
 **Run them one at a time.** Whether concurrent runs queue depends on what else is running on the deployment at that moment — they queue when other workloads hold the workers, and come up as concurrent pods when they don't. Both have been observed with bundles: four at once produced 799–817 s waits (which looked like serialization), while three at once came up as three concurrent pods and one was SIGKILLed mid-load (`exit=137`). Other tenants' workloads aren't visible to you, so neither outcome is predictable from your side and neither is safe to design around.
 
 Poll `GET /agents/sessions/{id}` until `status` is `completed`, `failed` or `cancelled`
-(it was reliable on dev, unlike an instance's), and read `GET /agents/sessions/{id}/events`
+(reliable on production), and read `GET /agents/sessions/{id}/events`
 for what happened. Events come **newest first**, with UTC `created_at`; reverse them, and
 print them in local time so they line up with your own log lines:
 
@@ -482,27 +478,20 @@ Four properties the blueprint does not advertise:
 
 ## Runtime
 
-Measured with bundles on production, 2026-10-27, four runs of a 173 s video:
+A batch session on a 173 s video took **12.2 min** on production (2026-11-12) from
+opening to `completed`; with bundles it was 610–618 s (2026-10-27), of which:
 
 | Phase | Cost |
 |---|---|
-| Queue | ~12 s solo; **799–817 s** if other runs are in flight (Aug 2026) |
 | whisper-base download + load | ~3 s + ~1.3 s |
 | **newton-fusion download + load** | **~5 min + ~1 min 48 s** |
 | Processing | ~1.1× realtime (173 s video → ~3 min 15 s) |
-| **Total** | **~10 min for a 3-minute video** (610–618 s) |
 
-On the lifecycle (dev, 2026-11-05) the same video took **10.6 min** from opening the
-session to `completed`; a package and a batch deployment are built once per setting and
-add nothing to later runs.
+A package and a batch deployment are built once per setting and add nothing to later runs.
 
 **Cold start is ~7 min on every batch session and is never cached.** Budget accordingly: a sweep of six configurations is ~40 minutes of pure model loading before any inference. (In Aug 2026, with `whisper:large-v3`, a run took ~15 min and processing ran ~2.5× realtime.) [Agent serving](#agent-serving--load-once-query-many) pays the load once for many videos.
 
 ## Agent serving — load once, query many
-
-> **Preview.** Serving deployments run only where the lifecycle does (see the draft
-> note at the top). The lifecycle numbers are from dev, 2026-11-06; the rest were
-> measured on dev with serving bundles on 2026-10-27 and -28, and will change.
 
 A batch session downloads and loads the model for **every** video. A **serving
 deployment** of the same package loads it once onto a GPU worker and holds it there; a
@@ -510,7 +499,7 @@ session on it then answers one request per video in seconds:
 
 ```
 POST {endpoint}/agents/deployments     {"package_id": "pkg_…", "kind": "serving"}   → {"id": "dpl_…", "status": "deploying"}
-GET  {endpoint}/agents/deployments/{id}                         poll until "ready" (881 s on 2026-11-06)
+GET  {endpoint}/agents/deployments/{id}                         poll until "ready" (690–879 s on production)
 POST {endpoint}/agents/sessions        {"deployment_id": "dpl_…"}                    → {"id": "ses_…"}
 GET  {endpoint}/agents/sessions/{id}                            poll until "running"
 POST {endpoint}/agents/sessions/{id}/query
@@ -533,11 +522,11 @@ when you are done — on every way out, Ctrl-C and `kill` included — and keep 
 until then. Cancelling the session alone leaves the worker held. `run_mga_agent.py
 --serve` does this in a `finally`.
 
-**What it costs.** On the lifecycle (dev, 2026-11-06), one 173 s video: **881 s** for the
-serving deployment to become ready (it can also fail outright with *"there was no
-capacity to start the deployment's agent"*: retry later), the session running at once,
-the query **27.8 s**, **911 s** in all against 768 s through a serving bundle. With
-bundles, thirteen videos (80 s to 10 min, 46 chunk queries of 90 s):
+**What it costs.** On production (2026-11-12), one 173 s video: **690–879 s** for the
+serving deployment to become ready over two runs (it can also fail outright with *"there
+was no capacity to start the deployment's agent"*: retry later), the session running at
+once, the query **8.5–27.3 s**. Earlier, with serving bundles, thirteen videos (80 s to
+10 min, 46 chunk queries of 90 s):
 
 | | wall clock |
 |---|---|
@@ -547,12 +536,11 @@ bundles, thirteen videos (80 s to 10 min, 46 chunk queries of 90 s):
 | a 10-minute video (8 chunks) | 45–57 s |
 | all thirteen on one agent | **~16–18 min**, against ~2.2 h as thirteen batch runs |
 
-**Limits, measured with bundles (2026-10-28) unless noted:**
+**Limits** (most measured with serving bundles, 2026-10-28):
 
-- **One GPU worker at a time.** A second fails within a minute with *"no worker is free"*. Release yours when done, Ctrl-C included.
 - **The whole request is capped at 2 MiB** — about 1.57 MB of video after base64. Re-encode to fit; frames are resized to 224 px anyway, so give up resolution and frame rate first (360p at 8–15 fps, or 240p at 5 fps, CRF 30–32). **Keep the audio** (mono AAC, 24–32 kbit/s): whisper's transcript is half the input.
 - **Each query has a 58 s budget**, then `504 query_timeout`. Retry it: 2 of ~150 chunk queries timed out and both answered on the retry. Also set a client-side timeout (~120 s): one query in a run on an unstable day hung for 857 s with no answer at all.
-- **A session with no query for a while is closed** — 20 minutes with bundles; 30 by default on the lifecycle (dev, 2026-11) — and every later query gets a `409`. Stop on a 409 and open a new session. A hung request is not activity, which is the other reason for the client timeout.
+- **A session with no query for a while is closed** — 30 minutes by default — and every later query gets a `409`. Stop on a 409 and open a new session. A hung request is not activity, which is the other reason for the client timeout.
 - **A bad video fails only its own query** — `400 … probe failed: no video stream` for an audio-only mp4, `400 … decode failed` for garbage — and the session answers the next one. A 35-frame clip is answered.
 - **The load is not visible as it happens.** A serving bundle's `/logs` showed *"Still loading newton-fusion-1-0 model after 4min0s"* once a minute; a serving deployment shows only its `status`, so expect ~15 min of `deploying` with nothing to say how far along it is.
 - **A fresh agent can answer differently, at temperature 0.** Two queries to one agent gave identical steps, and a rerun on a new agent reproduced six videos byte for byte — but four of seven others came back different, two of them in step count (an opening chunk went from 3 steps to 12). Treat one serving run's step counts as a sample. (On the lifecycle, the tire video reproduced the bundle-era answer byte for byte.)
@@ -562,7 +550,6 @@ bundles, thirteen videos (80 s to 10 min, 46 chunk queries of 90 s):
 | Symptom | Cause |
 |---|---|
 | `404` on `/agents/bundles` or `/agents/instances` | Bundles and instances are gone on that deployment: use the lifecycle |
-| `404` on `/agents/sessions` | The deployment doesn't serve the lifecycle yet: use bundles there until its next release |
 | `422` opening a session | It was given `values`. Values go on the copy (Step 3) |
 | `400` on the copy | A value the blueprint does not declare |
 | `409` on the copy | The key is already in use in the project: look it up and reuse it |
@@ -660,11 +647,11 @@ ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app/api
 python3 references/run_mga_agent.py --video my_procedure.mp4 --dry-run
 
 # Batch: preflight, project, copy, package, deployment (once per setting), then
-# upload, session, poll status and /events, download, print. ~10 minutes, most of it
+# upload, session, poll status and /events, download, print. ~12 minutes, most of it
 # model loading. Defaults are the ones you want. Several videos run one after another.
 python3 references/run_mga_agent.py --video my_procedure.mp4
 
-# Serving: one load (~15 min), then a /query per video (each under the 2 MiB cap);
+# Serving: one load (~12-15 min), then a /query per video (each under the 2 MiB cap);
 # the serving deployment is stopped and deleted on exit.
 python3 references/run_mga_agent.py --serve --video a.mp4 b.mp4
 
@@ -700,7 +687,7 @@ skills/atai-manual-generation-agent/
 │       ├── README.md             attribution, and why no video ships here
 │       ├── 40567_i2JWkDyg26A_reference_steps.csv
 │       ├── 40567_i2JWkDyg26A_step_keywords.json            phrases naming each reference step, for --keywords
-│       ├── mga-output-current-16384.json                   what the defaults produce (production 2026-10-27; lifecycle, dev 2026-11-05)
+│       ├── mga-output-current-16384.json                   what the defaults produce (production, 2026-10-27 and 2026-11-12)
 │       ├── mga-output-prod-old-prompt-SHIFTED.json          previous prompt, same day: texts ~5 s early
 │       ├── mga-output-mouse-current-prompt.json             silent clip, current prompt: 17 distinct steps
 │       ├── mga-output-mouse-old-prompt-LOOP.json            silent clip, previous prompt: 2 distinct texts
