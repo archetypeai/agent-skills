@@ -1,0 +1,3 @@
+# discover.py calls the platform with the standard library; review.py and grade.py need these
+numpy>=1.26
+pandas>=2.1

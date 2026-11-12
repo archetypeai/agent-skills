@@ -1,0 +1,6 @@
+# The AD data-prep scripts: local only, no API key.
+#   pip install -r requirements.txt
+numpy>=2.3
+pandas>=2.0
+pyarrow>=14
+scipy>=1.11

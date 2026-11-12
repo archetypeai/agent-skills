@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Path 2, step 2: promote the best trial to a blueprint, then test it once with the Evals API.
 
-  1. Promote: POST /agents/optimizations/{opt}/trials/{trial}/promote turns a trial into
+  1. Promote: POST /api/agents/optimizations/{opt}/trials/{trial}/promote turns a trial into
      a blueprint with its setting and fitted kNN attached: a reusable model, no S3, no
      classifier artifact to build. The best completed trial by validation macro-F1 is
-     used (from <out>/optimize_*.json) unless --trial names one. The blueprint key ends
-     in the trial's id, so a rerun with the same setting never reuses an older model.
-  2. Test: one eval (POST /agents/evals) over every test file, each window paired with
+     used (from <out>/optimize_*.json) unless --trial names one. The blueprint is keyed by
+     the platform, `<copy key>-otr_<trial id>` (e.g. `osm-sample-base-otr_…`), so a rerun with
+     the same setting never reuses an older model; --blueprint-key chooses the key, which can
+     need the admin role.
+  2. Test: one eval (POST /api/agents/evals) over every test file, each window paired with
      the `label` at its last row. The report is pooled over the files.
 
 Every id is saved in <out>/test_state.json as soon as it exists, so a rerun resumes
@@ -24,17 +26,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, root, same_deployment, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
 REPORT_WAIT_S = 600            # how long to wait for the metrics report after the platform says completed
-
-
-def blueprint_key(trial, name="osm"):
-    """Unique per trial: `<name>-w<window>-s<step>-<metric>-k<k>-<weights>-<last 6 of the trial id>`."""
-    w, st, k, metric, weights = trial_setting(trial)
-    return f"{name}-w{w}-s{st}-{metric}-k{k}-{weights}-{trial['id'][-6:]}".lower()
 
 
 def best_trial(runs, trial_id=None):
@@ -48,16 +44,16 @@ def best_trial(runs, trial_id=None):
     return max(trials, key=lambda ot: ot[1]["objective_value"])
 
 
-def promote(opt, trial, name):
-    key = blueprint_key(trial, name)
-    try:
-        return request("GET", f"{agents()}/blueprints/{key}")      # promoted on an earlier, interrupted run
-    except RuntimeError:
-        pass
+def promote(opt, trial, name, key=None):
+    if trial.get("promoted_blueprint"):                             # promoted on an earlier, interrupted run
+        # by id: a key registered in a project resolves only with ?project_id=
+        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['id']}")
     w, st, k, metric, weights = trial_setting(trial)
-    bp = request("POST", f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote", body={
-        "blueprint_key": key, "name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",
-        "description": f"Promoted from {opt} / {trial['id']}: window {w}, step {st}, {metric}, k {k}, {weights}."})
+    url = f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote"
+    body = {"name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",
+            "description": f"Promoted from {opt} / {trial['id']}: window {w}, step {st}, {metric}, k {k}, {weights}."}
+    # the platform's key unless one is asked for: choosing it needs the admin role outside projects
+    bp = request("POST", url, body={**body, "blueprint_key": key} if key else body)
     log(f"promoted {trial['id']} -> {bp['blueprint_key']} ({bp['id']})")
     return bp
 
@@ -66,7 +62,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
-    ap.add_argument("--name", default="osm", help="the blueprint key's prefix")
+    ap.add_argument("--name", default="osm", help="the blueprint's name and the upload and eval names start with this")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <copy key>-otr_<trial id>")
     ap.add_argument("--trial", metavar="OTR_ID", help="promote this trial instead of the best one")
     ap.add_argument("--upload-jobs", type=int, default=3)
     add_background_flag(ap, default_log="{out}/test.log")
@@ -78,6 +75,10 @@ def main():
     states = manifest["states"]
     state_path = os.path.join(args.out, "test_state.json")
     state = json.load(open(state_path)) if os.path.exists(state_path) else {}
+    if not same_deployment(state):
+        sys.exit(f"{state_path} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside to promote and test here, or set .env to that deployment")
+    state["endpoint"] = root()
 
     def save():
         os.makedirs(args.out, exist_ok=True)
@@ -88,6 +89,7 @@ def main():
         trial = next(t for t in list_trials(opt) if t["id"] == state["model"]["trial"])
     else:
         runs = [json.load(open(p)) for p in sorted(glob.glob(os.path.join(args.out, "optimize_opt_*.json")))]
+        runs = [r for r in runs if same_deployment(r)]         # another deployment's trials can't be promoted here
         found = best_trial(runs, args.trial)
         if not found:
             sys.exit(f"no completed trial in {args.out}/optimize_*.json: run optimize.py first")
@@ -98,7 +100,7 @@ def main():
     log(f"model: {opt} / {trial['id']} (w {w}, step {st}, k {k}, {metric}, {weights}; "
         f"validation macro-F1 {trial['objective_value']:.4f})")
     if "blueprint" not in state:
-        bp = promote(opt, trial, args.name)
+        bp = promote(opt, trial, args.name, args.blueprint_key)
         state["blueprint"] = {"id": bp["id"], "key": bp["blueprint_key"]}
         save()
 
