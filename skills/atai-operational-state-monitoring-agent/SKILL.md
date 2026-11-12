@@ -9,10 +9,10 @@ description: >
   ground-truth sidecar.
   Path 2 — build an OSM agent on YOUR OWN labelled data: from role files
   (library / validation / test / delivery) fit and score settings with the
-  Optimizations API, promote the best trial to a blueprint, test it once with the
-  Evals API, then deliver it as a bundle over new recordings and score the delivery,
-  serve it a window per query over `/query` (agent serving) checked against
-  the delivery, and draw the library's embeddings for a live app.
+  Optimizations API in a project, promote the best trial to a blueprint, test it
+  once with the Evals API, then package it, deploy it in batch over new recordings
+  and score the delivery, deploy it for serving and query a session a window at a
+  time, checked against the delivery, and draw the library's embeddings for a live app.
   Covers the search space, promote, Evals, batch runs, the output CSV schema
   (`finish_timestamp, predicted_state, invalid, p_<state>…`), last-record scoring,
   and the platform's limits (1 MiB config, time jumps, absent states score 0).
@@ -41,11 +41,11 @@ either.
 | | **Path 1 — run the demo blueprint** | **Path 2 — build an agent on your data** |
 |---|---|---|
 | you have | a CSV on an exact sample grid (the Volve sample, or data like it) | labelled recordings of **your** machine |
-| you get | per-window predictions and embeddings from the platform's six-state Volve demo classifier | your own blueprint and bundle, fitted and chosen on your data, with a test score and a delivery score |
-| APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
+| you get | per-window predictions and embeddings from the platform's six-state Volve demo classifier | your own blueprint and package, fitted and chosen on your data, with a test score and a delivery score |
+| APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), stdlib only, on Path 2's HTTP helper | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~40 s on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **verified on production (2026-10-28, under `/api`; agent serving 2026-10-29), staging (2026-10-01) and dev (2026-09-30), identical results** |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on projects, packages, deployments and sessions: verified on production, 2026-11-12** (first on dev, 2026-10-30 and 2026-11-04) |
 
 Both paths' outputs share one schema, so the output schema and scoring below apply to both.
 
@@ -230,8 +230,8 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 
 ## What the demo scores on its sample
 
-`python3 run_osm_agent.py` on the bundled log, on dev (2026-11-04): 68 windows, 0 invalid,
-37 s from packaging to a completed session.
+`python3 run_osm_agent.py` on the bundled log, on production (2026-11-12): 68 windows, 0 invalid,
+the same scores as on dev (2026-11-04, 37 s from packaging; 5.5 min on production, waiting for a worker).
 
 ```
 accuracy: 0.5441   steady-state accuracy: 0.5625 (64 windows)
@@ -254,7 +254,7 @@ own data, take Path 2.
 
 **Runtime is dominated by worker contention, not window count.** With a clear queue, the
 sample ran in **37 s** from packaging to a completed session (dev, 2026-11-04), the 4.9 MB
-download included; on production (2026-11-12) the same run took 5.5 min, waiting for a worker. Under the former bundles, the same 4,185-window slice took 1–2 min with
+download included; on production (2026-11-12) the same run took 5.5 min, waiting for a worker. Under the former bundles, the former 4,185-window sample slice took 1–2 min with
 a clear queue and 22–27 min when workers were contended (~17× slower). Budget by the
 **session's events, not the clock**: you cannot see other tenants' jobs, so the queue state
 is only observable from your run's own event timing.
@@ -298,18 +298,24 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 
 # Path 2 — Build an OSM agent on your own data
 
-> **Status: verified end to end on production, staging, Tokyo (2026-10-01) and dev (2026-09-30)**,
-> with identical results on all four: the prep skill's sample below scored the same at every step
-> (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
+> **Status: on projects, packages, deployments and sessions, verified end to end on
+> production (2026-11-12, a member key in a new project: validation 0.7920, test 0.8463,
+> delivery 0.7431, 367/367 served as batch, the same library view), as on dev before.**
+> Production no longer serves bundles and agent instances. To check another deployment: `GET
+> /agents/sessions?limit=1` answers 200, not 404. The bundle
+> version was verified end to end on production, staging, Tokyo (2026-10-01) and dev
+> (2026-09-30), with identical results on all four: the prep skill's sample below scored the
+> same at every step (validation 0.7920, test 0.8463, delivery 0.7431). Built on the LARCO washing-machine data:
 > [operational-state-monitoring-agent-example-larco-quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart)
 > (19 short cycles) and the
-> [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study). A deployment without the optimizer job runner fails every optimization at
+> [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco) (199 cycles, the full study), which follow the same steps with their own scripts and role-file
+manifest (the skill's scripts read only the data-prep skill's). A deployment without the optimizer job runner fails every optimization at
 > once with `Pipeline 'optimizer-runner-cuda' has no active versions` (staging, prod and Tokyo
 > did, until it was deployed on 2026-10-01).
 > Steps 5–6 (agent serving and the library view) are verified on production (2026-10-29), on
 > the sample below and on the LARCO quickstart; first built on Dev (2026-10-16 to 10-18) and
-> Staging (2026-10-24).
-> Steps 0–6 also ran unchanged on the free trial (`try.archetypeai.app`, 2026-10-31) on a
+> Staging (2026-10-24), all through bundles.
+> Steps 0–6 also ran on the free trial, through bundles (`try.archetypeai.app`, 2026-10-31) on a
 > second, non-machine dataset: UCI HAPT human activity (a waist-worn phone, 6 channels at 50 Hz,
 > 6 activities, split by person), macro-F1 validation 0.9260 (window 128, k 5), test 0.8920,
 > delivery 0.9373. HAPT is licensed for non-commercial use, so it is cited here, not shipped.
@@ -317,24 +323,48 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 > at a time, so HAPT's last 3 of 6 queued (finished after ~6 min, the first 3 after ~3, when
 > agent runs there were on CPU). A queued job already reports `running`, so with large library
 > files that wait counts against the trial's 2-hour job limit; `--serving` takes one serving
-> agent instead. Since 2026-11-06 the free trial runs evals and agent runs on GPU (serving
+> session instead. Since 2026-11-06 the free trial runs evals and agent runs on GPU (serving
 > stays on CPU): the LARCO quickstart's eval took 3 min (34 on CPU), its delivery 3.5 (31),
 > and its 4 library runs 2.7 (6), with the same scores.
 >
-> **Path 2 here still delivers and serves through bundles and agent instances**, which
-> production no longer serves (404); the lifecycle version of Steps 3–6 replaces them. Steps
-> 0–2 (role files, Optimize, promote and Evals) are unaffected.
 > The scripts use a small stdlib HTTP helper ([`atai_http.py`](references/osm_lifecycle/atai_http.py))
 > because the official `archetypeai` client doesn't cover these APIs yet; they'll move onto the
 > client when it does.
 
 ```
-role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver (bundle + runs) ──► 4 score
-  (prep skill)   fit + score     best trial     one-shot, pooled          predictions per file       held-back labels
-                 on validation   → blueprint
-                                                                          └──► 5 serve (/query): a window per query, checked against step 3
-                                                                          └──► 6 library view: the fit's windows recomputed, drawn in 2-D for a live app
+role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver ──────────────────► 4 score
+  (prep skill)   the project's   best trial     one-shot, pooled          package → batch deployment   held-back labels
+                 copy of `osm`:  → blueprint                              → session(s), predictions
+                 fit + score     (in the                                    per file
+                 on validation   project)  └──► 5 serve: serving deployment → a session, a window per query, checked against step 3
+                                           └──► 6 library view: an embeddings blueprint, the fit's windows recomputed, drawn in 2-D for a live app
 ```
+
+### The lifecycle the steps use
+
+Everything lives in one **project**, and every object takes its project from the one it is
+made from: an optimization from the blueprint it searches, a promoted blueprint from its
+optimization, a **package** from its blueprint, a **deployment** from its package, a
+**session** from its deployment. A deployment needs a project, and the canonical `osm` is
+outside any (`POST /agents/optimizations` takes no `project_id`), so `optimize.py` first copies
+the blueprint into your project (`POST /agents/blueprints/osm/copy`) and optimizes the copy.
+
+- **A package has no values.** It pins one blueprint and the models it resolves to (the Omega
+  encoder `mdl_…`, the fitted kNN `aar_…`) and runs it exactly as promoted. So what later steps
+  need is set at Optimize: `optimize.py` pins `data_columns` and `timestamp_column` (the serving
+  source reads them from values; a bundle used to add them) along with `states`. An output such
+  as `output_embeddings` needs a blueprint of its own: `library_embeddings.py` makes one with a
+  1-trial optimization at the promoted trial's point, then promotes it.
+- **Deployments: `batch` or `serving`.** A batch deployment is ready at once; each batch session
+  is one run over its input files. A serving deployment places and loads the agent on a worker
+  (seconds) and holds it until stopped; a serving session is a client's handle on it, queried
+  at `/sessions/{id}/query`, and several can share one deployment.
+- **Blueprints in a project resolve by key only with `?project_id=`**; the scripts look them up
+  by their `blp_` id.
+- **No admin-only call.** Registering a blueprint and choosing a promoted blueprint's key take
+  the org-admin role; the scripts do neither unless asked (`promote_and_test.py` takes the
+  platform's key unless `--blueprint-key` is given). The 2026-10-30 run used an admin key, the
+  2026-11-04 run a member key.
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
 
@@ -389,14 +419,18 @@ python optimize.py --roles $R --dry-run                                    # the
 python optimize.py --roles $R --out out --name osm-sample --background     # tail -f out/optimize.log
 ```
 
-Use your own `--name`: it prefixes every platform object (blueprints, bundles), so they're
+Use your own `--name`: it prefixes every platform object (blueprints, packages), so they're
 easy to find and clean up.
 
-`POST /agents/optimizations` with the `osm` blueprint's id (resolved from its key), the library
+First, the project (`--project`, default `Operational State Monitoring`, created if you have
+none of that name) and its copy of `--blueprint` (default `osm`), keyed `<--name>-base` and
+reused when it exists; both go to `out/project_state.json`. Then
+`POST /agents/optimizations` with the copy's id, the library
 files as `training_examples` (ground truth `{"from": {"constant": "<state>"}}`, the state from the
 filename), the search-validation files as `validation_examples` (ground truth
 `{"from": {"column": "label"}, "downsampling": "last_record"}`: each window gets the label of its
-last row), `"objective": "macro_f1"`, a `budget.max_trials`, and a search space:
+last row), `"objective": "macro_f1"`, a `budget.max_trials`, `overrides.values` with
+`data_columns`, `timestamp_column` and (where the blueprint takes them) `states`, and a search space:
 
 ```json
 {"parameters": {
@@ -426,7 +460,7 @@ last row), `"objective": "macro_f1"`, a `budget.max_trials`, and a search space:
   (rows = true).
 
 Writes `out/optimize_<id>.json`. **Expect, on the sample** (2 trials, ~3 min plus the 85 MB
-upload; reproduced exactly by two runs on dev):
+upload; production, 2026-11-12, as on dev):
 
 ```
   #1   w=512   step=512   k=5   cosine uniform  completed macro-F1 0.7920  drain 0.87  fill 1.00  spin 0.57  wash 0.73  windows 386
@@ -442,7 +476,7 @@ python promote_and_test.py --roles $R --out out --name osm-sample --background  
 1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
    `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `name` and `description`
    returns a **blueprint with the setting and the fitted kNN attached**: a reusable model with no
-   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `osm-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
+   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `<copy key>-otr_<trial id>` (here `osm-sample-base-otr_…`), unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
    one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
    `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file
@@ -453,39 +487,53 @@ again. Once you've seen the test number, the setting is frozen: tuning after it 
 optimistic. **Expect, on the sample** (~1 min for the eval):
 
 ```
-promoted otr_… -> osm-sample-w512-s512-cosine-k5-uniform-<6 chars> (blp_…)
+promoted otr_… -> osm-sample-base-otr_… (blp_…)
 test, 1 files: macro-F1 0.8463  drain 0.87  fill 0.98  spin 0.60  wash 0.93  windows 1,076
 ```
 
-## Step 3 — Deliver: your bundle, run in batches
+## Step 3 — Deliver: a package, a batch deployment, sessions
 
 ```sh
 python deliver.py --roles $R --out out --name osm-sample --background   # tail -f out/deliver.log
 ```
 
-`POST /agents/bundles {"blueprint": "<your key>", "name": …}` creates the deployable agent; then
-`POST /agents/bundles/{id}/run` with the delivery files as source connectors (`file_id`, not the
-`fil_` uid), as in Path 1's Step 3. `--files-per-run N` splits the files into several runs (a
-failed run then loses less); the default is one run. The platform processes a run's files one at
-a time, and several runs one at a time too.
+1. **Package** the promoted blueprint: `POST /agents/packages {"blueprint_ids": ["<blp_…>"],
+   "target": {"kind": "platform"}, "name": …}`, then poll until `status` is `ready`. The
+   package lands in the blueprint's project and pins the encoder (`mdl_…`) and the fitted kNN
+   (`aar_…`), so every run of it is the same.
+2. **Deploy** it in batch: `POST /agents/deployments {"package_id": "<pkg_…>", "kind": "batch"}`,
+   ready at once.
+3. **A session over the delivery files:** `POST /agents/sessions {"deployment_id": "<dpl_…>",
+   "connectors": {"source": [{"type": "file", "id": "<file_id>", "format": "csv"}, …]}}`, one
+   output per input. `--files-per-run N` splits the files into several sessions (a failed one
+   then loses less); the default is one. Poll `GET /agents/sessions/{id}` until `completed`.
+4. **Download** from `GET /agents/sessions/{id}/results`: `data[].data.ref` is a root path,
+   `/api/files/<fil_…>/content`, so fetch `<root>` + ref, not `<root>/api` + ref.
+
+Each id is saved to `out/delivery/runs.json` before the script waits on it, so `cleanup.py`
+finds a package or deployment that failed or was interrupted.
 
 **Outputs don't name their inputs:** the script matches every output row to its delivery file by
 `finish_timestamp` (recordings must not overlap in time) and writes `out/delivery/<file>.csv`.
-Run ids are saved to `out/delivery/runs.json` as each run starts; `--resume` collects them.
+Session ids are saved to `out/delivery/runs.json` as each starts; a rerun (or `--resume`)
+collects them first. It then replaces what can't finish: a failed package is deleted and built
+again once, and a session that failed, or whose outputs are still short (below), is ended and
+dropped, and its files get a new session.
 
-**A run counts as completed only once its outputs are.** The platform can report a run
-`completed` while its last output file is still being written (Path 1's Step 4), so the
-script checks that each file's predictions reach that file's last timestamp (within 60 s),
+**A session counts as completed only once its outputs are.** Under bundles the platform could
+report a run `completed` while its last output file was still being written, so the script
+checks that each file's predictions reach that file's last timestamp (within 60 s),
 downloading again every 15 s until they do. The log keeps the platform's status and the
 script's apart, and `runs.json` records `completed` only after the check:
 
 ```
-11:53:37   agt_… platform: completed; outputs 4 of 5 complete (…sport_40_2__seg0.csv still being written)
-11:53:52   agt_… completed: all 5 outputs complete
+11:53:37   ses_… platform: completed; outputs 4 of 5 complete (…sport_40_2__seg0.csv still being written)
+11:53:52   ses_… completed: all 5 outputs complete
 ```
 
 Outputs still short 10 min after the platform said `completed` are logged as a warning and
-recorded on the run (`error: outputs incomplete: …`); `--resume` downloads them again.
+recorded on the session (`error: outputs incomplete: …`); a rerun downloads them once more,
+then replaces the session if they are still short.
 **Expect, on the sample** (~1 min): `1 of 1 files have predictions: 367 windows (0 invalid); 0
 rows matched no file`.
 
@@ -519,23 +567,18 @@ python serve.py --roles $R --out out --files seg0 --max-windows 50 --windows-per
 
 Steps 3–4 score stored data in batch. **Agent serving** keeps an agent loaded and answers a
 window in one round trip, with no upload, queue or polling: how a machine's controller would
-ask about its latest `window_size` readings. A running serving agent holds a serving
-worker until it is stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
+ask about its latest `window_size` readings. A serving deployment holds a serving worker
+until it is stopped; free-trial accounts serve on CPU only, so answers can be slower than below.
 
-1. **A bundle of the promoted blueprint, as it is,** with the columns to read:
-
-   ```json
-   {"blueprint": "<key>", "name": "…",
-    "values": {"data_columns": ["back.x", "…"], "timestamp_column": "timestamp"}}
-   ```
-
-   No served copy of the blueprint is needed: when a bundle runs in serving mode, the platform
-   supplies the `atai-records` serving source and sink itself, in place of the CSV ones. The
-   osm blueprint's source takes `data_columns` and `timestamp_column` from values, which batch
-   reads from the CSV header but a served query doesn't carry, so the bundle sets them.
-2. **Run it in serving mode:** `POST /agents/bundles/{id}/run {"mode": "serving"}`;
-   wait until the agent's `status` is `running`.
-3. **One query per window:** `POST /agents/instances/{agt}/query`, a list per channel:
+1. **A package of the promoted blueprint, as it is.** No served copy of the blueprint is
+   needed: in a serving deployment the platform supplies the `atai-records` serving source and
+   sink itself, in place of the CSV ones. The osm source reads `data_columns` and
+   `timestamp_column` from values, which batch takes from the CSV header but a served query
+   doesn't carry; a package carries no values, so `optimize.py` pins both at Optimize.
+2. **Deploy it as serving:** `POST /agents/deployments {"package_id": …, "kind": "serving"}`,
+   wait until `ready` (the agent placed and loaded, seconds), then `POST /agents/sessions
+   {"deployment_id": …}` with no connectors, and wait until the session is `running`.
+3. **One query per window:** `POST /agents/sessions/{ses}/query`, a list per channel:
 
    ```json
    {"model": "osm", "query": "", "events": [{"type": "data.numeric_array",
@@ -550,16 +593,17 @@ worker until it is stopped; free-trial accounts serve on CPU only, so answers ca
 4. **Every answer against batch** (step 3's output for the same window): `predicted_state`,
    every `p_<state>` within 10⁻⁴, and the macro-F1 against the held-back labels, served and
    batch. Exits 1 if more than 0.1% of the states differ.
-5. **The agent cancelled and deleted, and the bundle deleted**, however the replay ends
-   (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in `out/serve_state.json` until then,
-   for `cleanup.py`.
+5. **The session cancelled, the deployment stopped, and all three deleted** (session,
+   deployment, package, in that order: each holds the next), however the replay ends (Ctrl-C,
+   SIGTERM and SIGHUP included). Each id goes to `out/serve_state.json` before the script
+   waits on it, and stays there until then, for `cleanup.py`.
 
-**Expect, on the sample** (production, 2026-10-29, 3 min):
+**Expect, on the sample** (production, 2026-11-12, 3 min):
 
 ```
-served 367 windows of 1 file(s) in 367 queries, 174 s
+served 367 windows of 1 file(s) in 367 queries, 195 s
   against the delivery (batch): predicted_state identical in 367/367, probabilities within 1e-4 in 367/367 (max difference 0.0e+00); invalid 0
-  latency per query: median 453 ms, p95 519 ms, max 616 ms
+  latency per query: median 501 ms, p95 610 ms, max 680 ms
   served  macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
   batch   macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
 ```
@@ -577,14 +621,14 @@ production with every state as batch's and a 448 ms median.
   for stored data, deliver in batch.
 - **A query must hold the whole window.** The agent keeps nothing between queries: keep the
   buffer client-side.
-- **An idle agent is released** after 20 minutes without a query, and a query to it then
-  answers **409**: start a new one.
+- **An idle agent can be released.** Under bundles, a serving agent was released after 20
+  minutes without a query, and a query to it then answered **409**: open a new session.
 
 ## Step 6 — The library view, for a live app
 
 ```sh
 python library_embeddings.py --roles $R --out out                       # one batch run per library file, then the view
-python library_embeddings.py --roles $R --out out --serving             # or through a serving agent, a query per window
+python library_embeddings.py --roles $R --out out --serving             # or through a serving session, a query per window
 python library_embeddings.py --roles $R --out out --view                # the view again, no platform calls
 python library_embeddings.py --roles $R --out out --view-dir ../my-app/static
 ```
@@ -592,36 +636,39 @@ python library_embeddings.py --roles $R --out out --view-dir ../my-app/static
 A live app is easier to read with the model's library behind each answer: where this window
 sits among the windows the kNN compares it with. **The library can't be read back**: the
 promoted model is a registry artifact with no download route, and no trial or eval returns
-embeddings. **It can be recomputed:** a bundle on the promoted blueprint with
-`"values": {"output_embeddings": true}` runs each library file through the same encoder on
-the same windows (the blueprint's window and step) and adds an `embedding_<channel>` column
-per channel (768 values, a JSON list in the CSV). One run per library file, so each output's
-state is its file's.
+embeddings. **It can be recomputed:** a package carries no values, so the script first makes
+an embeddings blueprint (a 1-trial optimization at the promoted trial's point with
+`output_embeddings: true`, promoted), then runs each library file through it in batch, on the
+same encoder and the same windows (the blueprint's window and step). Each output adds an
+`embedding_<channel>` column per channel (768 values, a JSON list in the CSV). One session per
+library file, so each output's state is its file's.
 
-**Batch is the default; a serving agent gives the same points.** `output_embeddings` is a
-bundle value, so a serving agent of the same promoted blueprint returns the same
-`embedding_<channel>` lists in every `/query` answer (what a live app draws each answer with).
-`--serving` sends it the library's windows one per query, cut here as the platform cuts them:
-from each file's row 0 at the blueprint's step, leaving out windows that cross a join between
-the file's pieces. With `--agent agt_…` it uses an agent already running with embeddings on
-(a live app's; it checks the blueprint) and leaves it running; otherwise it starts one and
-deletes it however the run ends, signals included, with its ids in
-`out/library_serving_state.json` until then for `cleanup.py`.
+**Batch is the default; a serving session gives the same points.** A serving deployment of
+the same embeddings blueprint returns the same `embedding_<channel>` lists in every `/query`
+answer (what a live app draws each answer with). `--serving` sends it the library's windows
+one per query, cut here as the platform cuts them: from each file's row 0 at the blueprint's
+step, leaving out windows that cross a join between the file's pieces. With `--session ses_…`
+it uses a session already running the embeddings blueprint (a live app's; it checks the
+package's blueprint) and leaves it running; otherwise it packages the embeddings blueprint,
+deploys it as serving, opens a session, and deletes all three however the run ends, signals
+included, with their ids in `out/library_serving_state.json` until then for `cleanup.py`.
 - **Batch:** the platform cuts the windows, the outputs are files you can rebuild the view from,
-  and runs are byte-identical run to run. Each file is a run, holding a job slot.
-- **Serving:** one agent for the whole library, so no job slots, no queue and, on the free
-  trial, no 2-hour cap. 4 queries at a time, SKAB's 1,950 windows took about 5 minutes. The
+  and runs are byte-identical run to run. Each file is a session, holding a job slot.
+- **Serving:** one serving session for the whole library, so no job slots, no queue and, on
+  the free trial, no 2-hour cap. 4 queries at a time, SKAB's 1,950 windows took about 5 minutes. The
   cutting is the client's: when it matters, check the window count against one batch run.
 - **The same points:** on the AD skill's SKAB library (free trial, 2026-10-31), all 1,950
   windows both ways had the same timestamps, embeddings within 4.0×10⁻⁶ and scores within
-  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs when batch ran on CPU (batch
-  is on GPU there since 2026-11-06, serving still on CPU). Not yet measured on an OSM
-  blueprint.
+  2×10⁻⁷; served in 5.6 min, against 11.6 min for 11 batch runs when batch ran on CPU
+  (batch is on GPU there since 2026-11-06, serving still on CPU). On this skill's sample (dev,
+  2026-11-04, an OSM embeddings blueprint): all 1,600 windows with batch's timestamps, each
+  embedding within 0.04% of batch's (cosine ≥ 0.9999999), the same view (84% nearest their
+  own state's centre); 6.0 min served, against about 2 min for 4 batch sessions running at once.
 
 **A rerun resumes,** and starts nothing when every file already has its output: it only
 redraws the view, keeping the route the outputs were made by. **For another blueprint it
 stops** rather than mix two models' windows in one view: it checks `out/library_state.json`
-and, because `cleanup.py` deletes that, `out/library_embeddings.json` too. Move both, and
+and, in case that was moved, `out/library_embeddings.json` too. Move both, and
 `out/library_embeddings/`, aside first.
 
 **Draw the two directions that separate the states, not the two largest.** The two largest
@@ -637,7 +684,7 @@ own state's centre in 2-D:
 | LARCO quickstart (800 windows, k 5) | 70% | **86%** |
 
 (79% and 85% on windows held out of the fit, so not an overfit.) On the prep skill's sample
-(production, 2026-10-29): 1,600 windows, 84% nearest their own state's centre. **LD 1** is the direction
+(production, 2026-11-12): 1,600 windows, 84% nearest their own state's centre. **LD 1** is the direction
 along which the states' centres sit furthest apart relative to each state's own spread,
 **LD 2** the next best; neither has a physical unit. Writes `library-view.json` (states,
 channels, the layout) and `library-view.bin` (float32: each window's 2-D point and state, the
@@ -645,26 +692,28 @@ mean and the two projection rows). A served answer with embeddings lands in the 
 coordinates: `(e / |e| − mean) · row`, with `e` the channels' embeddings concatenated in the
 manifest's order. It is a cross-section, not the model: the kNN decides in every dimension.
 
-## A live app on a serving agent
+## A live app on a serving session
 
 What the LARCO apps (`app-serving/` in both examples: a browser, a local MQTT broker, a
-replayer and a bridge) taught, for any app that streams a machine's windows to a serving agent:
+replayer and a bridge) taught, for any app that streams a machine's windows to a serving session:
 
-- **One bridge holds the key.** The browser never sees `ATAI_API_KEY`: a local process makes
-  a bundle of the promoted blueprint (with `output_embeddings: true`, to draw each answer),
-  runs the serving agent, queries it, and publishes the answers. Read the key from the same
+- **One bridge holds the key.** The browser never sees `ATAI_API_KEY`: a local process
+  packages a blueprint (Step 6's embeddings blueprint, to draw each answer), deploys it as
+  serving, opens a session, queries it, and publishes the answers. Read the key from the same
   `.env` the scripts use; ignore any key in the app's own.
 - **Publish the agent's phase on a retained topic,** with a broker will (last-will message)
   that says stopped, so a page opened later sees the phase, and a killed bridge doesn't leave
   "running" behind.
-- **Start with retries:** a run that fails to start (all 3 workers busy, say) is tried again after 15 s,
-  doubling to 120 s. **On a 409, replace the agent:** it was released (20 minutes idle), so
-  start a new one and resend.
+- **Start with retries:** a deployment or session that fails to start (every serving worker
+  busy, say) is tried again after 15 s, doubling to 120 s. A package that fails to build never
+  becomes ready: delete it so the retry builds a new one. **On a 409, replace the session:**
+  open a new one and resend.
 - **Send only while the agent is running,** and hold the replay a few windows ahead of the
   answers at most, so a slow or restarting agent doesn't build a queue.
-- **Delete the agents and the bundle on every exit** (SIGINT, SIGTERM, SIGHUP, an error), and
-  keep their ids in `out/app_serving_state.json` until then: `cleanup.py` finds them after a
-  `kill -9`. A running serving agent holds one of the 3 shared workers.
+- **Delete the sessions, the deployment and the package on every exit** (SIGINT, SIGTERM,
+  SIGHUP, an error), and keep their ids in `out/app_serving_state.json`, each written before
+  waiting on it: `cleanup.py` finds them after a `kill -9`. A serving deployment holds one of
+  the deployment's shared serving workers until it is stopped.
 - **Show the agent's calls only.** Labels and the batch comparison belong to `serve.py`; a live
   page that also showed the truth and batch's answer read as three opinions, and in
   production there is no truth to show.
@@ -710,10 +759,12 @@ replayer and a bridge) taught, for any app that streams a machine's windows to a
 - **Keep upload concurrency low (~3):** parallel large uploads can saturate the uplink until DNS
   lookups fail. The helper retries uploads and GETs; it never retries a POST that may have
   reached the server.
-- **Serving answers 409** after 20 minutes without a query (the agent was released), and a
-  bundle that still has agents answers 409 on delete: delete its agents first.
-- **Listing serving agents:** `GET /agents/instances?status=running` filters on the server;
-  `mode=serving` is ignored there, so filter it client-side (Cleanup, below).
+- **Delete in order:** a deployment that still has sessions, or a package that still has
+  deployments, can't be deleted. Sessions first, then the deployment (stopped), then the
+  package.
+- **Unknown list filters are ignored, not rejected:** `GET /agents/deployments?package_id=`
+  and `?status=` filter on the server, but a misspelt parameter returns every row. Check a
+  listing's rows, not just its count (Cleanup, below).
 - **A state the sensor can't see caps every score.** Check separability in data prep before
   fixing the state list (LARCO's `heating` had to be folded into `wash`).
 
@@ -731,57 +782,33 @@ before what it holds:
 | deployments (`dpl_…`) | ✅ `DELETE /agents/deployments/{id}` | stop it first (`POST …/stop`); delete its sessions first |
 | packages (`pkg_…`) | ✅ `DELETE /agents/packages/{id}` | delete its deployments first |
 
-**Path 2** still delivers and serves through bundles and agent instances. Delete your own
-agent instances and the bundles you created:
-
-```sh
-curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/api/agents/instances/$AGENT_ID"       # your run's instance
-curl -X DELETE -H "Authorization: Bearer $ATAI_API_KEY" \
-  "$ATAI_API_ENDPOINT/api/agents/bundles/$BUNDLE_ID"        # only a bundle YOU created
-```
-
-(`DELETE` on a running instance returns 409 — cancel first with
-`POST /agents/instances/{id}/cancel`.)
-
-**What Path 2 leaves behind, and what you can delete** (checked on dev and staging, 2026-10-01,
-with a regular user key):
+**What Path 2 leaves behind, and what you can delete:**
 
 | object | delete | notes |
 |---|---|---|
-| agent instances (`agt_…`) | ✅ `DELETE /agents/instances/{id}` → 204 | one per delivery or library run, one per serving session; a running serving agent holds a shared worker |
-| your delivery, library and serving bundles (`bnd_…`) | ✅ `DELETE /agents/bundles/{id}` → 204 | delete its agents first: a bundle that still has one answers **409**, even when they're cancelled |
+| sessions, deployments, packages | ✅ as in the table above | one package and deployment per delivery, library run and serving replay; a serving deployment holds a shared worker until stopped |
 | promoted blueprints (`blp_…`) | ❌ 403 `blueprint deletion requires the admin role` | ask an org admin; use a distinctive `--name` so they're easy to find |
 | optimizations (`opt_…`), evals (`evl_…`) | not attempted | records of what was fitted and scored, small; keep them if your docs cite them |
 | uploaded files | — | uploaded once per `--out` folder and reused through its `uploads.json` |
 
 For Path 2, `cleanup.py` does it from the ids in `out/` (delivery, serving, the library runs
 and a serving app's): dry run by default, `--yes` to delete, an id already gone counts as
-done, progress saved for a rerun. `GET /agents/instances?bundle_id=<bnd_…>` also finds the
-runs a rerun replaced.
+done, progress saved for a rerun. For each recorded package, `GET
+/agents/deployments?package_id=` and `GET /agents/sessions?deployment_id=` also find what a
+rerun replaced.
 
 ```sh
 python cleanup.py --out out           # what would be deleted, and what stays
 python cleanup.py --out out --yes
 ```
 
-To see which serving agents are running (yours and anyone's on the same workers):
+To see which serving deployments are up:
 
 ```sh
-curl -s "$ATAI_API_ENDPOINT/agents/instances?status=running&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
-  | jq -c '.data[] | select(.mode=="serving") | {id, blueprint, name, created_at}'
+curl -s "$ATAI_API_ENDPOINT/api/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
+  | jq -c '.data[] | select(.kind=="serving") | {id, package_id, project_id, created_at}'
 ```
 
-
-## Bring your own classifier artifact (legacy route)
-
-Path 2's promote replaces this. For completeness: a bundle can also be created from the `osm`
-blueprint with an externally fitted classifier, `"artifacts": {"fit-classifier":
-"s3://<bucket>/<prefix>/my-classifier.safetensors"}` plus matching `values`
-(`window_size`, `step_size`, `sample_rate_interval_tolerance`). The artifact must be an `s3://`
-URI in the platform schema (`ids`/`vectors`/`weights` tensors + `index`/`classifier`
-manifests), and `values.window_size` must match the window it was fitted with (a mismatch
-silently degrades accuracy). Fitting it is out of scope; contact support@archetypeai.dev.
 
 ## File Layout
 
@@ -800,11 +827,11 @@ skills/atai-operational-state-monitoring-agent/
 │       ├── background.py       --background: nohup (+ caffeinate on macOS), output to a log
 │       ├── optimize.py         Step 1: search space → Optimizations API → trials
 │       ├── promote_and_test.py Step 2: best trial → blueprint → one eval
-│       ├── deliver.py          Step 3: bundle from the blueprint → runs → outputs matched by time
+│       ├── deliver.py          Step 3: package → batch deployment → session(s) → outputs matched by time
 │       ├── score.py            Step 4: last-record pairing against the held-back labels
-│       ├── serve.py            Step 5: promoted blueprint → serving agent → a query per window, against step 3
+│       ├── serve.py            Step 5: package → serving deployment → session, a query per window, against step 3
 │       ├── library_embeddings.py Step 6: the library's embeddings (batch, or --serving) → a 2-D discriminant view
-│       ├── cleanup.py          the agents and bundles of steps 3, 5 and 6 (and a serving app's), from the ids in out/
+│       ├── cleanup.py          the sessions, deployments and packages of steps 3, 5 and 6 (and a serving app's), from out/
 │       └── requirements.txt    numpy, pandas, pyarrow (score.py, serve.py, library_embeddings.py)
 └── tests/
     ├── test_references.py    ← Path 1: network-free unit tests (python -m unittest)
