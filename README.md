@@ -12,7 +12,7 @@ Four groups: **Agents** run a maintained pipeline server-side over the Agents AP
 
 ### Agents
 
-Managed end-to-end pipelines — upload an input, run a pre-packaged bundle or canonical blueprint, poll, download the output. No model to host. The sensor agents differ by **what you already have labelled**: every regime (OSM), a handful of examples of one named fault (RED), nothing but normal operation (AD), or nothing at all (Label-Free AD). OSM and AD can also be **fitted to your own data** on the platform (Optimizations → promote → Evals → bundle), each with its data-prep skill in front.
+Managed end-to-end pipelines — upload an input, run a platform blueprint, poll, download the output. No model to host. The sensor agents differ by **what you already have labelled**: every regime (OSM), a handful of examples of one named fault (RED), nothing but normal operation (AD), or nothing at all (Label-Free AD). OSM, RED and AD can also be **fitted to your own data** on the platform (Optimizations → promote → Evals → a package, deployed in batch or for serving), each with its data-prep skill in front.
 
 | Skill | Description |
 |-------|-------------|
@@ -123,6 +123,11 @@ cp -r skills/* your-project/.claude/skills/
 /atai-rare-event-detection-agent                    # One named fault, from a handful of labelled examples
 /atai-rare-event-detection-agent-data-prep          # A labelled recording -> RED role files, preflighted
 /atai-anomaly-discovery-agent                       # Normal-only fit; per-window anomaly score, no fault history needed
+/atai-anomaly-discovery-agent-data-prep             # Normal-operation recordings -> AD role files, preflighted
+/atai-label-free-anomaly-discovery-agent            # No labels, no reference: what in this batch is unusual, and when
+/atai-label-free-anomaly-discovery-agent-data-prep  # Raw unlabeled CSVs -> files od reads, preflighted
+/atai-omega-encoder-agent                           # Omega embeddings from a deployed agent (batch, serving) + your own detector
+/atai-omega-encoder-agent-data-prep                 # Recordings of a repeated operation -> role files, preflighted
 /atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
 /atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
@@ -158,26 +163,31 @@ Omega:     POST /api/lens/query per channel ──► embeddings ──► local
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
-**Agents — the Agents API.** You upload an input, run a pre-packaged bundle or a canonical blueprint, poll, and download the output; the model runs server-side.
+**Agents — the Agents API, on Agent Lifecycle 2.0.** Everything lives in a project: you copy a platform blueprint into it, package it, deploy the package, and run sessions on the deployment; the model runs server-side. (Bundles and agent instances, the earlier flow, are gone on production; the MGA and TVA skills are moving off them.)
 
 ```
+Project:  POST /api/projects ────────────────────────────────► prj_…
+Copy:     POST /api/agents/blueprints/<key>/copy {project_id} ► blp_…  (your values in overrides)
+Package:  POST /api/agents/packages {blueprint_ids} ─────────► pkg_…  (poll until ready)
+Deploy:   POST /api/agents/deployments {package_id, kind} ───► dpl_…  (batch, or serving)
 Upload:   POST /api/files ───────────────────────────────────► file_id
-Resolve:  GET  /api/agents/bundles?query=<name> ──────────────► bnd_…
-          (or GET /api/agents/blueprints/<key> → POST /api/agents/bundles)
-Run:      POST /api/agents/bundles/<bnd_…>/run ──────────────► agt_…
-Poll:     GET  /api/agents/instances/<agt_…>/logs | /events
-Collect:  GET  /api/agents/instances/<agt_…>/results ────────► output file
+Run:      POST /api/agents/sessions {deployment_id, connectors} ► ses_… (batch: one run over the files)
+Poll:     GET  /api/agents/sessions/<ses_…> | /events  (status, error; there is no /logs)
+Collect:  GET  /api/agents/sessions/<ses_…>/results ─────────► ref: /api/files/…/content (a root path)
+Serve:    POST /api/agents/sessions {deployment_id} on a serving deployment, then
+          POST /api/agents/sessions/<ses_…>/query, a window per query
+Clean up: sessions, then the deployment (stop, delete), then the package
 
-Fit (OSM Path 2: your own labelled data):
+Fit (OSM, RED and AD Path 2: your own data):
           POST /api/agents/optimizations ────────────────────► opt_… (trials, scored)
           POST /api/agents/optimizations/<opt_…>/trials/<otr_…>/promote ► blp_…
           POST /api/agents/evals ────────────────────────────► evl_… (the test score)
 ```
 
-A run can report `completed` before its last output file is fully written (a known platform
-issue): check that an output reaches its input's end before using it, as the OSM runners do.
+A session can report `completed` before its last output file is fully written: check that an
+output reaches its input's end before using it, as the agent skills' runners do.
 
-The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). Every reference script that calls the platform is built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), which owns auth, retries and endpoint mounting. Each skill declares it in `references/requirements.txt`. **One exception:** the OSM skill's Path 2 (`references/osm_lifecycle/`) drives the Optimizations, Evals and promote endpoints through a small stdlib HTTP helper of its own, rather than the client's `agents.optimizations` and `agents.evals` namespaces.
+The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The Model and Integration skills, and the MGA and TVA agent skills, are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), declared in each skill's `references/requirements.txt`. The OSM, RED, AD, Label-Free AD and Omega Encoder skills (every path) use a small standard-library HTTP helper of their own instead, since the client doesn't cover projects, packages, deployments and sessions, or the Optimizations, Evals and promote endpoints, yet.
 
 ## API Base URL
 
