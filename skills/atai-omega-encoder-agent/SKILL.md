@@ -11,12 +11,12 @@ description: >
   and check the answers against batch. Detector: client-side kNN on per-channel joint states,
   with the window size, channels, PCA, k and window matching chosen on validation, a threshold
   at a false-alarm rate on held-out normal data, one test, a delivery. Use when the user wants
-  Omega embeddings over the Agents API (not the legacy Direct Query API), wants to choose the
+  Omega embeddings from a deployed agent (batch over many files, or a serving deployment), wants to choose the
   window, or wants a detector of their own on normal-only references with a few labelled
   faults. Covers the output schemas (batch: channels by name; serving: `channel_<i>`), the
   verified limits (batch sessions refuse `values`, a query shorter than its window is a 503,
   results paged at 100, partial results right after `completed`), and cleanup order. Do NOT
-  use for the Direct Query API (`atai-newton-omega-model`), for platform-fitted detectors
+  use for direct per-window embedding calls with no deployment (`atai-newton-omega-model`), for platform-fitted detectors
   and classifiers (`atai-anomaly-discovery-agent`, `atai-operational-state-monitoring-agent`,
   `atai-rare-event-detection-agent`), or for turning recordings into role files
   (`atai-omega-encoder-agent-data-prep`).
@@ -24,9 +24,9 @@ description: >
 
 # Omega Encoder Agent: Omega Embeddings over Agent Lifecycle 2.0
 
-> **Preview: dev and staging** (verified with a developer key on `platform.dev.u1.archetypeai.app`,
-> 2026-11-06, and `platform.stage.u1.archetypeai.app`, 2026-11-09, with identical results).
-> Agent Lifecycle 2.0 and the `omega-embeddings` blueprint aren't on production yet.
+> **Status:** verified on production (`https://platform.u1.archetypeai.app`) with a developer
+> key, 2026-11-12, with the same results as earlier runs. To check another deployment:
+> `GET {root}/api/agents/blueprints/omega-embeddings` answers 200.
 
 The **Omega Encoder agent** is the canonical `omega-embeddings` blueprint: a records source,
 a windowing node, the Omega 1.5 encoder and a JSONL sink. It answers one thing: for each
@@ -44,10 +44,10 @@ role files ─► batch: project → blueprint copy (window W) → package → b
 live segments ─► serving: package → serving deployment → session {values: window W} → /query per segment ─► same detector
 ```
 
-It's the replacement path for the legacy Direct Query API
-([`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md), Omega 1.4 on
-`/api/lens/query`): the same kind of embeddings, with the window under your control and a
-serving endpoint that matches batch.
+For embeddings one call at a time, with no project, package or deployment, use
+[`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) instead. This skill is for a
+deployed agent: batch sessions over many files, and a serving deployment whose answers match
+batch, with the window under your control.
 
 Worked example, the whole way, with a live app:
 [AURSAD screwdriving quickstart](https://github.com/archetypeai/omega-encoder-example-aursad-quickstart).
@@ -70,7 +70,7 @@ Worked example, the whole way, with a live app:
 - Your recordings aren't role files yet:
   [`atai-omega-encoder-agent-data-prep`](../atai-omega-encoder-agent-data-prep/SKILL.md) first.
 
-## What a developer key can do (dev, measured 2026-11-02 and 11-06; staging, 2026-11-09)
+## What a developer key can do (measured on production, 2026-11-12, and earlier deployments)
 
 | | |
 |---|---|
@@ -123,8 +123,9 @@ and the same detector's alarms identical on every segment (AURSAD: 90/90).
 
 Role files come from the data-prep skill: `roles/manifest.json` (channels, step, rows per
 segment, candidate windows, files) and `roles/labels/<role>.json`. Every script runs from a
-directory with a `.env` (`ATAI_API_KEY`, `ATAI_API_ENDPOINT`), which **overrides** anything
-exported in the shell; each prints the endpoint it uses first.
+directory under a `.env` (`ATAI_API_KEY`, `ATAI_API_ENDPOINT`; the nearest one upwards). A
+variable already exported in the shell **wins** over it, as in the other agent skills; each
+script prints the endpoint it uses first.
 
 ### 1. Library and validation, in batch, at each window size
 
@@ -138,8 +139,8 @@ every window size. `embed_batch.py` follows the result pages, re-fetches until e
 there, maps windows to files, and writes `out/embed/w<W>/<role>.npz`
 (`emb [segments, windows, channels, 768]`).
 
-**Expect** (the data-prep skill's sample: 88 AURSAD tightenings, 1,024 rows each; dev,
-2026-11-06, and the same on staging, 2026-11-09), about a minute a session:
+**Expect** (the data-prep skill's sample: 88 AURSAD tightenings, 1,024 rows each;
+production, 2026-11-12, the same as earlier runs), about a minute a session:
 
 ```
 library @ 1024: 32 windows (32, 1, 12, 768) in 73s
@@ -189,8 +190,8 @@ python references/detect.py test --roles roles
 python references/detect.py deliver --roles roles
 ```
 
-**Expect** (the sample): test 0 of 8 faults caught, AUROC 0.64, no false alarms; delivery 1
-of 5 caught, AUROC 0.92. Small samples; in the quickstart, missing screws are caught 93–100%
+**Expect** (the sample, production 2026-11-12): test 0 of 8 faults caught, AUROC 0.64, no
+false alarms; delivery 1 of 5 caught, AUROC 0.92. Small samples; in the quickstart, missing screws are caught 93–100%
 and damaged screws and extra components mostly missed.
 
 ### 4. Serve it, one segment per query
@@ -204,13 +205,13 @@ A serving deployment of the frozen window's package, a session with `values` set
 frozen window, and one `/query` per segment, scored at once and checked against the batch
 embeddings of the same segments. The session and deployment are ended however the run ends.
 
-**Expect** (the sample's delivery, 17 segments at window 256):
+**Expect** (the sample's delivery, 17 segments at window 256; production, 2026-11-12):
 
 ```
 serving deployment dpl_… of pkg_… ready                          (~7 s)
 serving session ses_… with values window_size=256, step_size=256: running
 17 delivery segments served in 17 queries, window 256 (4 per segment); 1 alarm(s)
-  latency per query: median 1551 ms, p95 1576 ms, max 1579 ms
+  latency per query: median 2034 ms, p95 2093 ms, max 2111 ms
   against batch: embeddings cosine min 0.999992 over 816 window-channels; alarm identical in 17/17; score max relative difference 1.6e-04
 ```
 
@@ -237,9 +238,9 @@ package and a package before its blueprint, or the delete is a 409. Uploaded fil
 | A query **shorter than the session's window** answers **503** "deployment could not be reached" | send whole windows; make segments a multiple of every window you'll try |
 | Rows past the last whole window are **dropped** | the same: whole windows |
 | Serving channels are **`channel_<i>`**, in the order sent | map them back with your channel list |
-| A serving session **closes after 30 idle minutes** (default `idle_timeout_secs: 1800`); on dev an idle serving deployment is **stopped after 20** | reopen a session, or a deployment; end both when done |
-| Serving deployment ready in **~5 s**; a 1,024-row, 12-channel query answered in **~0.6 s** at window 1,024, **~1.3–1.5 s** at window 256 (4 windows) | |
-| Batch: **~2 min** a session of 100–150 files (dev and staging); ~1 min for 20–30 | |
+| A serving session **closes after 30 idle minutes** (default `idle_timeout_secs: 1800`); an idle serving deployment can be stopped by the platform too | reopen a session, or a deployment; end both when done |
+| Serving deployment ready in **~5 s**; a 1,024-row, 12-channel query answered in **~0.6 s** at window 1,024, **~1.3–2.1 s** at window 256 (4 windows), with the deployment's load | |
+| Batch: **~2 min** a session of 100–150 files; ~1 min for 20–30 | |
 | A file id **is its file name**; uploading a name again replaces it | distinct names (the data-prep skill's are) |
 
 ## Pitfalls
@@ -260,7 +261,7 @@ package and a package before its blueprint, or the delete is a 409. Uploaded fil
 cd skills/atai-omega-encoder-agent/references
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # numpy, pandas
-cp .env.example .env                     # ATAI_API_KEY, ATAI_API_ENDPOINT (dev or staging)
+cp .env.example .env                     # ATAI_API_KEY, ATAI_API_ENDPOINT
 ```
 
 Run the tests (offline: no key, no network):
