@@ -1,16 +1,15 @@
 """Network-free tests for the MGA agent skill references.
 
-    python -m unittest discover -s skills/atai-manual-generation-agent/tests
+    python -m pytest skills/atai-manual-generation-agent/tests -q
 
-No credentials, no network, no GPU. Everything here checks either request shapes
-built in memory, or the committed sample outputs.
+No credentials, no network, no GPU. Everything here checks request shapes built
+in memory, the lifecycle against a fake API, or the committed sample outputs.
 """
 import contextlib
 import importlib.util
 import io
 import json
 import os
-import re
 import tokenize
 import unittest
 
@@ -47,12 +46,11 @@ RUNNER_CODE = code_only(RUNNER_SRC)
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """Any endpoint form reduces to the root; build_client() appends /api."""
+    """Any endpoint form reduces to the deployment root; every surface is under {root}/api."""
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in
                        ("ATAI_API_KEY", "ATAI_API_ENDPOINT")}
-        os.environ["ATAI_API_KEY"] = "test-key"
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -60,16 +58,15 @@ class TestEndpointResolution(unittest.TestCase):
             if v is not None:
                 os.environ[k] = v
 
-    def test_bare_endpoint_kept(self):
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app"
-        self.assertEqual(mga.env()[1], "https://api.dev.u1.archetypeai.app")
+    def test_every_form_reduces_to_the_root(self):
+        for form in ("", "/", "/api", "/api/", "/v0.5", "/v0.4", "/v1"):
+            os.environ["ATAI_API_ENDPOINT"] = f"https://platform.u1.archetypeai.app{form}"
+            self.assertEqual(mga.root(), "https://platform.u1.archetypeai.app", form)
 
-    def test_version_suffix_stripped(self):
-        # A user pasting the /query base URL should still work: build_client()
-        # reduces it to the root and mounts /api/agents and /api/files itself.
-        for suffix in ("/v0.5", "/v0.4", "/v1"):
-            os.environ["ATAI_API_ENDPOINT"] = f"https://api.dev.u1.archetypeai.app{suffix}"
-            self.assertEqual(mga.env()[1], "https://api.dev.u1.archetypeai.app")
+    def test_agents_and_files_live_under_api(self):
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.u1.archetypeai.app/api"
+        self.assertEqual(mga.agents_url("sessions"),
+                         "https://platform.u1.archetypeai.app/api/agents/sessions")
 
     def test_quoted_dotenv_value_is_unquoted(self):
         import tempfile
@@ -84,9 +81,14 @@ class TestEndpointResolution(unittest.TestCase):
         finally:
             os.unlink(path)
 
-    def test_trailing_slash_stripped(self):
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app/"
-        self.assertEqual(mga.env()[1], "https://api.dev.u1.archetypeai.app")
+    def test_session_result_ref_resolves_against_the_root(self):
+        """A session's ref is a root path that already carries /api; appended to
+        .../api it would 404 as /api/api/..."""
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.u1.archetypeai.app/api"
+        self.assertEqual(mga.result_url("/api/files/fil_x/content"),
+                         "https://platform.u1.archetypeai.app/api/files/fil_x/content")
+        self.assertEqual(mga.result_url("https://bucket.example/x?sig=1"),
+                         "https://bucket.example/x?sig=1")
 
 
 class TestWiredValueDetection(unittest.TestCase):
@@ -124,7 +126,7 @@ class TestWiredValueDetection(unittest.TestCase):
         "connectors": {"source": {"config": {"default_text": "${values.prompt}"}}}}}
 
     def test_active_blueprint_honours_prompt_again(self):
-        """PLDEV-1730 landed 2026-08-12: prompt is wired as ${values.prompt}."""
+        """Since 2026-08-12 prompt is wired as ${values.prompt} again."""
         ignored = mga.inert_values(
             self.ACTIVE, {"max_frames": 64, "max_new_tokens": 16384, "prompt": "x"})
         self.assertEqual(ignored, [])
@@ -295,21 +297,18 @@ class TestScoringSemantics(unittest.TestCase):
 
 
 class TestRequestShapes(unittest.TestCase):
-    def test_bundle_endpoint_is_plural(self):
-        self.assertIn("/agents/bundles", RUNNER_SRC)
-        self.assertNotIn('"/agents/bundle"', RUNNER_SRC)
+    def test_no_bundle_or_instance_calls_remain(self):
+        """Bundles and instances are being removed; everything goes through
+        projects, copies, packages, deployments and sessions."""
+        import re
+        self.assertIsNone(re.search(r'agents_url\(f?["\'](bundles|instances)', RUNNER_SRC))
+        self.assertIsNone(re.search(r'/logs[?"\']', RUNNER_SRC))
+        self.assertNotIn("archetypeai import", RUNNER_SRC)
+        self.assertIn('agents_url(f"blueprints/{args.blueprint}/copy")', RUNNER_SRC)
 
-    def test_run_accepts_202(self):
-        # A code literal, so the raw source is the unambiguous place to look.
-        # the client owns status handling now; 202 is accepted by it
-        self.assertIn("client().agents.bundles.run(", RUNNER_SRC)
-
-    def test_polls_logs_not_events(self):
-        """/events carries only two coarse rows; errors appear only in /logs."""
-        self.assertIn("get_logs(agent_id, limit=500)", RUNNER_SRC)
-        # Any request URL ending in /events would appear as a quoted fragment.
-        for frag in ('/events"', "/events'", "/events?"):
-            self.assertNotIn(frag, RUNNER_SRC)
+    def test_polls_session_events_not_logs(self):
+        """A session has /events and no /logs."""
+        self.assertIn('sessions/{session_id}/events?limit=100', RUNNER_SRC)
 
     def test_no_artifacts_map(self):
         """Unlike osm/red, the mga blueprint pins its own models."""
@@ -322,7 +321,7 @@ class TestRequestShapes(unittest.TestCase):
 
     def test_default_blueprint_is_a_key_not_a_pinned_id(self):
         """A pinned id stops resolving when the blueprint is republished: the run
-        returns 202, then the pod dies with `invalid config for 1 node(s)`."""
+        starts, then dies with `invalid config for 1 node(s)`."""
         self.assertEqual(mga.BLUEPRINT_DEFAULT, "mga")
         self.assertFalse(mga.BLUEPRINT_DEFAULT.startswith("blp_"))
 
@@ -330,9 +329,8 @@ class TestRequestShapes(unittest.TestCase):
         """The model reasons out of this budget: 2048 and 4096 both returned
         `results: []` on a 173 s video with no ERROR row, while 16384 gave 18
         steps. Below the floor you get no manual, not a short one."""
-        default = re.search(r'"--max-new-tokens", type=int, default=(\d+)', RUNNER_SRC)
-        self.assertIsNotNone(default)
-        self.assertGreaterEqual(int(default.group(1)), 16384)
+        self.assertGreaterEqual(mga.DEFAULT_MAX_NEW_TOKENS, 16384)
+        self.assertIn("default=DEFAULT_MAX_NEW_TOKENS", RUNNER_SRC)
 
     def test_output_is_one_json_document_not_jsonl(self):
         """MGA reports file_extension: "json" and the body is a single object.
@@ -372,6 +370,13 @@ class TestRequestShapes(unittest.TestCase):
         self.assertEqual(len(cur), 16)
         self.assertGreater(len(cur), len(old))
 
+    def test_current_sample_is_the_manual_the_lifecycle_reproduced(self):
+        """A batch session on dev (2026-11-05) returned this manual exactly."""
+        import hashlib
+        doc = json.load(open(os.path.join(DATA, "mga-output-current-16384.json")))
+        digest = hashlib.md5(json.dumps([doc], sort_keys=True, separators=(",", ":")).encode())
+        self.assertEqual(digest.hexdigest(), "866909a9315bce0e493db7ab1627749d")
+
     def test_previous_prompt_looped_and_current_one_does_not(self):
         """Silent 80 s clip, production, same values: the previous prompt emitted 2
         distinct texts in 16 steps; the current one 17 distinct in 17."""
@@ -391,7 +396,7 @@ class TestRequestShapes(unittest.TestCase):
         self.assertIn("different action from the one before", p)
 
     def test_the_empty_sample_really_is_empty(self):
-        """A run below the reasoning floor: job.completed, no error, no steps.
+        """A run below the reasoning floor: completed, no error, no steps.
         Kept as a fixture because nothing else distinguishes it from success."""
         path = os.path.join(DATA, "mga-output-current-4096-EMPTY.json")
         self.assertEqual(mga.load_manual(path), [])
@@ -417,6 +422,283 @@ class TestRequestShapes(unittest.TestCase):
     def test_zero_step_output_is_called_out(self):
         """A run can complete with no steps and no failure signal anywhere."""
         self.assertIn("ZERO steps", RUNNER_SRC)
+
+
+class FakeAPI:
+    """Stands in for request(): an in-memory platform that records every call."""
+
+    def __init__(self, deployment_status="ready", package_fails=0, foreign_blueprint=False):
+        self.calls, self.objs, self.n = [], {}, 0
+        self.deployment_status = deployment_status
+        self.package_fails = package_fails          # how many builds end `failed`
+        self.foreign_blueprint = foreign_blueprint  # the key filter returns another key
+
+    def _new(self, prefix, **fields):
+        self.n += 1
+        obj = {"id": f"{prefix}_{self.n}", **fields}
+        self.objs[obj["id"]] = obj
+        return obj
+
+    def __call__(self, method, url, body=None, *, raw=False, allow_status=False, timeout=120,
+                 idempotent=None):
+        path = url.split("/api", 1)[1]
+        self.calls.append((method, path, body))
+        code, out = self.route(method, path, body)
+        if allow_status:
+            return code, out
+        assert code < 300, (method, path, code)
+        return out
+
+    def route(self, method, path, body):
+        tail = path.rsplit("/", 1)[-1].split("?")[0]
+        if method == "GET" and path.startswith("/projects"):
+            return 200, {"data": [], "has_more": False}
+        if method == "POST" and path == "/projects":
+            return 201, self._new("prj")
+        if method == "GET" and path.startswith("/agents/blueprints?"):
+            return 200, {"data": [{"id": "blp_other", "blueprint_key": "someone-else"}]
+                         if self.foreign_blueprint else []}
+        if method == "POST" and path.endswith("/copy"):
+            return 201, self._new("blp")
+        if method == "POST" and path == "/agents/packages":
+            return 201, self._new("pkg", status="building")
+        if method == "POST" and path == "/agents/deployments":
+            return 201, self._new("dpl", status="deploying")
+        if method == "POST" and path == "/agents/sessions":
+            return 201, self._new("ses", status="pending")
+        if method == "POST" and path.endswith("/query"):
+            return 200, {"response": {"data": [{"step": 0, "instruction": "Do it.",
+                                                "frame_start": 0, "frame_end": 25,
+                                                "timestamp_start": 0.0, "timestamp_end": 1.0}]}}
+        if method == "POST" and tail in ("cancel", "stop"):
+            obj = self.objs.get(path.split("/")[-2])
+            if obj:
+                obj["status"] = "cancelled" if tail == "cancel" else "stopped"
+            return 200, {}
+        if method == "DELETE":
+            return (204, b"") if self.objs.pop(tail, None) else (404, "not found")
+        if method == "GET" and "?" in path and path.startswith(("/agents/deployments", "/agents/sessions")):
+            return 200, {"data": [], "has_more": False}
+        if method == "GET" and tail in self.objs:
+            obj = self.objs[tail]
+            # Whatever was building or deploying is ready by the next look.
+            status = obj.get("status")
+            if status == "building":
+                obj["status"] = "failed" if self.package_fails else "ready"
+                self.package_fails -= bool(self.package_fails)
+            elif status == "deploying":
+                obj["status"] = self.deployment_status
+            elif status == "pending":
+                obj["status"] = "running"
+            return 200, obj
+        return 404, "not found"
+
+    def posts(self):
+        return [p for m, p, _ in self.calls if m == "POST"]
+
+
+class TestLifecycle(unittest.TestCase):
+    """Project -> copy -> package -> deployment -> session, against a fake API."""
+
+    VALUES = {"max_frames": 64, "max_new_tokens": 16384, "prompt": mga.DEFAULT_PROMPT}
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        self._saved = os.environ.get("ATAI_API_ENDPOINT"), os.environ.get("ATAI_API_KEY")
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.u1.archetypeai.app"
+        os.environ["ATAI_API_KEY"] = "test-key"
+        self.dir = tempfile.TemporaryDirectory()
+        self.args = type("Args", (), {"blueprint": "mga", "project": "MGA manuals",
+                                      "state": os.path.join(self.dir.name, "state.json"),
+                                      "yes": True})()
+        self.patches = [mock.patch.object(mga.time, "sleep"), mock.patch("builtins.print")]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.dir.cleanup()
+        for k, v in zip(("ATAI_API_ENDPOINT", "ATAI_API_KEY"), self._saved):
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def fake(self, **kw):
+        from unittest import mock
+        api = FakeAPI(**kw)
+        p = mock.patch.object(mga, "request", api)
+        p.start()
+        self.addCleanup(p.stop)
+        return api
+
+    def test_setting_key_names_the_values(self):
+        key = mga.setting_key(self.VALUES)
+        self.assertRegex(key, r"^mga-f64-t16384-p[0-9a-f]{6}$")
+        self.assertNotEqual(key, mga.setting_key({**self.VALUES, "prompt": "other"}))
+        self.assertTrue(mga.setting_key(self.VALUES, "my-blueprint").startswith("mga-eprint-"))
+
+    def test_values_travel_only_on_the_copy(self):
+        """A package, a deployment and a batch session take no values (a 422)."""
+        copy = mga.copy_body("prj_1", "k", self.VALUES)
+        self.assertEqual(copy["overrides"], {"values": self.VALUES})
+        self.assertNotIn("values", mga.package_body("blp_1", "k"))
+        session = mga.session_body("dpl_1", "clip-x.mp4")
+        self.assertNotIn("values", session)
+        self.assertEqual(session["connectors"]["source"],
+                         [{"type": "file", "id": "clip-x.mp4", "format": "mp4"}])
+        self.assertEqual(mga.session_body("dpl_1"), {"deployment_id": "dpl_1"})
+
+    def test_first_run_builds_everything_and_records_ids_before_waiting(self):
+        api = self.fake()
+        state = mga.load_state(self.args.state)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, state)
+        self.assertEqual(api.posts(), ["/projects", "/agents/blueprints/mga/copy",
+                                       "/agents/packages", "/agents/deployments"])
+        saved = json.load(open(self.args.state))
+        self.assertEqual(saved["settings"][key]["package"], rec["package"])
+        self.assertEqual(saved["settings"][key]["batch"], rec["batch"])
+        copy = next(b for m, p, b in api.calls if p.endswith("/copy"))
+        self.assertEqual(copy["blueprint_key"], key)
+
+    def test_a_rerun_at_the_same_setting_builds_nothing(self):
+        api = self.fake()
+        mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        n = len(api.posts())
+        mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertEqual(len(api.posts()), n)
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        api = self.fake(package_fails=1)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertEqual(api.posts().count("/agents/packages"), 2)
+        self.assertEqual([p for m, p, _ in api.calls if m == "DELETE"], ["/agents/packages/pkg_3"])
+        self.assertEqual(json.load(open(self.args.state))["settings"][key]["package"], rec["package"])
+
+    def test_a_package_that_fails_twice_stops(self):
+        api = self.fake(package_fails=2)
+        with self.assertRaises(SystemExit):
+            mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertEqual(api.posts().count("/agents/packages"), 2)
+
+    def test_a_copy_under_another_key_is_not_reused(self):
+        api = self.fake(foreign_blueprint=True)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertIn("/agents/blueprints/mga/copy", api.posts())
+        self.assertNotEqual(rec["blueprint"], "blp_other")
+
+    def test_only_safe_calls_are_retried(self):
+        """A create POST is sent once; GET, DELETE and an idempotent POST retry a 503."""
+        import urllib.error
+        from unittest import mock
+        calls = []
+
+        def unavailable(req, timeout=None):
+            calls.append(req.get_method())
+            raise urllib.error.HTTPError(req.full_url, 503, "unavailable", {}, io.BytesIO(b""))
+        with mock.patch.object(mga.urllib.request, "urlopen", unavailable):
+            for method, kw in (("POST", {}), ("GET", {}), ("POST", {"idempotent": True})):
+                calls.clear()
+                self.assertEqual(mga.request(method, "https://x/api/agents/packages", {} if method == "POST"
+                                             else None, allow_status=True, **kw)[0], 503)
+                self.assertEqual(len(calls), 1 if (method, kw) == ("POST", {}) else 5)
+
+    def test_state_from_another_deployment_is_refused(self):
+        json.dump({"endpoint": "https://elsewhere.example"}, open(self.args.state, "w"))
+        with self.assertRaises(SystemExit):
+            mga.load_state(self.args.state)
+
+    def test_cleanup_deletes_sessions_then_deployments_then_packages(self):
+        api = self.fake()
+        state = mga.load_state(self.args.state)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, state)
+        mga.open_session(rec["batch"], self.args, state, setting=key, kind="batch")
+        self.assertEqual(mga.cleanup(self.args), 0)
+        deleted = [p.split("/")[2] for m, p, _ in api.calls if m == "DELETE"]
+        self.assertEqual(deleted, ["sessions", "deployments", "packages"])
+        left = json.load(open(self.args.state))
+        self.assertEqual(left["sessions"], {})
+        self.assertNotIn("package", left["settings"][key])
+        self.assertIn("blueprint", left["settings"][key])     # the copy stays
+
+    def test_serving_releases_the_deployment_on_the_way_out(self):
+        """The serving deployment holds the GPU worker, so it is stopped and deleted."""
+        import tempfile
+        api = self.fake()
+        with tempfile.NamedTemporaryFile(suffix=".mp4", dir=self.dir.name, delete=False) as f:
+            f.write(b"\0" * 1000)
+        self.args.video = [f.name]
+        self.args.prompt = mga.DEFAULT_PROMPT
+        self.args.output = os.path.join(self.dir.name, "out.json")
+        self.args.reference = self.args.keywords = None
+        self.assertEqual(mga.run_serving(dict(self.VALUES), self.args, mga.load_state(self.args.state)), 0)
+        self.assertEqual(len(mga.load_manual(self.args.output)), 1)
+        posts = api.posts()
+        self.assertIn("/agents/deployments", posts)
+        self.assertTrue(any(p.endswith("/stop") for p in posts))
+        deleted = [p.split("/")[2] for m, p, _ in api.calls if m == "DELETE"]
+        self.assertEqual(deleted, ["sessions", "deployments"])
+        self.assertNotIn("serving", json.load(open(self.args.state))["settings"][mga.setting_key(self.VALUES)])
+
+    def test_serving_releases_even_when_the_deployment_fails(self):
+        api = self.fake(deployment_status="failed")
+        self.args.video, self.args.prompt = [], mga.DEFAULT_PROMPT
+        with self.assertRaises(SystemExit):
+            mga.run_serving(dict(self.VALUES), self.args, mga.load_state(self.args.state))
+        self.assertIn("DELETE", [m for m, p, _ in api.calls if p.startswith("/agents/deployments/")])
+
+    def test_query_retries_a_timeout_and_stops_on_409(self):
+        from unittest import mock
+        answers = iter([(504, "query_timeout"), (200, {"response": {"data": []}})])
+        with mock.patch.object(mga, "request", lambda *a, **k: next(answers)):
+            self.assertEqual(mga.ask("ses_1", {}), {"response": {"data": []}})
+        with mock.patch.object(mga, "request", lambda *a, **k: (409, "no longer running")):
+            with self.assertRaises(mga.SessionGone):
+                mga.ask("ses_1", {})
+
+    def test_poll_prints_events_oldest_first_and_returns_the_status(self):
+        from unittest import mock
+        events = {"data": [{"created_at": "2026-11-05T10:00:02Z", "message": "second"},
+                           {"created_at": "2026-11-05T10:00:01Z", "message": "first"}]}
+
+        def fake(method, url, body=None, **kw):
+            return events if "/events" in url else {"status": "completed"}
+        printed = []
+        with mock.patch.object(mga, "request", fake), \
+                mock.patch("builtins.print", lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            self.assertEqual(mga.poll_session("ses_1"), "completed")
+        self.assertLess(printed.index(next(p for p in printed if "first" in p)),
+                        printed.index(next(p for p in printed if "second" in p)))
+
+
+class TestDryRun(unittest.TestCase):
+    """--dry-run prints every request and needs no key."""
+
+    def run_main(self, *argv):
+        from unittest import mock
+        buf = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if k not in ("ATAI_API_KEY", "ATAI_API_ENDPOINT")}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(mga.sys, "argv", ["run_mga_agent.py", *argv]), \
+                mock.patch.object(mga, "request", side_effect=AssertionError("no calls")), \
+                contextlib.redirect_stdout(buf):
+            mga.main()
+        return buf.getvalue()
+
+    def test_batch_plan(self):
+        out = self.run_main("--dry-run", "--video", "clip.mp4")
+        self.assertIn("POST {ATAI_API_ENDPOINT}/api/agents/blueprints/mga/copy", out)
+        self.assertIn('"kind": "batch"', out)
+        self.assertIn('"connectors"', out)
+        self.assertEqual(out.count('"values"'), 1)            # on the copy, nowhere else
+        self.assertNotIn("bundles", out)
+
+    def test_serving_plan(self):
+        out = self.run_main("--dry-run", "--serve", "--video", "clip.mp4")
+        self.assertIn('"kind": "serving"', out)
+        self.assertIn("/sessions/<id>/query", out)
+        self.assertIn("/deployments/<id>/stop", out)
 
 
 class TestWaitsForCompleteOutput(unittest.TestCase):
