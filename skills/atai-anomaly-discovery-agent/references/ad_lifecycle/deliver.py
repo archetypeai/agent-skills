@@ -39,8 +39,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (TERMINAL, check_auth, create_package, deploy, deployment, deployment_ready, lifecycle_url,  # noqa: E402
-                       load_dotenv, open_session, package_ready, request, result_url, root, same_deployment,
+from atai_http import (TERMINAL, check_auth, deploy, deployment, deployment_ready, lifecycle_url,  # noqa: E402
+                       load_dotenv, open_session, ready_package, request, result_url, root, same_deployment,
                        upload_file)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
@@ -205,12 +205,8 @@ def main(argv=None):
 
     if "bundle" in state:
         sys.exit(f"{sf} is from a bundle delivery: move it aside to deliver through a package")
-    if "package" not in state:
-        state["package"] = create_package(bp_id, f"{a.name} delivery")["id"]
-        save()
-        log(f"package {state['package']} on {key}")
     if "deployment" not in state:
-        package_ready(state["package"])
+        ready_package(state, bp_id, f"{a.name} delivery", save, log)
         state["deployment"] = deploy(state["package"], "batch")["id"]
         save()
         log(f"batch deployment {state['deployment']}")
@@ -239,7 +235,7 @@ def main(argv=None):
             log(f"{name}: session {ses['id']}")
         status = poll(runs[name])
         got = download(runs[name], dst, src, m["timestamp_column"])
-        if not got and status in ("failed", "canceled", "cancelled"):   # forget the dead session: a rerun opens a new one
+        if not got and status in TERMINAL:   # forget it, even `completed` with no full output: a rerun opens a new one
             error = str(request("GET", lifecycle_url("sessions", runs[name])).get("error") or "")
             if "DeadlineExceeded" in error:
                 log(f"{name}: {error[:200]} A plain rerun hits it again: rerun with --max-windows-per-run N "

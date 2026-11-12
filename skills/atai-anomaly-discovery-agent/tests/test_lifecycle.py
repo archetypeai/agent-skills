@@ -349,7 +349,7 @@ class Promote(unittest.TestCase):
 
         def fake(method, url, body=None):
             calls.append(body)
-            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "ad-otr_abc123")}
+            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "ad-sample-base-otr_abc123")}
         run = {"optimization": "opt_1", "pinned": {"window_size": 64}}
         trial = {"id": "otr_abc123", "trial_values": {"values": {}}}
         with mock.patch.object(promote_and_test, "request", fake), \
@@ -360,7 +360,7 @@ class Promote(unittest.TestCase):
         bp, calls = self.promote()
         self.assertEqual(len(calls), 1)
         self.assertNotIn("blueprint_key", calls[0])
-        self.assertEqual(bp["key"], "ad-otr_abc123")
+        self.assertEqual(bp["key"], "ad-sample-base-otr_abc123")
 
     def test_a_chosen_key_when_asked(self):
         bp, calls = self.promote("ad-mine")
@@ -371,7 +371,7 @@ class DeliverResume(unittest.TestCase):
     """A file whose session failed without a complete output gets a new session on the next run;
     a file longer than --max-windows-per-run goes in several sessions whose outputs join to its own."""
 
-    def deliver(self, status, *args):
+    def deliver(self, status, *args, empty=False):
         started, self.cancelled = [], []
 
         def fake(method, url, body=None):
@@ -389,7 +389,7 @@ class DeliverResume(unittest.TestCase):
             return {"id": f"ses_new{len(started)}"}
 
         def download(agent, dst, src, ts_col):     # a batch output: a window every `step` rows of src
-            if status != "completed":
+            if status != "completed" or empty:
                 return None
             ts = pd.read_csv(src)["t"].tolist()
             rows = [(ts[s + 3], ts[s], "x") for s in range(0, len(ts) - 4 + 1, 2)]
@@ -428,6 +428,26 @@ class DeliverResume(unittest.TestCase):
             os.makedirs(os.path.join(self.out, "delivery"), exist_ok=True)
             started, runs = self.deliver(status)
             self.assertEqual((started, runs), ([], {"delivery/d.csv": "ses_dead"}))
+
+    def test_a_completed_session_with_no_full_output_is_replaced(self):
+        started, runs = self.deliver("completed", empty=True)
+        self.assertEqual((started, runs), ([], {}))          # forgotten: the next run opens a new one
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        calls, statuses = [], {"pkg_bad": "failed", "pkg_new": "ready"}
+        state = {"package": "pkg_bad"}
+
+        def fake(method, url, body=None, idempotent=None):
+            calls.append((method, url.split("/agents/")[-1]))
+            if method == "POST" and url.rstrip("/").endswith("/packages"):
+                return {"id": "pkg_new"}
+            if method == "GET" and "/packages/" in url:
+                return {"status": statuses[url.split("/")[-1]]}
+            return {}
+        with mock.patch.object(atai_http, "request", fake), mock.patch.object(atai_http, "root", lambda: "https://x"):
+            pkg = atai_http.ready_package(state, "blp_1", "d", save=lambda: None, log=lambda m: None)
+        self.assertEqual((pkg["status"], state["package"]), ("ready", "pkg_new"))
+        self.assertIn(("DELETE", "packages/pkg_bad"), calls)
 
     def test_a_bundle_state_is_refused(self):
         sf = os.path.join(self.out, "deliver_state.json")
