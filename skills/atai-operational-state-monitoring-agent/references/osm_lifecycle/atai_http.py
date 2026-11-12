@@ -1,4 +1,4 @@
-"""Stdlib HTTP helpers for Path 2 (Optimize → promote → Evals → bundle → run).
+"""Stdlib HTTP helpers for Path 2 (project → Optimize → promote → Evals → package → deployment → sessions).
 
 The official `archetypeai` client does not yet cover the Optimizations API, promote
 or the Evals API, so Path 2 talks to them directly. Move these calls onto the client
@@ -60,8 +60,11 @@ def load_dotenv(path=None):
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             key = key.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]             # KEY="value" or KEY='value'
             if not os.environ.get(key):         # unset, or set but empty: an empty export mustn't hide .env
-                os.environ[key] = value.strip()
+                os.environ[key] = value
                 SOURCE[key] = os.path.abspath(path)
 
 
@@ -71,7 +74,7 @@ def check_auth(log=print):
     as "Broken pipe", retried for minutes: the server closes before the body is sent.)"""
     ep = os.environ.get("ATAI_API_ENDPOINT", "")
     log(f"endpoint {root()} (from {SOURCE.get('ATAI_API_ENDPOINT', 'the environment')}), "
-        f"key {os.environ.get('ATAI_API_KEY', '')[:6]}… (from {SOURCE.get('ATAI_API_KEY', 'the environment')})")
+        f"key …{os.environ.get('ATAI_API_KEY', '')[-4:]} (from {SOURCE.get('ATAI_API_KEY', 'the environment')})")
     req = urllib.request.Request(f"{agents()}/blueprints?limit=1")
     req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
     try:
@@ -123,6 +126,107 @@ def agents():
 
 def files_url():
     return f"{api()}/files"
+
+
+def project_url(project_id=""):
+    return f"{api()}/projects" + (f"/{project_id}" if project_id else "")
+
+
+def lifecycle_url(kind, obj_id=""):
+    """`packages`, `deployments` or `sessions`, or one of them by id."""
+    return f"{agents()}/{kind}" + (f"/{obj_id}" if obj_id else "")
+
+
+def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3, exit=True):
+    """Poll a package, deployment or session while its status is `waiting`; exit unless it
+    then reaches `want` (a package `building` -> `ready`, a deployment `deploying` -> `ready`,
+    a serving session `pending` -> `running`)."""
+    t0 = time.time()
+    while True:
+        obj = request("GET", lifecycle_url(kind, obj_id))
+        if obj["status"] == want:
+            return obj
+        if obj["status"] != waiting or time.time() - t0 > timeout_s:
+            if exit:
+                sys.exit(f"{obj_id} is {obj['status']}, not {want}: {obj.get('error')}")
+            return obj
+        time.sleep(every_s)
+
+
+def create_package(blueprint_id, name):
+    """Package one blueprint for the platform; it starts `building`. A package pins the
+    blueprint and the models it resolves to (the encoder `mdl_…`, the fitted detector `aar_…`)
+    and carries no values: it runs the blueprint exactly as promoted. It lands in the
+    blueprint's project, and a deployment needs one. Record its id before `package_ready`, so
+    a build that fails or is interrupted can still be deleted."""
+    return request("POST", lifecycle_url("packages"),
+                   {"blueprint_ids": [blueprint_id], "target": {"kind": "platform"}, "name": name})
+
+
+def package_ready(package_id):
+    return wait_for("packages", package_id, "ready", "building", every_s=5)
+
+
+def ready_package(state, blueprint_id, name, save, log=print):
+    """state["package"] once ready, created (and saved) first if there is none. A failed
+    package never becomes ready, so it is deleted and built again, once: a rerun after a failed
+    build doesn't stop on the same package."""
+    for attempt in range(2):
+        if not state.get("package"):
+            state["package"] = create_package(blueprint_id, name)["id"]
+            save()
+            log(f"package {state['package']} ({name})")
+        pkg = wait_for("packages", state["package"], "ready", "building", every_s=5, exit=False)
+        if pkg["status"] == "ready":
+            return pkg
+        if pkg["status"] != "failed" or attempt:
+            sys.exit(f"{state['package']} is {pkg['status']}, not ready: {pkg.get('error')}")
+        log(f"{state['package']} failed ({pkg.get('error')}): deleting it and building a new one")
+        end("packages", state["package"])
+        state.pop("package")
+        save()
+
+
+def deploy(package_id, kind):
+    """Deploy a ready package as `batch` (ready at once) or `serving` (the agent placed on a
+    worker and loaded, usually within seconds; it holds the worker until stopped). It starts
+    `deploying`: record its id before `deployment_ready`."""
+    return request("POST", lifecycle_url("deployments"), {"package_id": package_id, "kind": kind})
+
+
+def deployment_ready(deployment_id):
+    return wait_for("deployments", deployment_id, "ready", "deploying")
+
+
+def open_session(deployment_id, file_ids=None):
+    """A batch session over `file_ids` (one output per input), or a serving session,
+    queried over /sessions/{id}/query once `running`, when none are given."""
+    body = {"deployment_id": deployment_id}
+    if file_ids:
+        body["connectors"] = {"source": [{"type": "file", "id": f, "format": "csv"} for f in file_ids]}
+    return request("POST", lifecycle_url("sessions"), body)
+
+
+def end(kind, obj_id):
+    """Cancel a session still going, or stop a deployment still up, then delete it; a package
+    is deleted as it is. True once it is gone (a 404 counts)."""
+    try:
+        obj = request("GET", lifecycle_url(kind, obj_id))
+        if kind == "sessions" and obj["status"] not in TERMINAL:
+            request("POST", lifecycle_url(kind, obj_id) + "/cancel", {}, idempotent=True)
+        if kind == "deployments" and obj["status"] not in ("stopped", "failed"):
+            request("POST", lifecycle_url(kind, obj_id) + "/stop", {}, idempotent=True)
+        request("DELETE", lifecycle_url(kind, obj_id), idempotent=True)
+    except RuntimeError as e:
+        if "(404)" not in str(e):
+            raise
+    return True
+
+
+def result_url(ref):
+    """A session result's `ref` is a root path, `/api/files/<fil_…>/content`, or an absolute URL:
+    resolve it against the deployment root, not against .../api."""
+    return ref if ref.startswith("http") else f"{root()}{ref}"
 
 
 def _unsent(e):

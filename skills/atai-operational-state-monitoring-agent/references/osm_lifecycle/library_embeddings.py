@@ -3,23 +3,30 @@
 
     python library_embeddings.py --roles roles --out out              # one batch run per library file, then the view
     python library_embeddings.py --roles roles --out out --serving    # a serving agent, one query per window
-    python library_embeddings.py --roles roles --out out --serving --agent agt_...   # one already running
+    python library_embeddings.py --roles roles --out out --serving --session ses_...   # one already running
     python library_embeddings.py --roles roles --out out --view       # the view again from the saved outputs, no platform calls
     python library_embeddings.py --roles roles --out out --view-dir ../my-app/static
 
 The promoted model is a kNN over the library's windows, but it is a registry artifact with
-no download route, so its reference windows can't be read back. They can be recomputed: a
-bundle on the promoted blueprint with `output_embeddings: true` runs each library file (one
-per state) through the same encoder, on the same windows (its window and step), and returns
-each window's Omega embedding, 768 values per channel.
+no download route, so its reference windows can't be read back. They can be recomputed by
+running each library file (one per state) through the same encoder, on the same windows
+(its window and step), with `output_embeddings: true`, which returns each window's Omega
+embedding, 768 values per channel.
+
+A package runs a blueprint exactly as promoted and can't turn an output on, so this first
+makes a blueprint that has it on: a 1-trial optimization at the promoted trial's own point
+(window, step, k, metric, weights), on the same library and search-validation files, with
+`output_embeddings: true` pinned, then promoted. Its kNN is refitted, but the embeddings
+depend only on the encoder and the windowing, so they are the promoted model's. Then a
+package of it, one batch deployment, and a session per library file.
 
 --serving gets the same embeddings from a serving agent instead, one window per /query, cut
 here as the platform cuts them: from each file's row 0 at the blueprint's step, leaving out
-the windows that cross a join between the file's pieces (training skips those). One agent for
-the whole library: no job slots, queue or 2-hour cap on the free trial. With --agent, an
-agent of the promoted blueprint already running with output_embeddings (a live app's) is used
-and left running; otherwise one is started and deleted at the end (ids in
-<out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
+the windows that cross a join between the file's pieces (training skips those). One serving
+session for the whole library: no job slots, queue or 2-hour cap on the free trial. With
+--session, a session already running the embeddings blueprint (a live app's) is used and left
+running; otherwise a package, serving deployment and session are made and deleted at the end
+(ids in <out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
 (2026-10-31): the same 1,950 windows as batch, embeddings within 4.0e-6.
 
 The view is the two directions that best separate the states: each embedding scaled to unit
@@ -32,10 +39,11 @@ kNN decides in every dimension.
 
 Writes <out>/library_embeddings/<state>.csv (the batch outputs, large), <out>/library_embeddings.json
 (the summary) and <view-dir>/library-view.{json,bin} (default <out>). Ids go to
-<out>/library_state.json, so a rerun resumes and cleanup.py deletes them. A rerun for another
-blueprint stops rather than mixing two models' windows: it checks library_state.json and,
-because cleanup.py deletes that, library_embeddings.json too. A rerun with nothing new to
-embed starts no agent or run, and keeps the route the outputs were made by.
+<out>/library_state.json, so a rerun resumes and cleanup.py deletes the sessions, deployment
+and package (the embeddings blueprint and its optimization stay). A rerun for another
+blueprint stops rather than mixing two models' windows: it checks library_state.json and
+library_embeddings.json. A rerun with nothing new to embed starts nothing, and keeps the
+route the outputs were made by.
 """
 import argparse
 import csv
@@ -49,9 +57,13 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, load_dotenv, request, root, same_deployment, upload_all  # noqa: E402
-from common import cache_path, load_manifest, log  # noqa: E402
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
+                       list_trials, load_dotenv, open_session, package_ready, ready_package, request, root,
+                       same_deployment, trial_setting, upload_all, wait, wait_for)
+from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
+from optimize import pinned_values, search_space  # noqa: E402
+from promote_and_test import promote  # noqa: E402
 from serve import MODEL, end, query_body, stop  # noqa: E402
 
 WORKERS = 4
@@ -64,35 +76,40 @@ def firsts(rows, window, step, pieces=None):
     return [i for i in range(0, rows - window + 1, step) if any(a <= i and i + window <= b for a, b in bounds)]
 
 
-def start_serving(args, key, channels, sp):
-    """A serving agent of the promoted blueprint with embeddings on, once running. Its ids are
-    in `sp` from the moment each exists, so a kill leaves them for cleanup.py."""
-    ex = {"endpoint": root(), "agent": None, "bundle": None}
-    ex["bundle"] = request("POST", f"{agents()}/bundles", {
-        "blueprint": key, "name": f"{args.name} library serving",
-        "values": {"data_columns": channels, "timestamp_column": "timestamp", "output_embeddings": True}})["id"]
-    json.dump(ex, open(sp, "w"), indent=1)
-    ex["agent"] = request("POST", f"{agents()}/bundles/{ex['bundle']}/run", {"mode": "serving"})["id"]
-    json.dump(ex, open(sp, "w"), indent=1)
-    t0 = time.time()
-    while (s := request("GET", f"{agents()}/instances/{ex['agent']}").get("status")) != "running":
-        if s in ("failed", "cancelled", "canceled", "completed") or time.time() - t0 > 900:
-            sys.exit(f"serving agent {ex['agent']} is {s}, not running")
-        time.sleep(3)
-    log(f"serving agent {ex['agent']} running")
+def start_serving(args, emb, sp):
+    """A serving session on the embeddings blueprint `emb`, once running: its package, a
+    serving deployment, a session. Each id is in `sp` before the script waits on it, so a kill
+    leaves them for cleanup.py."""
+    ex = {"endpoint": root(), "package": None, "deployment": None, "session": None}
+    for kind, make, ready in (("package", lambda: create_package(emb["id"], f"{args.name} library serving"), package_ready),
+                              ("deployment", lambda: deploy(ex["package"], "serving"), deployment_ready),
+                              ("session", lambda: open_session(ex["deployment"]), None)):
+        ex[kind] = make()["id"]
+        json.dump(ex, open(sp, "w"), indent=1)
+        if ready:
+            ready(ex[kind])
+    wait_for("sessions", ex["session"], "running", "pending", timeout_s=900)
+    log(f"serving session {ex['session']} running (deployment {ex['deployment']}, package {ex['package']})")
     return ex
 
 
-def run_serving(args, files, agent, window, step, channels):
+def session_blueprints(session_id):
+    """The blueprint ids a session runs: its deployment's package's."""
+    dpl = request("GET", lifecycle_url("sessions", session_id))["deployment_id"]
+    pkg = request("GET", lifecycle_url("deployments", dpl))["package_id"]
+    return request("GET", lifecycle_url("packages", pkg)).get("blueprint_ids", [])
+
+
+def run_serving(args, files, session, window, step, channels):
     """Each library file's windows, one /query each, saved in the batch output's shape."""
     out_dir = os.path.join(args.out, "library_embeddings")
     os.makedirs(out_dir, exist_ok=True)
 
     def query(chunk):
-        rec = request("POST", f"{agents()}/instances/{agent}/query", query_body(chunk, args.model),
+        rec = request("POST", lifecycle_url("sessions", session) + "/query", query_body(chunk, args.model),
                       idempotent=True)["response"]["data"][0]
         if missing := [c for c in channels if f"embedding_{c}" not in rec]:
-            sys.exit(f"the agent's answer has no embedding_{missing[0]}: its bundle needs output_embeddings: true")
+            sys.exit(f"the session's answer has no embedding_{missing[0]}: its blueprint needs output_embeddings: true")
         return rec
     t0, n = time.time(), 0
     with ThreadPoolExecutor(WORKERS) as pool:
@@ -117,33 +134,67 @@ def run_serving(args, files, agent, window, step, channels):
     log(f"served {n:,} windows in {time.time() - t0:.0f} s")
 
 
-def outputs(agent):
-    """The run's output rows, header first, from every result file it wrote."""
+def embeddings_blueprint(args, manifest, test, state, save):
+    """{id, key} of a blueprint at the promoted trial's point with output_embeddings on: a
+    1-trial optimization in the project, then promoted. Resumable through `state`."""
+    if state.get("embeddings_blueprint"):
+        return state["embeddings_blueprint"]
+    if not state.get("embeddings_optimization"):
+        opt, tid = test["model"]["optimization"], test["model"]["trial"]
+        w, st, k, metric, weights = trial_setting(next(t for t in list_trials(opt) if t["id"] == tid))
+        base = json.load(open(os.path.join(args.out, "project_state.json")))["base"]
+        bp = request("GET", f"{agents()}/blueprints/{base['id']}")
+        search = set(manifest.get("search_validation") or [f["recording"] for f in manifest["validation"]["files"]])
+        library = role_paths(args.roles, manifest, "library")
+        validation = role_paths(args.roles, manifest, "validation", search)
+        ids = upload_all(library + validation, args.roles, cache_path(args.out), prefix=args.name, log=log)
+        training = [example(os.path.basename(p)[:-4], ids[p], os.path.basename(p).split("__")[0]) for p in library]
+        o = request("POST", f"{agents()}/optimizations", body={
+            "name": f"{args.name} embeddings {stamp()}", "blueprint_id": bp["id"], "objective": "macro_f1",
+            "search_space": search_space([w], [st], [k], [metric], [weights]), "budget": {"max_trials": 1},
+            "training_examples": training,
+            "validation_examples": [example(os.path.basename(p)[:-4], ids[p]) for p in validation],
+            "overrides": pinned_values(bp, training, manifest, {"output_embeddings": True})})
+        state.update({"endpoint": root(), "embeddings_optimization": o["id"]})
+        save()
+        log(f"optimization {o['id']}: 1 trial at {tid}'s point (w {w}, step {st}, k {k}, {metric}, {weights}), embeddings on")
+    opt = wait(f"{agents()}/optimizations/{state['embeddings_optimization']}", state["embeddings_optimization"],
+               every_s=30, log=log)
+    trial = next((t for t in list_trials(opt["id"]) if t["status"] == "completed"), None)
+    if opt["status"] != "completed" or not trial:
+        sys.exit(f"{opt['id']} is {opt['status']} with no completed trial: move {args.out}/library_state.json aside to try again")
+    bp = promote(opt["id"], trial, f"{args.name}-embeddings")
+    state["embeddings_blueprint"] = {"id": bp["id"], "key": bp["blueprint_key"]}
+    save()
+    return state["embeddings_blueprint"]
+
+
+def outputs(session):
+    """The session's output rows, header first, from every result file it wrote."""
     rows, header = [], None
-    for item in request("GET", f"{agents()}/instances/{agent}/results").get("data") or []:
-        body = list(csv.reader(fetch(item["data"]["filename"]).splitlines()))
+    for item in request("GET", lifecycle_url("sessions", session) + "/results").get("data") or []:
+        body = list(csv.reader(fetch(item["data"]["ref"]).splitlines()))
         if body:
             header = header or body[0]
             rows += body[1:]
     return header, rows
 
 
-def run_all(args, files, state, save, ensure_bundle):
-    """One batch run per library file; each output saved once it reaches its file's end."""
+def run_all(args, files, state, save, ensure_deployment):
+    """One batch session per library file; each output saved once it reaches its file's end."""
     out_dir = os.path.join(args.out, "library_embeddings")
     done = lambda f: os.path.exists(os.path.join(out_dir, f"{f['state']}.csv"))  # noqa: E731
     if all(done(f) for f in files):
         return
-    ensure_bundle()
+    ensure_deployment()
     paths = {f["state"]: os.path.join(args.roles, f["file"]) for f in files}
     ids = upload_all(list(paths.values()), args.roles, cache_path(args.out), prefix=args.name, log=log)
     for f in files:
         if not done(f) and f["state"] not in state["runs"]:
-            run = request("POST", f"{agents()}/bundles/{state['bundle']}/run",
-                          {"connectors": {"source": [{"type": "file", "id": ids[paths[f['state']]]}]}})
-            state["runs"][f["state"]] = run["id"]
+            ses = open_session(state["deployment"], [ids[paths[f["state"]]]])
+            state["runs"][f["state"]] = ses["id"]
             save()
-            log(f"  {f['state']}: run {run['id']}")
+            log(f"  {f['state']}: session {ses['id']}")
     os.makedirs(out_dir, exist_ok=True)
     pending = {f["state"] for f in files if not done(f)}
     deadline = {}
@@ -151,13 +202,13 @@ def run_all(args, files, state, save, ensure_bundle):
         for s in sorted(pending):
             aid = state["runs"][s]
             if s not in deadline:
-                status = request("GET", f"{agents()}/instances/{aid}")["status"]
+                status = request("GET", lifecycle_url("sessions", aid))["status"]
                 if status not in TERMINAL:
                     continue
                 if status != "completed":
                     state["runs"].pop(s)
                     save()
-                    sys.exit(f"{s}: run {aid} {status}; rerun to start it again")
+                    sys.exit(f"{s}: session {aid} {status}; rerun to start it again")
                 deadline[s] = time.time() + OUTPUT_WAIT_S
             header, rows = outputs(aid)
             last = max((to_ms(r[header.index("finish_timestamp")]) for r in rows), default=0) if header else 0
@@ -170,7 +221,7 @@ def run_all(args, files, state, save, ensure_bundle):
             elif time.time() > deadline[s]:
                 state["runs"].pop(s)
                 save()
-                sys.exit(f"{s}: run {aid} completed {OUTPUT_WAIT_S // 60} min ago but its output stops early; "
+                sys.exit(f"{s}: session {aid} completed {OUTPUT_WAIT_S // 60} min ago but its output stops early; "
                          f"rerun to start it again")
         if pending:
             time.sleep(15 if pending <= set(deadline) else 30)
@@ -186,7 +237,7 @@ def read_embeddings(path, channels):
                 continue
             missing = [c for c in channels if f"embedding_{c}" not in r]
             if missing:
-                sys.exit(f"{path}: no embedding_{missing[0]} column: was the bundle made with output_embeddings?")
+                sys.exit(f"{path}: no embedding_{missing[0]} column: was its blueprint promoted with output_embeddings?")
             vecs.append(np.concatenate([np.asarray(json.loads(r[f"embedding_{c}"]), dtype=np.float32) for c in channels]))
     return np.stack(vecs)
 
@@ -269,9 +320,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
-    ap.add_argument("--name", default="osm", help="prefixes the uploads and names the bundle")
-    ap.add_argument("--serving", action="store_true", help="embed through a serving agent, a query per window")
-    ap.add_argument("--agent", help="with --serving: an agent already running the promoted blueprint with embeddings")
+    ap.add_argument("--name", default="osm", help="prefixes the uploads and names the platform objects")
+    ap.add_argument("--serving", action="store_true", help="embed through a serving session, a query per window")
+    ap.add_argument("--session", help="with --serving: a session already running the embeddings blueprint")
     ap.add_argument("--model", default=MODEL, help="the `model` a query names")
     ap.add_argument("--view", action="store_true", help="only rebuild the view from <out>/library_embeddings/")
     ap.add_argument("--view-dir", help="where library-view.{json,bin} go (default <out>)")
@@ -287,11 +338,13 @@ def main(argv=None):
     ts_path = os.path.join(args.out, "test_state.json")
     if not os.path.exists(ts_path):
         sys.exit(f"no {ts_path}: run promote_and_test.py first")
-    key = json.load(open(ts_path))["blueprint"]["key"]
-    values = request("GET", f"{agents()}/blueprints/{key}")["document"]["values"]
+    test = json.load(open(ts_path))
+    key = test["blueprint"]["key"]
+    # by id: a key registered in a project resolves only with ?project_id=
+    values = request("GET", f"{agents()}/blueprints/{test['blueprint']['id']}")["document"]["values"]
     meta = {"blueprint": key, "window_size": values["window_size"], "step_size": values["step_size"],
-            "route": "through a serving agent" if args.serving else "in batch"}
-    # cleanup.py deletes library_state.json but leaves the outputs and their summary
+            "route": "through a serving session" if args.serving else "in batch"}
+    # library_embeddings.json outlives a moved or deleted library_state.json
     summary = os.path.join(args.out, "library_embeddings.json")
     made = json.load(open(summary)) if os.path.exists(summary) else {}
     sp = os.path.join(args.out, "library_state.json")
@@ -308,42 +361,51 @@ def main(argv=None):
         meta["route"] = made.get("route", meta["route"])         # keep how they were made
         return write_view(args, manifest, meta, t0)
 
+    if not same_deployment(state):
+        sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: "
+                 f"move it aside, or set .env to that deployment")
+    save = lambda: json.dump(state, open(sp, "w"), indent=1)  # noqa: E731
+    if state.get("bundle"):
+        sys.exit(f"{sp} is from a bundle run: move it and {args.out}/library_embeddings/ aside")
+
     if args.serving:
         ssp = os.path.join(args.out, "library_serving_state.json")
         if os.path.exists(ssp):
-            sys.exit(f"{ssp} exists: an earlier run's serving agent may still be up; run cleanup.py --yes first")
-        if args.agent and (b := request("GET", f"{agents()}/instances/{args.agent}").get("blueprint")) != key:
-            sys.exit(f"agent {args.agent} runs {b}, not the promoted {key}")
+            sys.exit(f"{ssp} exists: an earlier run's serving session may still be up; run cleanup.py --yes first")
+        emb = embeddings_blueprint(args, manifest, test, state, save)
+        state.setdefault("blueprint", key)
+        save()
+        if args.session and emb["id"] not in (bps := session_blueprints(args.session)):
+            sys.exit(f"session {args.session} runs {bps}, not the embeddings blueprint {emb['key']} ({emb['id']})")
         for sig in (signal.SIGTERM, signal.SIGHUP):
             signal.signal(sig, stop)
         ex = None
         try:
-            agent = args.agent or (ex := start_serving(args, key, manifest["channels"], ssp))["agent"]
-            run_serving(args, manifest["library"]["files"], agent, meta["window_size"],
+            session = args.session or (ex := start_serving(args, emb, ssp))["session"]
+            run_serving(args, manifest["library"]["files"], session, meta["window_size"],
                         meta["step_size"], manifest["channels"])
         finally:
             if ex is None and os.path.exists(ssp):      # failed while starting: delete what it made
                 ex = json.load(open(ssp))
             if ex and end(ex):
                 os.remove(ssp)
-                log(f"deleted serving agent {ex['agent']} and bundle {ex['bundle']}")
+                log(f"deleted session {ex['session']}, deployment {ex['deployment']} and package {ex['package']}")
         return write_view(args, manifest, meta, t0)
 
-    if not same_deployment(state):
-        sys.exit(f"{sp} is from {state['endpoint']}, a different deployment from {root()}: "
-                 f"move it aside, or set .env to that deployment")
-    save = lambda: json.dump(state, open(sp, "w"), indent=1)  # noqa: E731
-
-    def ensure_bundle():
-        if not state.get("bundle"):
-            b = request("POST", f"{agents()}/bundles", {
-                "blueprint": key, "name": f"{args.name} library embeddings", "values": {"output_embeddings": True}})
-            state.update({"endpoint": root(), "bundle": b["id"], "blueprint": key, "runs": {}})
+    def ensure_deployment():
+        if not state.get("deployment"):
+            emb = embeddings_blueprint(args, manifest, test, state, save)
+            if not state.get("package"):
+                state.update({"endpoint": root(), "blueprint": key, "runs": {}})
+            ready_package(state, emb["id"], f"{args.name} library embeddings", save, log)
+            state["deployment"] = deploy(state["package"], "batch")["id"]
             save()
-            log(f"bundle {b['id']} on {key} (window {meta['window_size']}, step {meta['step_size']}, embeddings on)")
-    run_all(args, manifest["library"]["files"], state, save, ensure_bundle)
+            deployment_ready(state["deployment"])
+            log(f"package {state['package']} of {emb['key']} (window {meta['window_size']}, step {meta['step_size']}, "
+                f"embeddings on), batch deployment {state['deployment']}")
+    run_all(args, manifest["library"]["files"], state, save, ensure_deployment)
     write_view(args, manifest, meta, t0)
-    log(f"next: python cleanup.py --out {args.out} --yes deletes the runs and their bundle")
+    log(f"next: python cleanup.py --out {args.out} --yes deletes the sessions, deployment and package")
     return 0
 
 
