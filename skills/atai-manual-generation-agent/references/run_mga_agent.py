@@ -25,21 +25,20 @@ AGENT LIFECYCLE 2.0. A run is, inside a project:
 The first three are made once per setting and reused by every later run at it;
 --state (mga-lifecycle.json) keeps their ids, and every session's, the moment
 each exists. `--cleanup --yes` deletes sessions, then deployments, then packages.
-Only Archetype AI's dev deployment serves these calls so far; production, staging
-and the free trial keep bundles and instances until their next platform release.
-Check: `GET /api/agents/sessions?limit=1` answers 200, not 404.
+Check your endpoint serves these calls: `GET /api/agents/sessions?limit=1` answers
+200, not 404.
 
-Budget ~10 minutes per batch session (10.6 min on dev, 2026-11-05): ~7 min of
-model download and load on EVERY session (nothing is cached), then roughly 1.1x
-realtime processing. Run one at a time. A serving deployment took 881 s to start
-(dev, 2026-11-06) and then answered a 173 s video in 27.8 s.
+Budget ~12 minutes per batch session (12.4 min on production, 2026-11-12): most
+of it model download and load, on EVERY session (nothing is cached), then roughly
+1.1x realtime processing. Run one at a time. A serving deployment took 879 s to
+start (production, 2026-11-12) and then answered a 173 s video in 27.3 s.
 
 SEVEN THINGS THAT WILL BITE YOU
 
   1. Set the values on the copy. A package, a deployment and a batch session take
      none (a session given `values` is a 422), and a plain copy runs at the
      blueprint's defaults: max_new_tokens 8192 and an instruction that caps the
-     manual at "10 steps or less" (dev, 2026-11). This script always sets all three.
+     manual at "10 steps or less". This script always sets all three.
   2. A copy refuses an undeclared value (400) but accepts a declared one that no
      node references, and ignores it. The preflight reads the blueprint and warns.
   3. A session has /events, not /logs. Events say what the platform did (opened,
@@ -52,7 +51,7 @@ SEVEN THINGS THAT WILL BITE YOU
   6. Videos longer than ~5 minutes fail outright, several minutes in.
   7. file_id IS THE FILENAME, a mutable pointer in an ORG-WIDE namespace. Uploading
      the same name again repoints it and orphans the previous object. A session
-     does not fetch the bytes until ~7 min of model loading later, so a colleague
+     does not fetch the bytes until ~7 min of model loading later, so anyone
      uploading the same filename in that window kills your run with
      `S3 object not found`. upload_name() suffixes every upload for this reason.
 
@@ -69,6 +68,7 @@ import base64
 import csv
 import datetime
 import hashlib
+import http.client
 import json
 import mimetypes
 import os
@@ -183,16 +183,18 @@ def agents_url(path: str = "") -> str:
 
 
 def request(method: str, url: str, body=None, *, raw: bool = False,
-            allow_status: bool = False, timeout: int = 120):
+            allow_status: bool = False, timeout: int = 120, idempotent: bool | None = None):
     """Call the API with the bearer token.
 
-    GET and DELETE retry network errors and 502/503/504 (a ten-minute poll should
-    not die on one blip); a POST is sent once, since a repeat could build a second
-    package. allow_status=True returns (status, body) instead of exiting on an
-    HTTP error: a 404 is a finding, not a crash.
+    Calls that are safe to repeat retry network errors and 502/503/504 (a ten-minute
+    poll should not die on one blip): GET, HEAD and DELETE, and POSTs marked
+    idempotent (cancel, stop). A create POST is sent once, since a repeat could
+    build a second package or deployment. allow_status=True returns (status, body)
+    instead of exiting on an HTTP error: a 404 is a finding, not a crash.
     """
     data = json.dumps(body).encode() if body is not None else None
-    tries = 5 if method in ("GET", "DELETE") else 1
+    safe = method in ("GET", "HEAD", "DELETE") if idempotent is None else idempotent
+    tries = 5 if safe else 1
     for attempt in range(tries):
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {api_key()}")
@@ -210,7 +212,8 @@ def request(method: str, url: str, body=None, *, raw: bool = False,
                     return e.code, detail
                 sys.exit(f"{method} {url} failed ({e.code}): {detail}")
             reason = f"HTTP {e.code}"
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException) as e:          # incl. a body cut off mid-transfer
             if attempt + 1 == tries:
                 if allow_status:
                     return 0, str(e)
@@ -239,15 +242,17 @@ def list_all(url: str) -> list[dict]:
         cursor = f"&after={page['next_cursor']}"
 
 
-def wait_for(url: str, want: str, waiting: str, timeout_s: int, every_s: int = 5) -> dict:
-    """Poll while the status is `waiting`; exit unless it then reaches `want`.
+def wait_for(url: str, want: str, waiting: str, timeout_s: int, every_s: int = 5,
+             exit: bool = True) -> dict:
+    """Poll while the status is `waiting`; exit unless it then reaches `want`
+    (exit=False: return it as it is).
 
     A package goes building -> ready, a deployment deploying -> ready, a serving
     session pending -> running."""
     t0 = time.time()
     while True:
         obj = request("GET", url)
-        if obj["status"] == want:
+        if obj["status"] == want or (obj["status"] != waiting and not exit):
             return obj
         if obj["status"] != waiting:
             sys.exit(f"{obj.get('id')} is {obj['status']}, not {want}: {obj.get('error')}")
@@ -415,7 +420,8 @@ def ensure_deployment(values: dict, kind: str, args, state: dict) -> tuple[str, 
     rec = state["settings"].setdefault(key, {"source": args.blueprint, "values": values})
 
     if not rec.get("blueprint") or not alive(agents_url(f"blueprints/{rec['blueprint']}")):
-        found = request("GET", agents_url(f"blueprints?project_id={project}&key={key}")).get("data") or []
+        found = [b for b in request("GET", agents_url(f"blueprints?project_id={project}&key={key}")).get("data") or []
+                 if b.get("blueprint_key") == key]
         if found:
             rec["blueprint"] = found[0]["id"]
             print(f"  reusing copy {key} ({rec['blueprint']})")
@@ -426,18 +432,24 @@ def ensure_deployment(values: dict, kind: str, args, state: dict) -> tuple[str, 
         rec.pop("package", None)
         save_state(state, args.state)
 
-    pkg = alive(agents_url(f"packages/{rec['package']}")) if rec.get("package") else None
-    if not pkg or pkg["status"] not in ("ready", "building"):
-        if pkg:                                    # failed: don't strand it
-            request("DELETE", agents_url(f"packages/{pkg['id']}"), raw=True, allow_status=True)
-        pkg = request("POST", agents_url("packages"), package_body(rec["blueprint"], key))
-        rec["package"] = pkg["id"]
-        rec.pop("batch", None)
-        rec.pop("serving", None)
-        save_state(state, args.state)
-        print(f"  package {pkg['id']} building ...")
-    if pkg["status"] != "ready":
-        wait_for(agents_url(f"packages/{rec['package']}"), "ready", "building", 900)
+    # A failed package never becomes ready: it is deleted and built again, once.
+    for attempt in range(2):
+        pkg = alive(agents_url(f"packages/{rec['package']}")) if rec.get("package") else None
+        if not pkg or pkg["status"] not in ("ready", "building"):
+            if pkg:                                # failed: don't strand it
+                request("DELETE", agents_url(f"packages/{pkg['id']}"), raw=True, allow_status=True)
+            pkg = request("POST", agents_url("packages"), package_body(rec["blueprint"], key))
+            rec["package"] = pkg["id"]
+            rec.pop("batch", None)
+            rec.pop("serving", None)
+            save_state(state, args.state)
+            print(f"  package {pkg['id']} building ...")
+        pkg = wait_for(agents_url(f"packages/{rec['package']}"), "ready", "building", 900, exit=False)
+        if pkg["status"] == "ready":
+            break
+        if pkg["status"] != "failed" or attempt:
+            sys.exit(f"{rec['package']} is {pkg['status']}, not ready: {pkg.get('error')}")
+        print(f"  {rec['package']} failed ({pkg.get('error')}): building a new one")
 
     dpl = alive(agents_url(f"deployments/{rec[kind]}")) if rec.get(kind) else None
     if not dpl or dpl["status"] not in ("ready", "deploying"):
@@ -469,9 +481,9 @@ def end(kind: str, obj_id: str) -> bool:
     if status == 404:
         return True
     if status == 200 and kind == "sessions" and obj.get("status") not in TERMINAL:
-        request("POST", agents_url(f"sessions/{obj_id}/cancel"), {}, allow_status=True)
+        request("POST", agents_url(f"sessions/{obj_id}/cancel"), {}, allow_status=True, idempotent=True)
     if status == 200 and kind == "deployments" and obj.get("status") not in ("stopped", "failed"):
-        request("POST", agents_url(f"deployments/{obj_id}/stop"), {}, allow_status=True)
+        request("POST", agents_url(f"deployments/{obj_id}/stop"), {}, allow_status=True, idempotent=True)
     status, _ = request("DELETE", agents_url(f"{kind}/{obj_id}"), raw=True, allow_status=True)
     return 200 <= status < 300 or status == 404
 
@@ -722,8 +734,8 @@ def output_path(args, video: str) -> str:
     return f"{stem}-{os.path.splitext(os.path.basename(video))[0]}{ext or '.json'}"
 
 
-def check_manual(path: str, args) -> None:
-    """Print the manual, warn on zero steps, and score it if asked."""
+def check_manual(path: str, args) -> int:
+    """Print the manual, warn on zero steps, and score it if asked. Returns the step count."""
     steps = load_manual(path)
     if not steps:
         # A session can complete with results: [] — no error, no failed status,
@@ -735,6 +747,7 @@ def check_manual(path: str, args) -> None:
     show(path)
     if args.reference:
         score(path, args.reference, args.keywords)
+    return len(steps)
 
 
 def run_batch(values: dict, args, state: dict) -> int:
@@ -759,9 +772,8 @@ def run_batch(values: dict, args, state: dict) -> int:
             return 130
         print(f"\nsession {verdict}")
         saved = fetch_results(session_id, output_path(args, video))
-        if saved:
-            check_manual(saved, args)
-        if verdict != "completed":
+        steps = check_manual(saved, args) if saved else 0
+        if verdict != "completed" or not steps:       # `completed` does not mean a manual
             failed += 1
             print(f"session {verdict} — {agents_url(f'sessions/{session_id}/events')}")
     return 1 if failed else 0
@@ -806,7 +818,8 @@ def run_serving(values: dict, args, state: dict) -> int:
             with open(out, "w") as fh:
                 json.dump({"id": os.path.splitext(os.path.basename(video))[0], "results": rows}, fh)
             print(f"  saved {out}")
-            check_manual(out, args)
+            if not check_manual(out, args):
+                failed += 1
     except SessionGone as e:
         print(f"STOPPED: the session no longer answers ({e}). Run again to start a new one.")
         failed += 1

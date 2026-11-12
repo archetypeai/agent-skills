@@ -427,9 +427,11 @@ class TestRequestShapes(unittest.TestCase):
 class FakeAPI:
     """Stands in for request(): an in-memory platform that records every call."""
 
-    def __init__(self, deployment_status="ready"):
+    def __init__(self, deployment_status="ready", package_fails=0, foreign_blueprint=False):
         self.calls, self.objs, self.n = [], {}, 0
         self.deployment_status = deployment_status
+        self.package_fails = package_fails          # how many builds end `failed`
+        self.foreign_blueprint = foreign_blueprint  # the key filter returns another key
 
     def _new(self, prefix, **fields):
         self.n += 1
@@ -437,7 +439,8 @@ class FakeAPI:
         self.objs[obj["id"]] = obj
         return obj
 
-    def __call__(self, method, url, body=None, *, raw=False, allow_status=False, timeout=120):
+    def __call__(self, method, url, body=None, *, raw=False, allow_status=False, timeout=120,
+                 idempotent=None):
         path = url.split("/api", 1)[1]
         self.calls.append((method, path, body))
         code, out = self.route(method, path, body)
@@ -453,7 +456,8 @@ class FakeAPI:
         if method == "POST" and path == "/projects":
             return 201, self._new("prj")
         if method == "GET" and path.startswith("/agents/blueprints?"):
-            return 200, {"data": []}
+            return 200, {"data": [{"id": "blp_other", "blueprint_key": "someone-else"}]
+                         if self.foreign_blueprint else []}
         if method == "POST" and path.endswith("/copy"):
             return 201, self._new("blp")
         if method == "POST" and path == "/agents/packages":
@@ -480,7 +484,8 @@ class FakeAPI:
             # Whatever was building or deploying is ready by the next look.
             status = obj.get("status")
             if status == "building":
-                obj["status"] = "ready"
+                obj["status"] = "failed" if self.package_fails else "ready"
+                self.package_fails -= bool(self.package_fails)
             elif status == "deploying":
                 obj["status"] = self.deployment_status
             elif status == "pending":
@@ -563,6 +568,41 @@ class TestLifecycle(unittest.TestCase):
         n = len(api.posts())
         mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
         self.assertEqual(len(api.posts()), n)
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        api = self.fake(package_fails=1)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertEqual(api.posts().count("/agents/packages"), 2)
+        self.assertEqual([p for m, p, _ in api.calls if m == "DELETE"], ["/agents/packages/pkg_3"])
+        self.assertEqual(json.load(open(self.args.state))["settings"][key]["package"], rec["package"])
+
+    def test_a_package_that_fails_twice_stops(self):
+        api = self.fake(package_fails=2)
+        with self.assertRaises(SystemExit):
+            mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertEqual(api.posts().count("/agents/packages"), 2)
+
+    def test_a_copy_under_another_key_is_not_reused(self):
+        api = self.fake(foreign_blueprint=True)
+        key, rec = mga.ensure_deployment(self.VALUES, "batch", self.args, mga.load_state(self.args.state))
+        self.assertIn("/agents/blueprints/mga/copy", api.posts())
+        self.assertNotEqual(rec["blueprint"], "blp_other")
+
+    def test_only_safe_calls_are_retried(self):
+        """A create POST is sent once; GET, DELETE and an idempotent POST retry a 503."""
+        import urllib.error
+        from unittest import mock
+        calls = []
+
+        def unavailable(req, timeout=None):
+            calls.append(req.get_method())
+            raise urllib.error.HTTPError(req.full_url, 503, "unavailable", {}, io.BytesIO(b""))
+        with mock.patch.object(mga.urllib.request, "urlopen", unavailable):
+            for method, kw in (("POST", {}), ("GET", {}), ("POST", {"idempotent": True})):
+                calls.clear()
+                self.assertEqual(mga.request(method, "https://x/api/agents/packages", {} if method == "POST"
+                                             else None, allow_status=True, **kw)[0], 503)
+                self.assertEqual(len(calls), 1 if (method, kw) == ("POST", {}) else 5)
 
     def test_state_from_another_deployment_is_refused(self):
         json.dump({"endpoint": "https://elsewhere.example"}, open(self.args.state, "w"))
