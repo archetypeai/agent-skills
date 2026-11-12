@@ -86,7 +86,7 @@ inputs abort and why only one feature mode is reachable.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), stdlib only, on Path 2's HTTP helper | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | **on packages, deployments and sessions: verified on dev, 2026-11-04**; production doesn't serve `playground-ad` or sessions yet (the bundle version was verified there) | **on packages, deployments and sessions: verified on dev, 2026-10-30**; production doesn't serve deployments and sessions yet (the bundle version was verified there, 2026-10-28/29) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on packages, deployments and sessions: verified on dev, 2026-10-30**; production doesn't serve deployments and sessions yet (the bundle version was verified there, 2026-10-28/29) |
 
 The demo detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -99,12 +99,12 @@ output CSV is the same, so the output schema, the score and the pitfalls below a
 
 # Path 1 — Run the platform's demo blueprint
 
-> **Status: on projects, packages, deployments and sessions, verified on dev (2026-11-04).**
-> The pre-packaged "AD Quick Start" bundles are gone with the bundle API: the platform
-> publishes the same detector as a demo blueprint, `playground-ad`, which you copy into a
-> project and run. Production doesn't serve it, nor deployments and sessions, yet. Check
-> your deployment first: `GET /agents/blueprints/playground-ad` answers 200, and `GET
-> /agents/sessions?limit=1` 200, not 404.
+> **Status: on projects, packages, deployments and sessions, verified on production
+> (2026-11-12): the same labels and detection as below, scores within 4e-5.** The
+> pre-packaged "AD Quick Start" bundles are gone with the bundle API: the platform
+> publishes the same detector as a demo blueprint, `playground-ad` ("Playground: AD
+> bearing"), which you copy into a project and run. To check another deployment: `GET
+> /agents/blueprints/playground-ad` answers 200, and `GET /agents/sessions?limit=1` 200, not 404.
 
 ## Endpoints (both paths)
 
@@ -142,6 +142,10 @@ project ── copy of playground-ad ── package ── batch deployment ─�
 
 [`references/run_ad_agent.py`](references/run_ad_agent.py) does all of it, then deletes the
 session, deployment and package and keeps the project and its copy for the next run.
+
+The `curl` calls below take `ATAI_API_ENDPOINT` as the bare root and add `/api`
+themselves. If yours ends in `/api`, use `${ATAI_API_ENDPOINT%/api}` in its place, or every
+call 404s at `/api/api`.
 
 ### 1. Upload the input CSV
 
@@ -413,8 +417,8 @@ Verified 2026-08-11 → 2026-08-20, updated 2026-10-13. Path 2's own measurement
   the session's events, not the clock. The bundled 240-window slice, run through
   the two former quick-start bundles minutes apart: **33 s end-to-end** (job time
   18 s) with a clear queue vs **~9 min wall-clock** for the identical input
-  when scheduling was contended; through `playground-ad` on dev (2026-11-04), 32–43 s
-  from packaging to a completed session. Other tenants' jobs aren't visible to you, so
+  when scheduling was contended; through `playground-ad`, 32–43 s
+  from packaging to a completed session (32 s on production, 2026-11-12). Other tenants' jobs aren't visible to you, so
   the session's own events are the only queue-state signal. Do not read a
   fast run as a broken one — see the `/results` check above.
 - **Prefer sequential runs.** Whether concurrent runs queue depends on what
@@ -435,8 +439,9 @@ Verified 2026-08-11 → 2026-08-20, updated 2026-10-13. Path 2's own measurement
 
 `python3 run_ad_agent.py` with no arguments — upload → copy `playground-ad` into the
 project (once) → package → batch deployment → session → download → score → delete the
-session, deployment and package — on the bundled 120-snapshot transition slice, on dev,
-2026-11-04 (three runs, 32–43 s each from packaging):
+session, deployment and package — on the bundled 120-snapshot transition slice, on
+production, 2026-11-12 (32 s from packaging; the same labels and detection as three dev runs
+of 2026-11-04, scores within 4e-5):
 
 ```
 windows           240   invalid 0
@@ -471,10 +476,10 @@ step 5 for the shape).
 # No dependencies: the runner is stdlib only (Python 3.11+).
 # ATAI_API_KEY + ATAI_API_ENDPOINT: from the environment, else the nearest .env from the
 # folder you run in upwards (one at the repo root serves every skill; it is gitignored).
-# The bare deployment root; the runner appends /api itself:
+# The deployment root, with or without /api; the runner adds /api if it is missing:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://platform.dev.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 R=skills/atai-anomaly-discovery-agent/references

@@ -36,8 +36,8 @@ import urllib.request
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "ad_lifecycle"))
 from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
-                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
-                       result_url, upload_file)
+                       lifecycle_url, list_all, load_dotenv, open_session, package_ready, project_url,
+                       request, result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -63,7 +63,7 @@ SUSTAIN = 3
 
 def project_id(name: str = PROJECT) -> str:
     """Your project of that name, created on first use."""
-    found = [p for p in request("GET", f"{project_url()}?limit=1000")["data"] if p["name"] == name]
+    found = [p for p in list_all(project_url()) if p["name"] == name]
     if found:
         return found[0]["id"]
     pid = request("POST", project_url(), {"name": name})["id"]
@@ -74,7 +74,8 @@ def project_id(name: str = PROJECT) -> str:
 def demo_copy(pid: str) -> dict:
     """The project's copy of the demo blueprint, copied on first use. Copying needs only the
     right to modify the project. A key in a project resolves only with ?project_id=."""
-    found = request("GET", f"{agents()}/blueprints?project_id={pid}&key={COPY_KEY}")["data"]
+    found = [bp for bp in request("GET", f"{agents()}/blueprints?project_id={pid}&key={COPY_KEY}")["data"]
+             if bp["blueprint_key"] == COPY_KEY]
     if found:
         return found[0]
     bp = request("POST", f"{agents()}/blueprints/{DEMO_BLUEPRINT}/copy",
@@ -86,7 +87,11 @@ def demo_copy(pid: str) -> dict:
 def blueprint_threshold(blueprint_id: str) -> float:
     """The threshold the blueprint labels at, for scoring the same way client-side."""
     doc = request("GET", f"{agents()}/blueprints/{blueprint_id}").get("document") or {}
-    return float((doc.get("values") or {}).get("threshold") or DEFAULT_THRESHOLD)
+    value = (doc.get("values") or {}).get("threshold")
+    if value is None:
+        print(f"warning: {blueprint_id} names no threshold; scoring at the demo's {DEFAULT_THRESHOLD}")
+        return DEFAULT_THRESHOLD
+    return float(value)
 
 
 def upload(path: str) -> str:
@@ -350,11 +355,12 @@ def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: st
     pkg = dpl = ses = None
     try:
         pkg = create_package(blueprint_id, name)
+        print(f"package {pkg['id']}")              # each id printed before waiting on it
         package_ready(pkg["id"])
-        print(f"package {pkg['id']} ready ({time.time() - t0:.0f} s)")
+        print(f"  ready ({time.time() - t0:.0f} s)")
         dpl = deploy(pkg["id"], "batch")
+        print(f"batch deployment {dpl['id']}")
         deployment_ready(dpl["id"])
-        print(f"batch deployment {dpl['id']} ready")
         ses = open_session(dpl["id"], file_id)
         print(f"session {ses['id']}")
         done = poll(ses["id"])
@@ -365,10 +371,20 @@ def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: st
         print(f"  completed ({time.time() - t0:.0f} s from packaging)")
         return download_results(ses["id"], out_path, input_csv)
     finally:
+        deleted, left = [], []
         for kind, obj in (("sessions", ses), ("deployments", dpl), ("packages", pkg)):
-            if obj:
+            if not obj:
+                continue
+            try:                                   # each tried even when one before it fails
                 end(kind, obj["id"])
-        print("deleted the session, deployment and package (the project and blueprint stay)")
+                deleted.append(obj["id"])
+            except (RuntimeError, SystemExit) as e:
+                left.append(obj["id"])
+                print(f"could not delete {obj['id']}: {str(e).splitlines()[0][:200]}")
+        if deleted:
+            print(f"deleted {', '.join(deleted)} (the project and blueprint stay)")
+        if left:
+            print(f"left on the platform: {', '.join(left)}; delete them with DELETE /agents/<kind>/<id>")
 
 
 def main() -> None:
@@ -394,7 +410,7 @@ def main() -> None:
     labels = args.labels or args.csv.rsplit(".", 1)[0] + "_labels.csv"
 
     if args.score_only:
-        threshold = args.threshold or DEFAULT_THRESHOLD
+        threshold = DEFAULT_THRESHOLD if args.threshold is None else args.threshold
         report(score(args.score_only, labels, threshold), threshold)
         return
 
@@ -413,7 +429,7 @@ def main() -> None:
         pid = project_id(args.project)
         blueprint_id = demo_copy(pid)["id"]
         print(f"blueprint {blueprint_id} ({COPY_KEY}, the copy of {DEMO_BLUEPRINT} in {pid})")
-    threshold = args.threshold or blueprint_threshold(blueprint_id)
+    threshold = blueprint_threshold(blueprint_id) if args.threshold is None else args.threshold
 
     print(f"uploading {args.csv} ({size_mb:.1f} MiB)")
     file_id = upload(args.csv)
