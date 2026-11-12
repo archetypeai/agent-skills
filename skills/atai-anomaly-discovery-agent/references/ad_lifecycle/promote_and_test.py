@@ -3,9 +3,10 @@
 
 1. Promote the best completed trial across optimize.py's runs (or --trial):
    POST /agents/optimizations/{opt}/trials/{trial}/promote under the platform's key,
-   `ad-otr_<trial id>` (--blueprint-key chooses one, which needs the admin role). The
-   blueprint carries the fitted detector (a registry artifact, `aar_…`) and pins the
-   trial's values.
+   `<copy key>-otr_<trial id>`, e.g. `ad-sample-base-otr_…` (--blueprint-key chooses one,
+   which can need the admin role). The
+   blueprint lands in the optimization's project, carries the fitted detector (a registry
+   artifact, `aar_…`) and pins the trial's values.
 2. Test once: POST /agents/evals with the blueprint and every test file, at the trial's own
    threshold and step (an eval takes no value overrides), with predictions.
 3. Check the predictions before reporting: each window's expected label equals its
@@ -102,7 +103,7 @@ def main(argv=None):
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="ad")
     ap.add_argument("--trial", help="promote this trial instead of the best")
-    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <blueprint>-otr_<trial id>")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <copy key>-otr_<trial id>")
     add_background_flag(ap, "{out}/test.log")
     a = ap.parse_args(argv)
     maybe_detach(a)

@@ -13,7 +13,7 @@ description: >
   recorded incidents to choose settings and test on) and wants to fit, test and deploy
   an AD agent on them (the next step is `atai-anomaly-discovery-agent`, Path 2), or when
   an AD optimization or eval failed or scored oddly. Do NOT use for running the
-  maintained AD Quick Start bundle on one CSV (`atai-anomaly-discovery-agent`, Path 1),
+  platform's AD demo blueprint on one CSV (`atai-anomaly-discovery-agent`, Path 1),
   for labelled operating states (`atai-operational-state-monitoring-agent-data-prep`),
   or for client-side embedding + KNN (`atai-newton-omega-model-data-prep`).
 ---
@@ -50,8 +50,11 @@ generalised; the platform rules in it were measured on the dev deployment (2026-
   suspicious false-alarm rate) and you want to check the role files
 
 **Do not use this skill when:**
-- You only want to run the maintained AD Quick Start bundle on one CSV — that's
+- You only want to run the platform's AD demo blueprint on one CSV — that's
   [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md), Path 1
+- You have no normal reference and no labelled incidents, only unlabeled data to search
+  for what's unusual — use
+  [`atai-label-free-anomaly-discovery-agent-data-prep`](../atai-label-free-anomaly-discovery-agent-data-prep/SKILL.md)
 - Your labels are **operating states** (fill / wash / spin, drilling / tripping) — use
   [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md)
 - Your raw data first needs heavy cleaning (imputing dropouts, diagnosing sensors) — do
@@ -213,7 +216,8 @@ RESULT: PASS, 0 fail(s), 0 warning(s); ready for the AD agent skill (Path 2)
 ```
 
 Then: [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md),
-**Path 2** — Optimize → promote → test once with Evals → deliver → score.
+**Path 2** — Optimize → promote → test once with Evals → deliver → score → serve, and the
+library view for a live app.
 
 ## The rules, and what breaks
 
