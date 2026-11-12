@@ -126,6 +126,8 @@ cp -r skills/* your-project/.claude/skills/
 /atai-anomaly-discovery-agent-data-prep             # Normal-operation recordings -> AD role files, preflighted
 /atai-label-free-anomaly-discovery-agent            # No labels, no reference: what in this batch is unusual, and when
 /atai-label-free-anomaly-discovery-agent-data-prep  # Raw unlabeled CSVs -> files od reads, preflighted
+/atai-omega-encoder-agent                           # Omega embeddings from a deployed agent (batch, serving) + your own detector
+/atai-omega-encoder-agent-data-prep                 # Recordings of a repeated operation -> role files, preflighted
 /atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
 /atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
@@ -185,7 +187,7 @@ Fit (OSM, RED and AD Path 2: your own data):
 A session can report `completed` before its last output file is fully written: check that an
 output reaches its input's end before using it, as the agent skills' runners do.
 
-The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The Model and Integration skills, and the RED, MGA and TVA agent skills, are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), declared in each skill's `references/requirements.txt`. The OSM, AD and Label-Free AD skills (both paths), and RED's Path 2, use a small standard-library HTTP helper of their own instead, since the client doesn't cover projects, packages, deployments and sessions, or the Optimizations, Evals and promote endpoints, yet.
+The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The Model and Integration skills, and the RED, MGA and TVA agent skills, are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), declared in each skill's `references/requirements.txt`. The OSM, AD, Label-Free AD and Omega Encoder skills (every path), and RED's Path 2, use a small standard-library HTTP helper of their own instead, since the client doesn't cover projects, packages, deployments and sessions, or the Optimizations, Evals and promote endpoints, yet.
 
 ## API Base URL
 
