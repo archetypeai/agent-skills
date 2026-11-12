@@ -75,6 +75,9 @@ output is one CSV of per-window predictions.
 - The faults are unnamed or uncharacterized and only normal data exists — RED
   needs a named catalog; flagging everything unusual is
   [`atai-anomaly-discovery-agent`](../atai-anomaly-discovery-agent/SKILL.md)
+- There are no labels and no normal-only reference either, just a batch of data to look
+  through — use
+  [`atai-label-free-anomaly-discovery-agent`](../atai-label-free-anomaly-discovery-agent/SKILL.md)
 - You want per-window embeddings to do ML client-side — use
   [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
 - Your recording still needs gridding, a label mapping, channel triage or role

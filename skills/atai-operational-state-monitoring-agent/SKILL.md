@@ -63,6 +63,7 @@ hard dataset): support@archetypeai.dev.
 **Do not use this skill when:**
 - You want interactive, per-window embeddings to do ML client-side — use [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
 - Your recordings still need resampling, labelling or splitting into role files — use [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) first; for generic cleaning of messy raw data, [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md)
+- Nothing is labelled and you want to know what is unusual in a batch of data — use [`atai-label-free-anomaly-discovery-agent`](../atai-label-free-anomaly-discovery-agent/SKILL.md)
 
 ---
 

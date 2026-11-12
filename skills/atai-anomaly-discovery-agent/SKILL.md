@@ -18,8 +18,10 @@ description: >
   above 1 kHz, what the `ad` blueprint exposes, thresholds as operating points,
   and scoring by detection, delay and false-alarm rate. Do NOT use for
   labelled operating regimes (`atai-operational-state-monitoring-agent`), a
-  *named* recurring fault (`atai-rare-event-detection-agent`), client-side
-  embeddings over `/query` (`atai-newton-omega-model`), or raw-CSV prep
+  *named* recurring fault (`atai-rare-event-detection-agent`), one batch of
+  unlabeled data with no normal reference to fit on, asking only what in it is
+  unusual (`atai-label-free-anomaly-discovery-agent`), client-side embeddings over
+  `/query` (`atai-newton-omega-model`), or raw-CSV prep
   (`atai-newton-omega-model-data-prep`).
 ---
 
@@ -69,6 +71,10 @@ inputs abort and why only one feature mode is reachable.
 - The fault is **named** and a couple of labelled incidents exist — use
   [`atai-rare-event-detection-agent`](../atai-rare-event-detection-agent/SKILL.md).
   AD will flag it, but it cannot tell you *which* fault it is
+- There is **no normal reference to fit on**, only a batch of unlabeled data, and the
+  question is "what in here is unusual?" — use
+  [`atai-label-free-anomaly-discovery-agent`](../atai-label-free-anomaly-discovery-agent/SKILL.md)
+  (the `od` blueprint: fitted on each file at run time, batch only)
 - You want per-window embeddings to do ML client-side — use
   [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
 - Your recordings still need gridding, labelling or splitting into role files — use
