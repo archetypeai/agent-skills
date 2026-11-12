@@ -12,7 +12,7 @@ description: >
   user has labelled time-series recordings and wants to train, test and deploy an
   OSM agent on them (the next step is `atai-operational-state-monitoring-agent`,
   Path 2), or when an OSM optimization or eval failed or silently never started.
-  Do NOT use for running a maintained OSM bundle on a single CSV
+  Do NOT use for running the platform's OSM demo blueprint on a single CSV
   (`atai-operational-state-monitoring-agent`, Path 1), for client-side embedding
   + KNN (`atai-newton-omega-model-data-prep`), or for video / image / text.
 ---
@@ -39,6 +39,9 @@ Everything here is **local and needs no API key**. The contract itself is in
 measured on the dev deployment (2026-09-30) while building the LARCO washing-machine
 examples (the [quickstart](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco-quickstart),
 and the [full example](https://github.com/archetypeai/operational-state-monitoring-agent-example-larco)).
+The examples follow the same rules with their own `prep/` and `fit/` scripts and their own
+manifest (no `states` or `channels`), so their role files are for their scripts, not this
+skill's pair; to run the skills on LARCO, build the role files here from the recordings.
 
 ## When to Apply
 
@@ -50,7 +53,7 @@ and the [full example](https://github.com/archetypeai/operational-state-monitori
   platform time on them
 
 **Do not use this skill when:**
-- You only want to run the maintained Volve bundle on one CSV — that's
+- You only want to run the platform's Volve demo blueprint on one CSV — that's
   [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md), Path 1
 - You're embedding windows yourself over `/query` for a local KNN — use
   [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md)
@@ -228,7 +231,8 @@ Without `--prepared` (e.g. role files unpacked from an archive), the two checks 
 the prepared data are skipped and everything else runs.
 
 Then: [`atai-operational-state-monitoring-agent`](../atai-operational-state-monitoring-agent/SKILL.md),
-**Path 2** — Optimize → promote → test once with Evals → deliver → score.
+**Path 2** — Optimize → promote → test once with Evals → deliver → score → serve, and the
+library view for a live app.
 
 ## The rules, and what breaks
 

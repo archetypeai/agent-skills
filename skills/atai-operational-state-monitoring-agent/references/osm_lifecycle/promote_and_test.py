@@ -5,8 +5,9 @@
      a blueprint with its setting and fitted kNN attached: a reusable model, no S3, no
      classifier artifact to build. The best completed trial by validation macro-F1 is
      used (from <out>/optimize_*.json) unless --trial names one. The blueprint is keyed by
-     the platform, `osm-otr_<trial id>`, so a rerun with the same setting never reuses an
-     older model; --blueprint-key chooses the key, which needs the admin role.
+     the platform, `<copy key>-otr_<trial id>` (e.g. `osm-sample-base-otr_…`), so a rerun with
+     the same setting never reuses an older model; --blueprint-key chooses the key, which can
+     need the admin role.
   2. Test: one eval (POST /api/agents/evals) over every test file, each window paired with
      the `label` at its last row. The report is pooled over the files.
 
@@ -45,7 +46,8 @@ def best_trial(runs, trial_id=None):
 
 def promote(opt, trial, name, key=None):
     if trial.get("promoted_blueprint"):                             # promoted on an earlier, interrupted run
-        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['blueprint_key']}")
+        # by id: a key registered in a project resolves only with ?project_id=
+        return request("GET", f"{agents()}/blueprints/{trial['promoted_blueprint']['id']}")
     w, st, k, metric, weights = trial_setting(trial)
     url = f"{agents()}/optimizations/{opt}/trials/{trial['id']}/promote"
     body = {"name": f"{name} OSM (w{w}, s{st}, {metric}, k{k}, {weights})",
@@ -61,7 +63,7 @@ def main():
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="osm", help="the blueprint's name and the upload and eval names start with this")
-    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <blueprint>-otr_<trial id>")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <copy key>-otr_<trial id>")
     ap.add_argument("--trial", metavar="OTR_ID", help="promote this trial instead of the best one")
     ap.add_argument("--upload-jobs", type=int, default=3)
     add_background_flag(ap, default_log="{out}/test.log")
