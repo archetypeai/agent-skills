@@ -9,9 +9,9 @@ description: >
   (a few labelled incidents of a named event for training, the next ones for
   validation and test, a delivery) fit the class prototypes and choose the window
   and distance with the Optimizations API, promote the best trial to a blueprint,
-  test it once with the Evals API, deliver it as a bundle, score each incident
-  (detected, how soon) and the false alarms, then serve it a window at a time
-  over `/query` (agent serving) and check it against the delivery, and recompute
+  test it once with the Evals API, deliver it through a package and batch sessions,
+  score each incident (detected, how soon) and the false alarms, then serve it a
+  window at a time from a serving deployment and check it against the delivery, and recompute
   the training windows' embeddings as a 2-D map for a live app. Use when the user wants server-side
   detection of a *named* rare event recurring — equipment breakdowns, process
   excursions — from a handful of labelled examples. Covers the output schema,
@@ -92,11 +92,11 @@ per-window predictions.
 | | **Path 1 — run the demo blueprint** | **Path 2 — build a RED agent on your data** |
 |---|---|---|
 | you have | a prepared CSV (the pump sample, or data like it) | a labelled recording of **your** asset with a few incidents of a named event |
-| you get | per-window predictions and embeddings from a pump-breakdown classifier the platform fitted on **the sample's pump** | your own blueprint and bundle: prototypes fitted on your incidents, window and distance chosen on the next ones, a test score and a delivery score |
-| APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
+| you get | per-window predictions and embeddings from a pump-breakdown classifier the platform fitted on **the sample's pump** | your own blueprint and package: prototypes fitted on your incidents, window and distance chosen on the next ones, a test score and a delivery score |
+| APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** (batch and serving) |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), stdlib only, on Path 2's HTTP helper | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30–40 s on a clear queue | ~6 min on the sample; longer with load |
-| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on projects, packages, deployments and sessions: verified on production, 2026-11-12** (first on dev, 2026-10-13) |
 
 The demo classifier holds one pump's breakdowns, so running your own asset through it is
 a transfer test, not a deployment: for your own asset, take Path 2. Both paths' outputs
@@ -434,16 +434,17 @@ runs the whole build, including the channel-leakage audits this data requires.
 
 # Path 2 — Build a RED agent on your own data
 
-> **Status: verified end to end on production (2026-10-28; agent serving 2026-10-29)**,
-> first on dev (2026-10-13, where the `red` blueprint became optimizable on 2026-10-12). Built
+> **Status: on projects, packages, deployments and sessions, verified end to end on
+> production (2026-11-12, a member key in a new project: the numbers below)**, first on dev
+> (2026-10-13, where the `red` blueprint became optimizable on 2026-10-12). Built
 > on the Kaggle pump:
 > [rare-event-detection-agent-example-pump-quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
 > (the whole lifecycle in about 10 minutes, reproduced byte for byte by a second run from
 > scratch). The scripts use a small stdlib HTTP helper
 > ([`atai_http.py`](references/red_lifecycle/atai_http.py), shared with the OSM and AD
 > skills' Path 2) because the official client doesn't cover these APIs yet.
->
-> **PROD-PENDING**
+> Production no longer serves bundles and agent instances. To check another deployment:
+> `GET /agents/sessions?limit=1` answers 200, not 404.
 
 ```
 role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver ──────────────────► 4 score
@@ -544,7 +545,7 @@ with `window_size` 64 and `step_size` 1 pinned.
   On the pump, a 24-trial random search over windows 16–84 took six times as long as the
   12-point grid and did not beat it.
 
-**Expect, on the sample** (4 trials, 2.5 min on dev):
+**Expect, on the sample** (4 trials, 3 min on production, 2026-11-12):
 
 ```
 otr_…  completed {"metric": "dot"}     event F1 0.8677  macro-F1 0.9215  recall 0.924  precision 0.818  windows 8,925
@@ -574,7 +575,7 @@ python promote_and_test.py --roles $R --out out --name red-sample
    design does: each window by the majority of its rows, detected or missed, how soon,
    and false alarms on windows with no event row.
 
-**Expect, on the sample** (2 min on dev):
+**Expect, on the sample** (1.5 min on production, 2026-11-12):
 
 ```
 test, 1 files (window 64, step 1, dot; 0 abstained)
@@ -668,7 +669,7 @@ python score.py --roles $R --out out
 Offline, against `labels/`: per file, event precision and recall (each window by the
 majority of its rows), each incident detected or missed and the delay in rows, false
 alarms on windows with no event row (and, on a tail file of new operation, per day); then
-pooled. **Expect, on the sample** (1 min of agent run on dev):
+pooled. **Expect, on the sample** (1 min of session run on production, 2026-11-12):
 
 ```
 delivery/inc04.csv: 2,591 windows scored (0 invalid)
@@ -721,12 +722,12 @@ worker until it is stopped; free-trial accounts serve on CPU only, so answers ca
    SIGTERM and SIGHUP included); each id goes to `out/serve_state.json` before the script
    waits on it, for `cleanup.py`.
 
-**Expect, on the sample** (production through a bundle, 2026-10-29; ~7 min):
+**Expect, on the sample** (production, 2026-11-12; ~6 min):
 
 ```
-served 846 windows of 1 file(s) in 846 queries, 423 s
+served 846 windows of 1 file(s) in 846 queries, 361 s
   against the delivery (batch): predicted_state identical 846/846, probabilities within 1e-4 846/846 (max difference 0.0e+00); invalid 0
-  latency per query: median 467 ms, p95 687 ms, max 957 ms
+  latency per query: median 362 ms, p95 566 ms, max 929 ms
   inc04 (windows ending on rows 904-1749): served +16 rows, 10 false alarm(s); batch +16 rows, 10 false alarm(s)
   -> out/serving/inc04_wpq1.csv / .json
 ```
@@ -739,8 +740,8 @@ and #7, 1,162 windows): every `predicted_state` and every probability identical 
 difference 0), the same detections (+54 and +60 rows) and the same 45 false alarms, as on Dev
 and Staging before. **Served is batch, to the bit:** the head is
 nearest-prototype, so its probabilities are 0 or 1, and the tiny float differences between
-served and batch embeddings change nothing. **~0.45 s median per query** (sample: 467 ms,
-p95 0.7 s, worst 1.0 s; the quickstart 436 ms), so a replay runs at ~2 rows a second and
+served and batch embeddings change nothing. **~0.35–0.45 s median per query** (sample: 362 ms on
+production, p95 0.6 s, worst 0.9 s; the quickstart 350 ms), so a replay runs at ~2 rows a second and
 1,162 windows take about 10 min. Served from Step 6's embeddings blueprint, each answer also
 carries the window's embeddings (10 × 768; about 0.3 s a query through a bundle): what a live
 monitor needs to place each window among the training windows.
@@ -799,7 +800,7 @@ the outputs were made by. If a batch session hits `DeadlineExceeded`, a plain re
 again: rerun with a larger `--step`, or `--serving`. It is a drawing, not the classifier: the prototypes are compared in every
 dimension.
 
-**Expect, on the sample** (dev, 2026-11-04): the embeddings blueprint's 1-trial optimization
+**Expect, on the sample** (production, 2026-11-12): the embeddings blueprint's 1-trial optimization
 in 2 min, then `library: 3,016 windows of 12,059 (normal 2,033, pump_breakdown 983), window
 64, step 4`, PCA 1–2 explaining 31.4% and 4.4%; batch in 2.5 min, 3 sessions at once.
 `--serving` gave the same 3,016 windows, timestamps and predicted states in 15 min, each
