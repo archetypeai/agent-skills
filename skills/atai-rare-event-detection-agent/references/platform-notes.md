@@ -3,9 +3,9 @@
 What Path 2 relies on, measured on the dev deployment on 2026-10-13 (agent serving and
 embeddings 2026-10-15 and 16) while building the
 [RED pump quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
-and its full example. RED became optimizable on Dev with the 2026-10-12 `red` re-seed
-(atai_core #7197, "Adds metrics to RED blueprint"); check another deployment before relying
-on it there.
+and its full example. RED became optimizable with the 2026-10-12 `red` re-seed, which added metrics to the
+blueprint; checked again on production through packages, deployments and sessions on
+2026-11-12.
 
 ## The re-seed, and the bundles that predate it
 

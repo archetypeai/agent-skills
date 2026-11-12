@@ -19,7 +19,8 @@ description: >
   re-seed, bringing your own classifier, and incident-level vs window-level
   scoring. Do NOT use for classifying every operating regime
   (`atai-operational-state-monitoring-agent`), for unnamed anomalies with no
-  labelled examples (`atai-anomaly-discovery-agent`), for client-side embedding
+  labelled examples (`atai-anomaly-discovery-agent`, or `atai-label-free-anomaly-discovery-agent`
+  with no normal reference either), for client-side embedding
   + KNN over `/query` (`atai-newton-omega-model`), or for preparing a labelled
   recording (`atai-rare-event-detection-agent-data-prep`).
 ---
@@ -95,7 +96,7 @@ per-window predictions.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **Optimizations**, **promote**, **Evals**, bundles, instances, **agent serving** |
 | scripts | [`references/run_red_agent.py`](references/run_red_agent.py), stdlib only, on Path 2's HTTP helper | [`references/red_lifecycle/`](references/red_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30–40 s on a clear queue | ~6 min on the sample; longer with load |
-| status | **on packages, deployments and sessions: verified on dev, 2026-11-04**; production doesn't serve `playground-red` or sessions yet (the bundle version was verified there) | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **verified on production, 2026-10-28; agent serving 2026-10-29** (first on dev, 2026-10-13) |
 
 The demo classifier holds one pump's breakdowns, so running your own asset through it is
 a transfer test, not a deployment: for your own asset, take Path 2. Both paths' outputs
@@ -107,12 +108,13 @@ share one schema, so the output schema and scoring below apply to both. Worked e
 
 # Path 1 — Run the platform's demo blueprint
 
-> **Status: on projects, packages, deployments and sessions, verified on dev (2026-11-04).**
-> The pre-packaged "RED Quick Start" bundles are gone with the bundle API: the platform
-> publishes a pump-breakdown classifier as a demo blueprint, `playground-red`, which you
-> copy into a project and run. Production doesn't serve it, nor deployments and sessions,
-> yet. Check your deployment first: `GET /agents/blueprints/playground-red` answers 200,
-> and `GET /agents/sessions?limit=1` 200, not 404.
+> **Status: on projects, packages, deployments and sessions, verified on production
+> (2026-11-12): all 43 windows right, the incident detected 103 samples after onset, as
+> below.** The pre-packaged "RED Quick Start" bundles are gone with the bundle API: the
+> platform publishes a pump-breakdown classifier as a demo blueprint, `playground-red`
+> ("Playground: RED pump"), which you copy into a project and run. To check another
+> deployment: `GET /agents/blueprints/playground-red` answers 200, and
+> `GET /agents/sessions?limit=1` 200, not 404.
 
 ## Endpoints
 
@@ -149,6 +151,10 @@ project ── copy of playground-red ── package ── batch deployment ─
 
 [`references/run_red_agent.py`](references/run_red_agent.py) does all of it, then deletes the
 session, deployment and package and keeps the project and its copy for the next run.
+
+The `curl` calls below take `ATAI_API_ENDPOINT` as the bare root and add `/api`
+themselves. If yours ends in `/api`, use `${ATAI_API_ENDPOINT%/api}` in its place, or every
+call 404s at `/api/api`.
 
 ### 1. Upload the input CSV
 
@@ -364,7 +370,8 @@ Two structural facts follow from majority labelling:
   former bundles did run to run and across deployments. The model is not re-fit per run.
 - **Runtime is dominated by worker contention, not window count.** With a
   clear queue, the sample slice ran in **32 s** from packaging to a completed session
-  through `playground-red` (43 windows; dev, 2026-11-04), and in **84–109 s** through the
+  through `playground-red` (43 windows; dev, 2026-11-04; 103 s on production, 2026-11-12),
+  and in **84–109 s** through the
   former bundles at 8,735 windows (~100 win/s). Under load, the same platform has run
   at ~2.2 win/s — a 12,059-window run once took ~90 min, and two contended
   537-window runs took ~2.5 h. Other tenants' jobs aren't visible to you, so
@@ -386,10 +393,10 @@ Two structural facts follow from majority labelling:
 # No dependencies: the runner is stdlib only (Python 3.11+).
 # ATAI_API_KEY + ATAI_API_ENDPOINT: from the environment, else the nearest .env from the
 # folder you run in upwards (one at the repo root serves every skill; it is gitignored).
-# The bare deployment root; the runner appends /api itself:
+# The deployment root, with or without /api; the runner adds /api if it is missing:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://platform.dev.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 R=skills/atai-rare-event-detection-agent/references
@@ -436,11 +443,7 @@ runs the whole build, including the channel-leakage audits this data requires.
 > ([`atai_http.py`](references/red_lifecycle/atai_http.py), shared with the OSM and AD
 > skills' Path 2) because the official client doesn't cover these APIs yet.
 >
-> **On projects, packages, deployments and sessions: verified on dev (2026-11-04, a member
-> key in a new project; see each step).** Dev and staging serve deployments and sessions (staging since 2026-11-09);
-> production and the free trial still run bundles and agent instances until their
-> next platform release, and the production numbers below were taken through bundles. Check
-> first: `GET /agents/sessions?limit=1` answers 200, not 404.
+> **PROD-PENDING**
 
 ```
 role files ──► 1 Optimize ──► 2 promote ──► 2 test once (Evals) ──► 3 deliver ──────────────────► 4 score
