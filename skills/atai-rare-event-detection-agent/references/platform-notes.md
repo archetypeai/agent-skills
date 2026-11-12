@@ -3,9 +3,9 @@
 What Path 2 relies on, measured on the dev deployment on 2026-10-13 (agent serving and
 embeddings 2026-10-15 and 16) while building the
 [RED pump quickstart](https://github.com/archetypeai/rare-event-detection-agent-example-pump-quickstart)
-and its full example. RED became optimizable on Dev with the 2026-10-12 `red` re-seed
-(atai_core #7197, "Adds metrics to RED blueprint"); check another deployment before relying
-on it there.
+and its full example. RED became optimizable with the 2026-10-12 `red` re-seed, which added metrics to the
+blueprint; checked again on production through packages, deployments and sessions on
+2026-11-12.
 
 ## The re-seed, and the bundles that predate it
 
@@ -63,7 +63,8 @@ on it there.
 - **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
   from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
   of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
-  projects it can't see). Without one the platform keys the blueprint `red-otr_<trial id>`, and
+  projects it can't see). Without one the platform keys the blueprint `<copy key>-otr_<trial id>`
+  (`red-sample-base-otr_…` for the sample), and
   the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
   `promote_and_test.py` sends no key unless `--blueprint-key` is given.
 - **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
@@ -81,7 +82,24 @@ on it there.
   `predicted`. Windows tile each file from row 0 at `step_size`. Until 2026-10-20 the
   records carried `gold`, `abstained` and a `row_index` instead.
 
-## Bundles and agent runs
+## Packages, deployments and sessions
+
+- **One project holds everything:** an optimization takes its project from the blueprint it
+  searches, so `optimize.py` copies `red` into the project first (`POST
+  /agents/blueprints/red/copy`); promoted blueprints, packages, deployments and sessions follow.
+- **A package carries no values.** It runs the promoted blueprint as it is: the trial's
+  window and step, so delivery and serving are at the trial's step (a bundle could set
+  `step_size: 1`). An output such as `output_embeddings` needs a blueprint of its own (a
+  1-trial optimization at the trial's values plus the switch, promoted).
+- **A batch deployment is ready at once; a serving one in seconds,** and it holds a serving
+  worker until stopped.
+- **Delete in order:** sessions, then the deployment (stopped), then the package; each holds
+  the next. `GET /agents/deployments?package_id=` and `GET /agents/sessions?deployment_id=`
+  find what a rerun replaced; an unknown filter parameter is ignored, not rejected.
+- **Record an id before waiting on it:** a package that fails to build stays `failed`, and
+  only its id lets you delete it.
+
+## Bundles and agent runs (before packages and sessions)
 
 - **A bundle on a promoted blueprint needs only `step_size`** (bundle values override the
   blueprint's); the prototypes, window, metric, `events` and `background` come with it.
@@ -107,7 +125,7 @@ on it there.
   32.5% and 4.0% of the variance and the class means sit where a local encoder's
   prototypes do (to within 0.1 on PC 1).
 
-## Agent serving (production 2026-10-29; first on Dev 2026-10-15 and 16, Staging 2026-10-23)
+## Agent serving (through bundles: production 2026-10-29; first on Dev 2026-10-15 and 16, Staging 2026-10-23)
 
 - **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
   it is cancelled, or released after 20 minutes without a query; a query to a released agent

@@ -4,9 +4,9 @@
 1. Promote the best completed trial across optimize.py's runs (a tie goes to the
    optimization that tried more points; --trial picks one): POST
    /agents/optimizations/{opt}/trials/{trial}/promote under the platform's key,
-   `red-otr_<trial id>` (--blueprint-key chooses one, which needs the admin role). The
-   blueprint pins the trial's values, `events` and `background`, and carries the fitted
-   prototypes as a registry artifact (`aar_…`).
+   `<base key>-otr_<trial id>` (--blueprint-key chooses one, which needs the admin role).
+   The blueprint lands in the optimization's project, pins the trial's values, `events`
+   and `background`, and carries the fitted prototypes as a registry artifact (`aar_…`).
 2. Test once: POST /agents/evals with the blueprint and every test file, with predictions.
    An eval takes no value overrides: it runs at the trial's window and step.
 3. Check before reporting. The platform scores each row once: a window answers for the
@@ -245,7 +245,7 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="red")
-    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <blueprint>-otr_<trial id>")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <copy key>-otr_<trial id>")
     ap.add_argument("--trial", help="promote this trial instead of the best")
     ap.add_argument("--max-windows", type=int, default=0,
                     help="test in pieces of at most this many windows, one eval each (0: one eval)")
