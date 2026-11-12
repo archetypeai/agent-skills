@@ -142,7 +142,7 @@ def lifecycle_url(kind, obj_id=""):
     return f"{agents()}/{kind}" + (f"/{obj_id}" if obj_id else "")
 
 
-def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3):
+def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3, exit=True):
     """Poll a package, deployment or session while its status is `waiting`; exit unless it
     then reaches `want` (a package `building` -> `ready`, a deployment `deploying` -> `ready`,
     a serving session `pending` -> `running`)."""
@@ -152,7 +152,9 @@ def wait_for(kind, obj_id, want, waiting, timeout_s=600, every_s=3):
         if obj["status"] == want:
             return obj
         if obj["status"] != waiting or time.time() - t0 > timeout_s:
-            sys.exit(f"{obj_id} is {obj['status']}, not {want}: {obj.get('error')}")
+            if exit:
+                sys.exit(f"{obj_id} is {obj['status']}, not {want}: {obj.get('error')}")
+            return obj
         time.sleep(every_s)
 
 
@@ -168,6 +170,26 @@ def create_package(blueprint_id, name):
 
 def package_ready(package_id):
     return wait_for("packages", package_id, "ready", "building", every_s=5)
+
+
+def ready_package(state, blueprint_id, name, save, log=print):
+    """state["package"] once ready, created (and saved) first if there is none. A failed
+    package never becomes ready, so it is deleted and built again, once: a rerun after a failed
+    build doesn't stop on the same package."""
+    for attempt in range(2):
+        if not state.get("package"):
+            state["package"] = create_package(blueprint_id, name)["id"]
+            save()
+            log(f"package {state['package']} ({name})")
+        pkg = wait_for("packages", state["package"], "ready", "building", every_s=5, exit=False)
+        if pkg["status"] == "ready":
+            return pkg
+        if pkg["status"] != "failed" or attempt:
+            sys.exit(f"{state['package']} is {pkg['status']}, not ready: {pkg.get('error')}")
+        log(f"{state['package']} failed ({pkg.get('error')}): deleting it and building a new one")
+        end("packages", state["package"])
+        state.pop("package")
+        save()
 
 
 def deploy(package_id, kind):

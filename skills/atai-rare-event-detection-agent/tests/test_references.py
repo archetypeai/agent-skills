@@ -123,7 +123,8 @@ class LifecycleTests(unittest.TestCase):
     def test_existing_copy_is_reused(self):
         """A second copy under the same key answers 409; a key in a project resolves only
         with ?project_id=."""
-        api = self.api({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old"}]}})
+        api = self.api({("GET", "/agents/blueprints?"): {"data": [
+            {"id": "blp_old", "blueprint_key": run_red_agent.COPY_KEY}]}})
         self.assertEqual(run_red_agent.demo_copy("prj_1")["id"], "blp_old")
         self.assertEqual(api.calls, [("GET", "/agents/blueprints?project_id=prj_1"
                                              f"&key={run_red_agent.COPY_KEY}", None)])
@@ -132,6 +133,12 @@ class LifecycleTests(unittest.TestCase):
         self.api({("GET", "/projects"): {"data": [{"id": "prj_x", "name": "other"},
                                                    {"id": "prj_1", "name": run_red_agent.PROJECT}]}})
         self.assertEqual(run_red_agent.project_id(), "prj_1")
+
+    def test_project_lookup_reads_every_page(self):
+        pages = {"": {"data": [{"id": "prj_x", "name": "other"}], "has_more": True, "next_cursor": "c1"},
+                 "c1": {"data": [{"id": "prj_2", "name": run_red_agent.PROJECT}], "has_more": False}}
+        self.api({("GET", "/projects"): lambda path, body: pages[path.split("after=")[1] if "after=" in path else ""]})
+        self.assertEqual(run_red_agent.project_id(), "prj_2")
 
     def test_scoring_window_comes_from_the_blueprint(self):
         """Rebuild each row's span at the window the blueprint runs at."""
