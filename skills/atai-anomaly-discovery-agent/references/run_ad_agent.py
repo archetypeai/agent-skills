@@ -1,90 +1,56 @@
 #!/usr/bin/env python3
-"""Run the managed Anomaly Discovery agent end to end, then score the output.
+"""Run the platform's AD demo blueprint end to end, then score the output.
 
-    python3 run_ad_agent.py                       # pre-packaged Quick Start bundle
-    python3 run_ad_agent.py --embeddings          # + Newton Omega embedding per window
-    python3 run_ad_agent.py --csv my_asset.csv --detector s3://.../fit-detector.safetensors
-    python3 run_ad_agent.py --bundle-id bnd_...   # reuse a bundle you already have
+    python3 run_ad_agent.py                         # playground-ad on the bundled slice
+    python3 run_ad_agent.py --csv my_slice.csv      # your own prepared CSV
+    python3 run_ad_agent.py --blueprint-id blp_...  # a blueprint in your project (Path 2's)
     python3 run_ad_agent.py --score-only ad-output.csv
 
-By default this resolves the pre-packaged "AD Quick Start" bundle by NAME —
-bundle ids are deployment-scoped, the name is the stable handle. The bundle
-pins a detector fitted on one bearing's healthy baseline, and the bundled
-sample slice is from that same bearing: a detector encodes ONE asset's notion
-of normal. To score a different asset, pass --detector with the s3:// URI of
-a detector fitted for it (contact support@archetypeai.dev) and this creates a
-bundle from the canonical `ad` blueprint around it, reusing it by name on
-repeat runs.
+By default this copies the platform's demo blueprint `playground-ad` into a project
+(created on first use, reused after), packages the copy, deploys the package as `batch`,
+runs one session over the input file and downloads its output. The session, deployment
+and package are deleted afterwards; the project and the copy are kept for the next run.
 
-Scoring is deliberately not precision/recall — run-to-failure data has no
-per-window ground truth. See `score()` and SKILL.md.
+`playground-ad` is the canonical `ad` blueprint with a detector the platform fitted on one
+bearing's healthy baseline, its threshold (1.762), windowing and input-validation settings
+pinned, and `output_embeddings` on. The bundled sample slice is from that same bearing: a
+detector encodes ONE asset's notion of normal. For another asset, fit one with Path 2 and
+pass its promoted blueprint's id.
 
-Stdlib only. Reads ATAI_API_KEY and ATAI_API_ENDPOINT from ./.env or the
-environment.
+Scoring is deliberately not precision/recall: run-to-failure data has no per-window ground
+truth. See `score()` and SKILL.md.
+
+Stdlib only, on the same HTTP helper as Path 2 (ad_lifecycle/atai_http.py). Reads
+ATAI_API_KEY and ATAI_API_ENDPOINT from the environment or the nearest .env.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import os
-import re
-import shutil
 import statistics
 import sys
-import tempfile
 import time
+import urllib.request
 
-try:
-    from archetypeai import ArchetypeAI
-except ModuleNotFoundError:  # the only third-party dependency
-    sys.exit("This runner needs the official Archetype AI client:\n"
-             "    pip install -r requirements.txt   (from this directory)\n"
-             "    pip install archetypeai           (or just the package)")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "ad_lifecycle"))
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
+                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
+                       result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
 
-_CLIENT = None
-
-
-def client() -> "ArchetypeAI":
-    """The official client, built once from the environment."""
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = build_client(require_key(), api_base())
-    return _CLIENT
-
-
-def api_root(endpoint: str) -> str:
-    """Return the deployment root, with any /api or /vX.Y suffix removed.
-
-    Accept every form so one .env works for every skill in this repo: the
-    model skills ship ATAI_API_ENDPOINT with /v0.5, the agent skills without,
-    and the console shows it bare.
-    """
-    endpoint = re.sub(r"/api$", "", endpoint.rstrip("/"))
-    return re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", endpoint)
-
-
-def build_client(api_key: str, endpoint: str) -> ArchetypeAI:
-    """The official client, pointed at the deployment's /api prefix.
-
-    Both API surfaces live under one versionless prefix — /api/agents and
-    /api/files — so a single client serves both. The client uses api_endpoint
-    verbatim, and a wrong prefix 404s every call as a bodyless `ApiError: {}`.
-    """
-    return ArchetypeAI(api_key, api_endpoint=f"{api_root(endpoint)}/api")
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CSV = os.path.join(SCRIPT_DIR, "sample_data",
                            "bearing_eval_set2_brg1_transition.csv")
 
-# The pre-packaged bundles. Resolve by NAME: ids are deployment-scoped.
-# Both pin the same detector, fitted on set 2 bearing 1's healthy baseline —
-# the bundled sample slice is from that same bearing.
-QUICK_START_BUNDLE = "AD Quick Start (Bearing Breakdown)"
-QUICK_START_BUNDLE_EMBEDDINGS = "AD Quick Start (Bearing Breakdown, Embeddings)"
-# The threshold the quick-start detector was validated with. The bundle pins
-# it; the runner only needs it client-side for scoring.
+# The platform's AD demo blueprint, resolved by key: its blp_ id differs per deployment.
+DEMO_BLUEPRINT = "playground-ad"
+# Only a blueprint in a project can be packaged and deployed, so the demo is copied into
+# this project under this key once, and the copy reused.
+PROJECT = "AD skill Path 1"
+COPY_KEY = "playground-ad-skill"
+# The demo detector's threshold, for scoring when the blueprint doesn't say.
 DEFAULT_THRESHOLD = 1.762
 # Three consecutive snapshots over the line. One window is noise; the same
 # rule an independent offline scorer used, so numbers stay comparable.
@@ -92,154 +58,77 @@ SUSTAIN = 3
 
 
 # --------------------------------------------------------------------------
-# environment / transport
+# lifecycle: project -> copy -> package -> batch deployment -> session
 # --------------------------------------------------------------------------
 
-def load_dotenv(path: str = ".env") -> None:
-    if not os.path.exists(path):
-        return
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+def project_id(name: str = PROJECT) -> str:
+    """Your project of that name, created on first use."""
+    found, after = [], ""
+    while True:                                    # every page: the cursor is opaque, passed back as is
+        page = request("GET", f"{project_url()}?limit=1000{after}")
+        found += [p for p in page.get("data", []) if p["name"] == name]
+        if not page.get("has_more"):
+            break
+        after = f"&after={page['next_cursor']}"
+    if found:
+        return found[0]["id"]
+    pid = request("POST", project_url(), {"name": name})["id"]
+    print(f"created project {pid} ({name!r})")
+    return pid
 
 
-def api_base() -> str:
-    endpoint = os.environ.get("ATAI_API_ENDPOINT", "").rstrip("/")
-    if not endpoint:
-        sys.exit("ATAI_API_ENDPOINT is not set (see .env.example)")
-    return endpoint
+def demo_copy(pid: str) -> dict:
+    """The project's copy of the demo blueprint, copied on first use. Copying needs only the
+    right to modify the project. A key in a project resolves only with ?project_id=."""
+    found = [bp for bp in request("GET", f"{agents()}/blueprints?project_id={pid}&key={COPY_KEY}")["data"]
+             if bp["blueprint_key"] == COPY_KEY]
+    if found:
+        return found[0]
+    bp = request("POST", f"{agents()}/blueprints/{DEMO_BLUEPRINT}/copy",
+                 {"project_id": pid, "blueprint_key": COPY_KEY})
+    print(f"copied {DEMO_BLUEPRINT} into {pid} as {COPY_KEY} ({bp['id']})")
+    return bp
 
 
-def require_key() -> str:
-    key = os.environ.get("ATAI_API_KEY", "")
-    if not key:
-        sys.exit("ATAI_API_KEY is not set (see .env.example)")
-    return key
+def blueprint_threshold(blueprint_id: str) -> float:
+    """The threshold the blueprint labels at, for scoring the same way client-side."""
+    doc = request("GET", f"{agents()}/blueprints/{blueprint_id}").get("document") or {}
+    value = (doc.get("values") or {}).get("threshold")
+    if value is None:
+        print(f"warning: {blueprint_id} names no threshold; scoring at the demo's {DEFAULT_THRESHOLD}")
+        return DEFAULT_THRESHOLD
+    return float(value)
 
 
-def upload_file(path: str) -> str:
-    """Upload and return the file id. Names are timestamped on purpose.
+def upload(path: str) -> str:
+    """Upload under a timestamped name and return the file id.
 
-    File ids ARE filenames, so re-uploading a name replaces the record and
-    orphans the object any in-flight run already resolved — that run then dies
-    naming a UUID and nothing else. The client uploads under the file's own
-    basename, so the timestamped name is staged as a copy first.
-    """
+    File ids ARE filenames, so re-uploading a name replaces the record and orphans the
+    object any in-flight run already resolved: that run then dies naming a UUID and
+    nothing else."""
     stem = os.path.basename(path).rsplit(".", 1)[0]
-    rename = f"{stem}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv"
-    staged = os.path.join(tempfile.mkdtemp(), rename)
-    shutil.copyfile(path, staged)
-    return client().files.local.upload(staged)["file_id"]
+    return upload_file(path, f"{stem}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv")["file_id"]
 
 
-def find_bundle(name: str) -> str | None:
-    """Exact-name lookup, preferring canonical bundles. NOTE the plural
-    endpoint, and that ?query= is a substring search over name AND id — the
-    base quick-start name is a substring of the Embeddings one, so the exact
-    match below is what actually selects."""
-    res = client().agents.bundles.list(query=name, limit=100)
-    matches = [b for b in res.get("data", []) if (b.get("name") or "") == name]
-    matches.sort(key=lambda b: not b.get("is_canonical", False))
-    return matches[0].get("id") if matches else None
-
-
-def resolve_quick_start(name: str) -> str:
-    bundle_id = find_bundle(name)
-    if not bundle_id:
-        sys.exit(f"no bundle named {name!r} found — the pre-packaged bundle "
-                 "is not published in the deployment you're pointed at. Pass "
-                 "--bundle-id for it as a fallback, or contact "
-                 "support@archetypeai.dev.")
-    return bundle_id
-
-
-def create_bundle(name: str, detector: str, threshold: float, embeddings: bool) -> str:
-    body = {
-        "blueprint": "ad",
-        "name": name,
-        "values": {
-            "threshold": threshold,
-            # Required above 1 kHz. Timestamps are u64 milliseconds, so faster
-            # sampling means consecutive samples share one — and left at the
-            # default `true`, EVERY window is invalidated while the run still
-            # reports `completed`.
-            "validate_monotonic_timestamps": False,
-            # No single tolerance describes burst-sampled data, where the
-            # within-burst and between-burst intervals differ by orders of
-            # magnitude.
-            "sample_rate_interval_tolerance": None,
-            "max_temporal_gap": 60.0,
-            "output_score": True,
-            "output_embeddings": embeddings,
-        },
-        # Must be an s3:// URI: the files API rejects safetensors and the
-        # detector node resolves artifact strings as filesystem/S3 paths only.
-        # A wrong KEY is accepted here and fails ~30 s into the run.
-        "artifacts": {"ad-detector": detector},
-    }
-    res = client().agents.bundles.create(
-        blueprint=body["blueprint"], name=body["name"],
-        values=body["values"], artifacts=body["artifacts"])
-    b = res.get("data", res)
-    return b["id"]
-
-
-def run_bundle(bundle_id: str, file_id: str) -> str:
-    res = client().agents.bundles.run(bundle_id, source=[file_id])
-    r = res.get("data", res)
-    return r.get("id") or r.get("agent_id")
-
-
-def poll(agent_id: str, timeout_s: int = 3600, interval_s: int = 15) -> str:
-    """Poll to a terminal state, treating /logs as authoritative.
-
-    `status` is NOT reliable: pods have terminated with Error (exit=1) while
-    status still read `running` hours later. An error-level or pod.terminated
-    log event is terminal regardless. Note /logs, not /events — the latter
-    carries only lifecycle info.
-    """
+def poll(session_id: str, timeout_s: int = 3600, interval_s: int = 5) -> dict:
+    """The session, once terminal. A session's `status` is authoritative and reaches
+    completed, failed or cancelled, with `error` saying why."""
     deadline = time.time() + timeout_s
-    seen: set[str] = set()
+    last = None
     while time.time() < deadline:
-        info = client().agents.instances.get(agent_id)
-        status = (info.get("data", info) or {}).get("status", "unknown")
-
-        logs = client().agents.instances.get_logs(agent_id).get("data", [])
-        terminal = None
-        for entry in reversed(logs):
-            key = str(entry.get("id"))
-            if key in seen:
-                continue
-            seen.add(key)
-            level = (entry.get("level") or "").lower()
-            msg = str(entry.get("message") or "")[:160]
-            low = msg.lower()
-
-            # Match on the LEVEL and on explicit failure text, not on the word
-            # "terminated" — the happy path also logs "Agent execution
-            # terminated successfully", and treating that as a failure means the
-            # runner reports every successful run as failed.
-            if level in ("error", "critical") or "exit=1" in low or "error (exit" in low:
-                print(f"  [error] {msg}")
-                terminal = "failed"
-                continue
-            if "terminated successfully" in low or "completed successfully" in low:
-                print(f"  [{level}] {msg}")
-                terminal = terminal or "completed"
-                continue
-            if msg:
-                print(f"  [{level}] {msg}")
-        if terminal:
-            return terminal
-
-        if status in ("completed", "succeeded", "failed", "error", "cancelled"):
-            return status
+        ses = request("GET", lifecycle_url("sessions", session_id))
+        if ses.get("status") != last:
+            last = ses.get("status")
+            print(f"  {last}")
+        if last in TERMINAL:
+            return ses
         time.sleep(interval_s)
-    return "timeout"
+    return {"status": "timeout"}
+
+
+def last_events(session_id: str, n: int = 5) -> list:
+    """The session's latest events, newest first."""
+    return request("GET", lifecycle_url("sessions", session_id) + "/events?limit=" + str(n)).get("data", [])
 
 
 # The platform can report a run completed while its output file is still being
@@ -325,7 +214,7 @@ def artifact_status(item):
 def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
     """The run's outputs, once every one reports complete.
 
-    Needs nothing but the agent id -- unlike a content check, which has to
+    Needs nothing but the session id -- unlike a content check, which has to
     compare the output against the input and so only works for the client that
     produced the run.
     """
@@ -347,35 +236,36 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
         time.sleep(15)
 
 
-def download_results(agent_id: str, out_path: str, input_csv: str | None = None) -> str | None:
+def fetch(ref: str, out_path: str) -> None:
+    req = urllib.request.Request(result_url(ref))
+    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
+        fh.write(resp.read())
+
+
+def download_results(session_id: str, out_path: str, input_csv: str | None = None) -> str | None:
     def _fetch():
-        r = client().agents.instances.get_results(agent_id)
-        return r.get("data", r) if isinstance(r, dict) else r
+        return request("GET", lifecycle_url("sessions", session_id) + "/results").get("data", [])
 
     items = complete_results(_fetch)
     if not items:
         # The single most important check in this script. A run whose windows
         # were all invalidated reports `completed` with NO results.
-        print("  /results is EMPTY — the run reported success but produced nothing.")
+        print("  /results is EMPTY — the session completed but produced nothing.")
         print("  Almost always validate_monotonic_timestamps: every window was")
-        print("  marked invalid. See SKILL.md, step 2.")
+        print("  marked invalid. See SKILL.md.")
         return None
-    # The reference is nested one level: each item is
-    #   {id, port_name, data: {ref, filename, num_bytes, ...}, created_at}
-    # so the filename lives at item["data"]["filename"], NOT at the top level.
-    # Reading it from the top gives an empty name and a 404 on a bare
-    # /files/download/ URL.
+    # Each item nests its fields one level down: {id, port_name, data: {ref, filename,
+    # num_bytes, ...}}. `ref` is a root path, /api/files/<fil_…>/content, which already
+    # carries /api: result_url resolves it against the deployment root.
     inner = items[0].get("data") or {}
-    name = (inner.get("filename")
-            or inner.get("ref", "").rsplit("/", 1)[-1]
-            or items[0].get("name", ""))
-    if not name:
-        print(f"  results present but no filename in the reference: {items[0]!r}")
+    if not inner.get("ref"):
+        print(f"  results present but no ref in the entry: {items[0]!r}")
         return None
-    print(f"  results ({len(items)}): {name}  ({inner.get('num_bytes', '?')} bytes)")
-    client().files.local.download(name, out_path)
+    print(f"  results ({len(items)}): {inner.get('filename', '?')}  ({inner.get('num_bytes', '?')} bytes)")
+    fetch(inner["ref"], out_path)
     if input_csv:
-        wait_until_complete(lambda: client().files.local.download(name, out_path), out_path, input_csv)
+        wait_until_complete(lambda: fetch(inner["ref"], out_path), out_path, input_csv)
     return out_path
 
 
@@ -464,6 +354,45 @@ def report(res: dict, threshold: float) -> None:
     print("  degradation is already underway when the detector fires.")
 
 
+def run(blueprint_id: str, file_id: str, out_path: str, input_csv: str, name: str) -> str | None:
+    """Package the blueprint, deploy it as batch, run one session over the file, download its
+    output; then delete the session, deployment and package, which each hold the next."""
+    t0 = time.time()
+    pkg = dpl = ses = None
+    try:
+        pkg = create_package(blueprint_id, name)
+        print(f"package {pkg['id']}")              # each id printed before waiting on it
+        package_ready(pkg["id"])
+        print(f"  ready ({time.time() - t0:.0f} s)")
+        dpl = deploy(pkg["id"], "batch")
+        print(f"batch deployment {dpl['id']}")
+        deployment_ready(dpl["id"])
+        ses = open_session(dpl["id"], file_id)
+        print(f"session {ses['id']}")
+        done = poll(ses["id"])
+        if done.get("status") != "completed":
+            for ev in last_events(ses["id"]):
+                print(f"  event: {ev}")
+            sys.exit(f"session did not complete: {done.get('status')} {done.get('error') or ''}")
+        print(f"  completed ({time.time() - t0:.0f} s from packaging)")
+        return download_results(ses["id"], out_path, input_csv)
+    finally:
+        deleted, left = [], []
+        for kind, obj in (("sessions", ses), ("deployments", dpl), ("packages", pkg)):
+            if not obj:
+                continue
+            try:                                   # each tried even when one before it fails
+                end(kind, obj["id"])
+                deleted.append(obj["id"])
+            except (RuntimeError, SystemExit) as e:
+                left.append(obj["id"])
+                print(f"could not delete {obj['id']}: {str(e).splitlines()[0][:200]}")
+        if deleted:
+            print(f"deleted {', '.join(deleted)} (the project and blueprint stay)")
+        if left:
+            print(f"left on the platform: {', '.join(left)}; delete them with DELETE /agents/<kind>/<id>")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--csv", default=DEFAULT_CSV,
@@ -471,26 +400,14 @@ def main() -> None:
                          "slice, resolved next to this script)")
     ap.add_argument("--labels", default=None,
                     help="ground-truth sidecar (default: <csv stem>_labels.csv)")
-    ap.add_argument("--detector", default=None,
-                    help="s3:// URI of a detector fitted for YOUR asset — "
-                         "creates a bundle from the canonical `ad` blueprint "
-                         "around it instead of the pre-packaged Quick Start "
-                         "bundle (contact support@archetypeai.dev for one)")
-    ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
-                    help="scoring threshold; the quick-start detector was "
-                         "validated at 1.762 and its bundle pins that")
-    ap.add_argument("--bundle-id", default=None, help="reuse an existing bundle")
-    ap.add_argument("--bundle-name", default=None,
-                    help="resolve a different bundle by exact name, or name "
-                         "the bundle created for --detector "
-                         "(default: 'AD run (<detector stem>)')")
-    ap.add_argument("--embeddings", action="store_true",
-                    help="use the Quick Start variant that also emits the "
-                         "Newton Omega encoder embedding for each window — "
-                         "one embedding_{variate} column per channel plus an "
-                         "embedding_{variate}_features column, 768-d vectors. "
-                         "Expect a much larger output file: 2.0 MB vs 10 KB "
-                         "on the bundled slice")
+    ap.add_argument("--blueprint-id", default=None,
+                    help="run this blueprint (blp_…, in one of your projects, e.g. Path 2's "
+                         f"promoted one) instead of the project's copy of {DEMO_BLUEPRINT}")
+    ap.add_argument("--project", default=PROJECT,
+                    help=f"the project to copy {DEMO_BLUEPRINT} into (default {PROJECT!r})")
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="scoring threshold (default: the blueprint's own, 1.762 for the demo)")
+    ap.add_argument("--name", default="AD Path 1", help="name of the package built for the run")
     ap.add_argument("--output", default="ad-output.csv")
     ap.add_argument("--score-only", metavar="OUTPUT_CSV", default=None,
                     help="skip the platform and score an output you already have")
@@ -499,53 +416,37 @@ def main() -> None:
     labels = args.labels or args.csv.rsplit(".", 1)[0] + "_labels.csv"
 
     if args.score_only:
-        report(score(args.score_only, labels, args.threshold), args.threshold)
+        threshold = DEFAULT_THRESHOLD if args.threshold is None else args.threshold
+        report(score(args.score_only, labels, threshold), threshold)
         return
 
     load_dotenv()
-    require_key()
+    check_auth()
 
     size_mb = os.path.getsize(args.csv) / 1048576
     if size_mb > 50:
-        print(f"WARNING: {args.csv} is {size_mb:.0f} MiB. Inputs over ~50 MiB abort in")
-        print("  ConcatColumnsNode at a checkpoint boundary — see SKILL.md. Split it.")
+        print(f"WARNING: {args.csv} is {size_mb:.0f} MiB. Inputs over ~50 MiB aborted in")
+        print("  ConcatColumnsNode on older runtimes — see SKILL.md. Split it if this one does.")
+
+    if args.blueprint_id:
+        blueprint_id = args.blueprint_id
+        print(f"blueprint {blueprint_id}")
+    else:
+        pid = project_id(args.project)
+        blueprint_id = demo_copy(pid)["id"]
+        print(f"blueprint {blueprint_id} ({COPY_KEY}, the copy of {DEMO_BLUEPRINT} in {pid})")
+    threshold = blueprint_threshold(blueprint_id) if args.threshold is None else args.threshold
 
     print(f"uploading {args.csv} ({size_mb:.1f} MiB)")
-    file_id = upload_file(args.csv)
+    file_id = upload(args.csv)
     print(f"  file_id={file_id}")
 
-    bundle_id = args.bundle_id
-    if not bundle_id and args.detector:
-        # Bring-your-own-detector path: create (or reuse by name) a bundle
-        # from the canonical `ad` blueprint around the supplied artifact.
-        name = args.bundle_name or (
-            "AD run (" + args.detector.rsplit("/", 1)[-1].rsplit(".", 1)[0] + ")")
-        bundle_id = find_bundle(name)
-        if bundle_id:
-            print(f"reusing bundle {bundle_id} ({name!r})")
-        else:
-            bundle_id = create_bundle(name, args.detector,
-                                      args.threshold, args.embeddings)
-            print(f"created bundle {bundle_id} ({name!r})")
-    elif not bundle_id:
-        name = args.bundle_name or (
-            QUICK_START_BUNDLE_EMBEDDINGS if args.embeddings else QUICK_START_BUNDLE)
-        bundle_id = resolve_quick_start(name)
-        print(f"resolved bundle {bundle_id} ({name!r})")
-
-    agent_id = run_bundle(bundle_id, file_id)
-    print(f"agent {agent_id} — polling (status is not authoritative; watching /logs)")
-    status = poll(agent_id)
-    print(f"  status={status}")
-    if status not in ("completed", "succeeded"):
-        sys.exit(f"run did not complete: {status}")
-
-    if not download_results(agent_id, args.output, args.csv):
+    if not run(blueprint_id, file_id, args.output, args.csv, args.name):
         sys.exit("no results to score")
     print(f"  saved {args.output}")
 
     if os.path.exists(labels):
-        report(score(args.output, labels, args.threshold), args.threshold)
+        report(score(args.output, labels, threshold), threshold)
     else:
         print(f"  no labels at {labels} — skipping scoring")
 

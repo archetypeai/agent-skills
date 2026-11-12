@@ -4,20 +4,17 @@
     python3 -m pytest skills/atai-anomaly-discovery-agent/tests -q
 
 Every test here encodes a mistake that is easy to make and expensive to find:
-the request shapes that 404 on the singular endpoint, the validation values that
-silently invalidate every window, the label indexing that reads the wrong part
-of an asset's life, and the scoring rule that must not be precision/recall.
+the demo blueprint that must be copied into a project before it can run, the
+teardown order the platform enforces, the empty or half-written output that still
+reports `completed`, the label indexing that reads the wrong part of an asset's
+life, and the scoring rule that must not be precision/recall.
 """
 from __future__ import annotations
 
 import csv
 import importlib.util
-import io
-import json
 import pathlib
 import sys
-import textwrap
-from unittest import mock
 
 import pytest
 
@@ -37,210 +34,153 @@ def _load_runner():
 runner = _load_runner()
 
 
+@pytest.fixture(autouse=True)
+def endpoint(monkeypatch):
+    monkeypatch.setenv("ATAI_API_KEY", "sk_test")
+    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.test")
 
-class FakeClient:
-    """Stands in for ArchetypeAI, recording calls and returning canned payloads.
 
-    Mocks the client object rather than HTTP, so the tests assert the lifecycle
-    the runner drives and stay network-free.
-    """
 
-    def __init__(self, calls=None, **payloads):
-        self.calls = calls if calls is not None else {}
-        p = payloads
-        outer = self
+class FakeAPI:
+    """Stands in for atai_http.request, routing by method and path and recording calls.
 
-        class _Local:
-            def upload(self, path):
-                outer.calls["upload"] = os.path.basename(path)
-                return p.get("upload", {"file_id": os.path.basename(path)})
+    Mocks the HTTP layer the runner drives, so the tests assert the lifecycle and stay
+    network-free."""
 
-            def download(self, name, out_path):
-                outer.calls["download"] = name
-                with open(out_path, "w") as f:
-                    f.write(p.get("download", "x"))
-                return True
+    def __init__(self, routes):
+        self.calls = []
+        self.routes = routes
 
-        class _Files:
-            local = _Local()
-
-        class _Bundles:
-            def list(self, query=None, limit=None):
-                outer.calls["list"] = query
-                return p.get("list", {"data": []})
-
-            def create(self, blueprint=None, name=None, values=None, artifacts=None,
-                       description="", model=None):
-                outer.calls["create"] = {"blueprint": blueprint, "name": name,
-                                         "values": values, "artifacts": artifacts}
-                return p.get("create", {"id": "bnd_test"})
-
-            def run(self, bundle_id, source=None, sink=None):
-                outer.calls["run"] = {"bundle_id": bundle_id, "source": source}
-                return p.get("run", {"id": "agt_1"})
-
-        class _Instances:
-            def get(self, agent_id):
-                return p.get("get", {"status": "completed"})
-
-            def get_logs(self, agent_id, **kw):
-                return p.get("logs", {"data": []})
-
-            def get_results(self, agent_id, **kw):
-                return p.get("results", {"data": []})
-
-        class _Agents:
-            bundles = _Bundles()
-            instances = _Instances()
-
-        self.files = _Files()
-        self.agents = _Agents()
+    def __call__(self, method, url, body=None, idempotent=None):
+        path = url.split("/api", 1)[1]
+        self.calls.append((method, path, body))
+        for (m, prefix), value in self.routes.items():
+            if m == method and path.startswith(prefix):
+                return value(path, body) if callable(value) else value
+        raise AssertionError(f"unexpected {method} {path}")
 
 
 # --------------------------------------------------------------------------
-# endpoints
+# endpoints and paths
 # --------------------------------------------------------------------------
 
-def test_endpoint_reduces_to_one_root():
-    """Files are versioned, the agents API is not, so each gets its own client.
-
-    No single api_endpoint serves both surfaces, so both .env conventions in
-    this repo reduce to the same root.
-    """
+def test_endpoint_reduces_to_one_root(monkeypatch):
+    """Every .env convention in this repo (bare, /api, /v0.5) reduces to the same root."""
     for endpoint in ("https://x.test", "https://x.test/", "https://x.test/v0.5",
                      "https://x.test/v0.5/", "https://x.test/api",
                      "https://x.test/api/"):
-        assert runner.api_root(endpoint) == "https://x.test", endpoint
+        monkeypatch.setenv("ATAI_API_ENDPOINT", endpoint)
+        assert runner.agents() == "https://x.test/api/agents", endpoint
 
 
-def test_both_surfaces_mount_under_one_api_prefix():
-    """One client serves agents and files; both live under /api."""
-    seen = []
-    with mock.patch.object(runner, "ArchetypeAI",
-                           lambda key, api_endpoint: seen.append(api_endpoint)
-                           or mock.MagicMock()):
-        runner.build_client("sk_test", "https://x.test/v0.5")
-    assert seen == ["https://x.test/api"]
-
-
-def test_agent_paths_come_from_the_client():
-    """The client owns the paths, so this runner cannot drift from them again.
-
-    The API moved from singular /agents/bundle to plural /agents/bundles on
-    2026-08-11 and the singular forms now 404.
-    """
+def test_no_bundle_or_instance_calls():
+    """Bundles and agent instances are gone: dev answers 404 for /agents/bundles* and
+    /agents/instances*, and the rest of the platform drops them at its next release."""
     src = (REFS / "run_ad_agent.py").read_text()
-    assert "urllib.request.Request(" not in src
-    for call in ("client().agents.bundles.list(",
-                 "client().agents.bundles.create(",
-                 "client().agents.bundles.run(",
-                 "client().agents.instances.get_results("):
-        assert call in src, call
+    assert "/bundles" not in src and "/instances" not in src and "/logs" not in src
 
 
-def test_no_runs_endpoint_is_used():
-    """There is no /agents/bundles/{id}/runs — a client must filter
-    /agents/instances by bundle_id, and that paginates."""
+def test_demo_blueprint_is_resolved_by_key():
+    """blp_ ids differ per deployment; the key resolves everywhere the demo is published."""
     src = (REFS / "run_ad_agent.py").read_text()
-    assert "/runs" not in src
-
-
-# --------------------------------------------------------------------------
-# bundle creation — the values that decide whether a run produces anything
-# --------------------------------------------------------------------------
-
-def test_bundle_body_disables_monotonic_validation(monkeypatch):
-    """Left at the blueprint default of true, EVERY window is invalidated above
-    1 kHz and the run still reports completed."""
-    captured = {}
-
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
-    runner.create_bundle("n", "s3://bucket/d.safetensors", 1.762, False)
-
-    values = captured["create"]["values"]
-    assert values["validate_monotonic_timestamps"] is False
-    assert values["sample_rate_interval_tolerance"] is None
-    assert values["output_score"] is True
-
-
-def test_bundle_uses_the_ad_detector_artifact_key(monkeypatch):
-    """A wrong key is accepted at creation and fails ~30 s into the run. The
-    key is `ad-detector`; a second blueprint `ada` uses `ada-detector`."""
-    captured = {}
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
-    runner.create_bundle("n", "s3://bucket/d.safetensors", 1.762, False)
-    assert list(captured["create"]["artifacts"]) == ["ad-detector"]
-    assert captured["create"]["blueprint"] == "ad"
-
-
-def test_quick_start_bundle_names_are_the_stable_handles():
-    """Bundle ids are environment-scoped; the NAMES resolve everywhere."""
-    src = (REFS / "run_ad_agent.py").read_text()
-    assert 'QUICK_START_BUNDLE = "AD Quick Start (Bearing Breakdown)"' in src
-    assert ('QUICK_START_BUNDLE_EMBEDDINGS = '
-            '"AD Quick Start (Bearing Breakdown, Embeddings)"') in src
-    # No real bnd_… id may be hardcoded — that would silently pin one
-    # environment (prose like "bnd_…" in help text is fine).
+    assert 'DEMO_BLUEPRINT = "playground-ad"' in src
     import re
-    assert re.findall(r"bnd_[a-z0-9]{10,}", src) == []
+    assert re.findall(r"blp_[a-z0-9]{10,}", src) == []
 
 
-def test_resolution_selects_the_exact_canonical_match(monkeypatch):
-    """?query= is a substring search returning newest-first, so a PREFIX of the
-    base name also matches the Embeddings variant. Exact-name matching with an
-    is_canonical preference is what selects. (The full base name including its
-    closing paren matches only itself — verified on Prod — but a prefix does
-    not, which is why data[0] is never safe.)"""
-    listing = {"data": [
-        {"id": "bnd_emb", "name": "AD Quick Start (Bearing Breakdown, Embeddings)",
-         "is_canonical": True},
-        {"id": "bnd_copy", "name": "AD Quick Start (Bearing Breakdown)",
-         "is_canonical": False},
-        {"id": "bnd_base", "name": "AD Quick Start (Bearing Breakdown)",
-         "is_canonical": True},
-    ]}
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(list=listing))
-    assert runner.find_bundle("AD Quick Start (Bearing Breakdown)") == "bnd_base"
+# --------------------------------------------------------------------------
+# project and copy
+# --------------------------------------------------------------------------
+
+def test_demo_is_copied_into_the_project_once(monkeypatch):
+    """Only a blueprint in a project can be packaged and deployed, and the canonical demo
+    is in none: copy it under COPY_KEY on the first run."""
+    api = FakeAPI({("GET", "/agents/blueprints?"): {"data": []},
+                     ("POST", "/agents/blueprints/playground-ad/copy"):
+                         lambda p, b: {"id": "blp_copy", "blueprint_key": b["blueprint_key"]}})
+    monkeypatch.setattr(runner, "request", api)
+    assert runner.demo_copy("prj_1")["id"] == "blp_copy"
+    method, path, body = api.calls[-1]
+    assert body == {"project_id": "prj_1", "blueprint_key": runner.COPY_KEY}
 
 
-def test_unresolved_bundle_points_at_support(monkeypatch):
-    """The name-not-found path must give the user a way forward."""
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(list={"data": []}))
+def test_existing_copy_is_reused(monkeypatch):
+    """A second copy under the same key answers 409; the lookup needs ?project_id=,
+    since a key registered in a project resolves only with it."""
+    api = FakeAPI({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old", "blueprint_key": runner.COPY_KEY}]}})
+    monkeypatch.setattr(runner, "request", api)
+    assert runner.demo_copy("prj_1")["id"] == "blp_old"
+    assert api.calls == [("GET", f"/agents/blueprints?project_id=prj_1&key={runner.COPY_KEY}", None)]
+
+
+def test_project_is_reused_by_name(monkeypatch):
+    api = FakeAPI({("GET", "/projects"): {"data": [{"id": "prj_x", "name": "other"},
+                                                     {"id": "prj_1", "name": runner.PROJECT}]}})
+    monkeypatch.setattr(runner, "request", api)
+    assert runner.project_id() == "prj_1"
+
+
+def test_scoring_threshold_comes_from_the_blueprint(monkeypatch):
+    """Score at the threshold the blueprint labels at, so a Path 2 blueprint scores at its own."""
+    api = FakeAPI({("GET", "/agents/blueprints/blp_1"): {"document": {"values": {"threshold": 1.215}}}})
+    monkeypatch.setattr(runner, "request", api)
+    assert runner.blueprint_threshold("blp_1") == 1.215
+
+
+# --------------------------------------------------------------------------
+# run: package -> batch deployment -> session, torn down in reverse
+# --------------------------------------------------------------------------
+
+def _lifecycle(monkeypatch, status, ended, results=None):
+    monkeypatch.setattr(runner, "create_package", lambda bp, name: {"id": "pkg_1"})
+    monkeypatch.setattr(runner, "package_ready", lambda pid: {"id": pid, "status": "ready"})
+    monkeypatch.setattr(runner, "deploy", lambda pkg, kind: {"id": "dpl_1", "kind": kind})
+    monkeypatch.setattr(runner, "deployment_ready", lambda did: {"id": did, "status": "ready"})
+    monkeypatch.setattr(runner, "open_session", lambda dpl, fid: {"id": "ses_1"})
+    monkeypatch.setattr(runner, "poll", lambda sid: {"status": status, "error": "boom"})
+    monkeypatch.setattr(runner, "last_events", lambda sid: [])
+    monkeypatch.setattr(runner, "end", lambda kind, oid: ended.append((kind, oid)))
+    monkeypatch.setattr(runner, "download_results", lambda sid, out, inp: results)
+
+
+def test_teardown_goes_session_deployment_package(monkeypatch):
+    """Each holds the next: a deployment with sessions, or a package with deployments,
+    can't be deleted."""
+    ended = []
+    _lifecycle(monkeypatch, "completed", ended, results="out.csv")
+    assert runner.run("blp_1", "f.csv", "out.csv", "in.csv", "n") == "out.csv"
+    assert ended == [("sessions", "ses_1"), ("deployments", "dpl_1"), ("packages", "pkg_1")]
+
+
+def test_failed_session_still_tears_down(monkeypatch):
+    """A failed run must not strand a deployment and package on the platform."""
+    ended = []
+    _lifecycle(monkeypatch, "failed", ended)
     with pytest.raises(SystemExit) as excinfo:
-        runner.resolve_quick_start("AD Quick Start (Bearing Breakdown)")
-    message = str(excinfo.value)
-    assert "support@archetypeai.dev" in message
-    assert "--bundle-id" in message
+        runner.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
+    assert "failed" in str(excinfo.value) and "boom" in str(excinfo.value)
+    assert [k for k, _ in ended] == ["sessions", "deployments", "packages"]
 
 
-def test_run_request_shape(monkeypatch):
-    captured = {}
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(captured))
-    assert runner.run_bundle("bnd_1", "f.csv") == "agt_1"
-    assert captured["run"]["bundle_id"] == "bnd_1"
-    # the client builds the data ref; the source is the file_id, not the fil_ uid
-    assert captured["run"]["source"] == ["f.csv"]
+def test_failed_package_is_still_deleted(monkeypatch):
+    """A package that never becomes ready is recorded before the wait, so it is deleted too."""
+    ended = []
+    _lifecycle(monkeypatch, "completed", ended)
 
+    def failed(pid):
+        raise SystemExit(f"{pid} is failed, not ready: build error")
 
-# --------------------------------------------------------------------------
-# polling — status is not authoritative
-# --------------------------------------------------------------------------
-
-def test_poll_treats_an_error_log_as_terminal(monkeypatch):
-    """Pods have terminated with Error (exit=1) while status read `running`
-    for hours. A client polling on status alone spins to its timeout."""
-    fake = FakeClient(
-        get={"status": "running"},            # never terminal
-        logs={"data": [{"id": "1", "level": "error", "message": "worker 0 exploded"}]})
-    monkeypatch.setattr(runner, "client", lambda: fake)
-    assert runner.poll("agt_1", timeout_s=5, interval_s=0) == "failed"
+    monkeypatch.setattr(runner, "package_ready", failed)
+    with pytest.raises(SystemExit):
+        runner.run("blp_1", "f.csv", "out.csv", "in.csv", "n")
+    assert ended == [("packages", "pkg_1")]
 
 
 def test_download_reports_empty_results(monkeypatch, capsys):
     """An all-invalid run reports `completed` with NO results. That emptiness
     is the tell, not the runtime."""
-    monkeypatch.setattr(runner, "client", lambda: FakeClient(results={"data": []}))
-    assert runner.download_results("agt_1", "/tmp/unused.csv") is None
+    monkeypatch.setattr(runner, "request", FakeAPI({("GET", "/agents/sessions/ses_1/results"): {"data": []}}))
+    assert runner.download_results("ses_1", "/tmp/unused.csv") is None
     assert "EMPTY" in capsys.readouterr().out
 
 
@@ -345,14 +285,14 @@ def test_downloads_again_until_complete(tmp_path, monkeypatch):
     out = tmp_path / "out.csv"
     n = {"downloads": 0}
 
-    class Local:
-        def download(self, name, out_path):
-            n["downloads"] += 1
-            _write_ad(out, 431400.05 if n["downloads"] >= 3 else 400000.0)
+    def fetch(ref, out_path):
+        assert ref == "/api/files/fil_1/content"
+        n["downloads"] += 1
+        _write_ad(out, 431400.05 if n["downloads"] >= 3 else 400000.0)
 
-    fake = FakeClient(results={"data": [{"data": {"filename": "o.csv"}}]})
-    fake.files.local = Local()
-    monkeypatch.setattr(runner, "client", lambda: fake)
+    monkeypatch.setattr(runner, "request", FakeAPI({("GET", "/agents/sessions/ses_1/results"):
+        {"data": [{"data": {"filename": "o.csv", "ref": "/api/files/fil_1/content"}}]}}))
+    monkeypatch.setattr(runner, "fetch", fetch)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
-    assert runner.download_results("agt_x", str(out), str(inp))
+    assert runner.download_results("ses_1", str(out), str(inp))
     assert n["downloads"] == 3

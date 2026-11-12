@@ -1,9 +1,9 @@
 # AD on the Optimizations and Evals APIs: measured platform behaviour
 
-What Path 2 relies on, measured on the dev deployment (2026-10-12 → 10-15) while building
-the [TEP quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
-and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-12
-(atai_core #7196); check another deployment before relying on it there.
+What Path 2 relies on, measured while building the
+[TEP quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
+and the IMS bearings example (2026-10-12 → 10-15), and checked again on production through
+projects, packages, deployments and sessions (2026-11-12).
 
 ## Optimize
 
@@ -12,7 +12,7 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   `threshold`. `feature_names` is a list, so it can only be pinned (`overrides.values`);
   compare feature sets with one optimization each. Also pin `timestamp_column` and
   `data_columns`.
-- **Not exposed, by design** (#7196): PCA is always on; `zscore_std_floor`, PCA
+- **Not exposed, by design:** PCA is always on; `zscore_std_floor`, PCA
   whitening, the neighbour algorithm and the PCA solver are not tunable. The TEP
   detector, fitted through the old `ad-fitting` route with a floor of 0.0001, was
   reproduced without it: validation recall 0.772 vs 0.766, precision 0.990 vs 0.992.
@@ -30,8 +30,8 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   points than `max_trials` runs every point (a grid); a smaller budget, or a float range,
   is a random search. The draw isn't seeded on the service, so a rerun samples different
   points; each optimization records the ones it drew.
-- **Trials that share `window_size` and `step_size` share their embeddings** (atai_core's
-  trial grouping): those two set a search's cost. Measured on RED (same mechanism): a
+- **Trials that share `window_size` and `step_size` share their embeddings** (the platform
+  groups such trials): those two set a search's cost. Measured on RED (same mechanism): a
   4 × 3 grid of metric × window took 3 encoder passes and 7 min; window as an integer
   range costs a pass per distinct window drawn. A 24-trial random search over windows
   16–84 took 41 min (24 passes) and peaked at fault F1 0.8582, against the 12-point
@@ -47,8 +47,7 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 - **A time jump inside a scored file does not fail the trial or eval** (unlike OSM): the
   windows across it come back abstained. That is what lets one file hold many recordings.
 - **Timing.** Queued trials wait for workers. On Dev: a pinned 1-trial fit took 92 s with
-  no queue; 2 trials 6-10 min; 24 trials about 77 min (trials fan out across jobs,
-  #7152). Every trial reports the optimization's `created_at`, so don't time trials by it.
+  no queue; 2 trials 6-10 min; 24 trials about 77 min (trials fan out across jobs). Every trial reports the optimization's `created_at`, so don't time trials by it.
 
 ## Promote, Evals
 
@@ -58,7 +57,8 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 - **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
   from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
   of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
-  projects it can't see). Without one the platform keys the blueprint `ad-otr_<trial id>`, and
+  projects it can't see). Without one the platform keys the blueprint `<copy key>-otr_<trial id>`
+  (`ad-sample-base-otr_…` for the sample), and
   the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
   `promote_and_test.py` sends no key unless `--blueprint-key` is given.
 - **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
@@ -67,19 +67,18 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   Further jobs queue, and a queued one already reports `running`. On 2026-10-30, on CPU, the
   sample's eval (trial step 8) took 29 min there, and its step-1 delivery (4,800- and 6,720-row files),
   ~13 min on production, was stopped on both files with no output: `DeadlineExceeded: stopped
-  after reaching the platform's maximum runtime of 2 hours`. On the free trial, deliver at
-  the trial's step (`deliver.py --step 0`: 2/2 files in 28 min) or at step 1 in runs of at
-  most N windows (`--max-windows-per-run 1000`: 12 runs of 24–34 min, 2 h 15 min in all, the
-  production scores exactly). On GPU (2026-11-06) the TEP quickstart's step-1 delivery took
-  ~3.5 min a file (~20,000 windows × 33 channels; most of a short run is start-up) and its one
-  eval of 60,480 rows 3 min, with production's scores.
-  `serve.py` replays at the delivery's step: at step 8 there, 805/805 windows matched batch
-  (score within 2e-7, the same first alarms) at a 768 ms median per query, and at step 1, on
-  the delivery made in 1,000-window runs, 1,826/1,826 in 27 min (851 ms median). A rerun of
-  `deliver.py` starts a new agent for a file whose agent failed.
-- **An eval takes a blueprint and no value overrides.** Whatever you set through bundle
-  values (a delivery threshold, a stride) cannot be evaluated; the eval runs at the
-  trial's own threshold and step.
+  after reaching the platform's maximum runtime of 2 hours`. Through bundles there, the
+  trial's step delivered 2/2 files in 28 min, and step 1 in runs of at most 1,000 windows
+  took 12 runs of 24–34 min (2 h 15 min in all) with the production scores exactly. A
+  package delivers at the trial's step, and `--max-windows-per-run N` still splits a long
+  file into sessions. Serving at step 8 there matched batch on 805/805 windows (score within
+  2e-7, the same first alarms) at a 768 ms median per query.
+  On GPU (2026-11-06, through bundles) the TEP quickstart's step-1 delivery took ~3.5 min a
+  file (~20,000 windows × 33 channels; most of a short run is start-up) and its one eval of
+  60,480 rows 3 min, with production's scores.
+- **An eval takes a blueprint and no value overrides, and so does a package.** The eval and
+  the delivery both run at the trial's own threshold and step; `score.py` rescores the
+  delivery at other thresholds from its scores.
 - **Evals reports window-level macro-F1 at one threshold, and it moves with the class
   mix.** The same TEP detector scored 0.854 on validation (46% normal rows) and 0.732 on
   test (21% normal), with anomaly F1 0.870 on both.
@@ -92,40 +91,56 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
 - **Promoted blueprints can't be deleted by a regular key** (403, admin only), as in OSM;
   name them distinctively.
 
-## Bundles and agent runs
+## Projects, packages, deployments and sessions (2026-10-30; production 2026-11-12)
 
-- **A bundle's values override its promoted blueprint's.** `step_size: 1` scores every
-  sample; `threshold` relabels at another operating point with the same detector (checked
-  on every window: `predicted_label` is `anomaly` exactly when the score is over it).
+These replace bundles and agent instances, which production answers 404 for since
+2026-11-12. A deployment serves them when `GET /agents/sessions?limit=1` answers 200.
+
+- **Everything takes its project from what it is made from**: an optimization from its
+  blueprint, a promoted blueprint from its optimization, a package from its blueprint, a
+  deployment from its package, a session from its deployment. `POST /agents/optimizations`
+  takes no `project_id`, and the canonical `ad` is outside any project, so `optimize.py`
+  copies `ad` into the project first (`POST /agents/blueprints/ad/copy {"project_id", "blueprint_key"}`).
+  A deployment of a package outside any project is refused. A copy's key must be unused in
+  the project and by platform blueprints: `ad` itself is taken.
+- **A package carries no values.** It runs the promoted blueprint as stored; its
+  `blueprints[0].resolved_models` pins the encoder (`mdl_…`) and the fitted detector
+  (`aar_…`). Outputs (`output_score`, `output_embeddings`) and the step are set at Optimize.
+  A package was `ready` within seconds.
+- **A batch deployment is ready at once; a serving one in seconds.** A batch session per
+  file ran the sample's 2 delivery files in 83 s at step 8 (`session opened`, `dispatched as
+  job …`, `run completed` in `/events`), against ~13 min for the bundle run at step 1.
+- **Follow a session's `status` and `error`, and its `/events`;** there is no `/logs`.
+  `completed` means the job ended, not that its output is whole: an output can still come
+  back short or empty, so check its coverage (below).
+- **Result refs are root paths**: `/sessions/{id}/results` gives
+  `data[0].data.ref = "/api/files/<fil_…>/content"`; resolve it against the deployment root.
+  The output CSV is the same as a bundle run's.
+- **`output_embeddings: true` needs its own blueprint.** A 1-trial optimization pinning the
+  winner's values plus the switch, then promoted, scored the same as the winner (TEP:
+  validation macro-F1 0.8547 both). One TEP delivery file's output was 327 MB with it on.
+- **Listing:** `GET /agents/deployments?package_id=`, `GET /agents/sessions?deployment_id=`,
+  each filterable by `status` and `project_id`.
+- **Deleting:** a session (cancelled first if still going), then its deployment (stopped
+  first), then the package. A promoted blueprint and its optimization deleted fine with an
+  admin key; a regular key gets 403 for blueprints.
 - **Outputs can be cut short at `completed`**: download again until the last window
-  reaches the input's end. **A `failed` status can hide a finished run**: check `/results`.
-- **The slowest agent sets a delivery's time.** TEP: 5 files took 885 s with 5 agents at
-  once and 886 s with 4.
-- **The checkpoint abort is fixed** (runtime 1.1.9-590); `deliver.py` turns the triggers off
-  anyway, which is harmless where the fix has landed.
-- **A bundle lists its own runs**: `GET /agents/instances?bundle_id=<bnd_…>`, every attempt
-  included. The TEP full example's 714 delivered files left 734 agents, the extra 20 from
-  reruns that replaced an attempt; a state file holding the last attempt per file misses them.
-- **A bundle that still has agents can't be deleted** (409): delete its agents first. An
-  agent that is still running is cancelled first (`POST …/cancel` with `{}`).
-- **`output_embeddings: true` works on a promoted blueprint's bundle.** Per channel, an
-  `embedding_<channel>` (768-d) and an `embedding_<channel>_features` column, each cell a JSON
-  list in the CSV. It is the only source of embeddings: trials and evals return metrics and
-  predictions, and the promoted detector (`aar_…`) has no download route. Running the library
-  files in batch at the trial's step recomputes the fit's reference windows (2,280 for TEP).
+  reaches the input's end. **The slowest run sets a delivery's time.**
 
-## Agent serving (production 2026-10-29; first on Dev 2026-10-15, Staging 2026-10-23)
+## Agent serving (through sessions: production 2026-11-12, earlier 2026-10-30; through bundles, 2026-10-15 → 10-29)
 
-- **A running serving agent holds a serving worker** (Dev has 3, shared by everyone) until
-  it is cancelled, or released after 20 minutes without a query; a query to a released agent
-  answers 409.
-- **The promoted blueprint is served as it is.** It reads and writes CSV; run in serving mode,
-  the platform supplies an `atai-records` serving source and sink in their place, so a bundle
-  of it with `step_size` 1 is all serving needs. Earlier versions of serve.py made a
-  `<key>-served-records` copy with those connectors; a copy made before the connector change
-  is refused.
-- **Staging (2026-10-23):** the TEP quickstart's replay matched batch on 1,826 / 1,826 windows
-  at **~2.6 s median per query**, about three times Dev's and RED's or OSM's ~0.9 s there.
+- **A serving deployment holds a serving worker** (a deployment has a few, shared by everyone) until it is
+  stopped; cancelling its sessions leaves it `ready`. A query to a session that has ended, or
+  whose deployment has, answers 409.
+- **The promoted blueprint is served as it is.** It reads and writes CSV; deployed for
+  serving, the platform supplies an `atai-records` serving source and sink in their place, so
+  a package of it is all serving needs.
+- **Through sessions (production, 2026-11-12):** the sample at step 8 matched batch on
+  230/230 windows (score within 1.3×10⁻⁵ relative, the same first alarms) at an 802 ms median
+  per query, p95 917 ms; package, deployment and session were ready in about 7 s. The TEP
+  quickstart's 230-window replay: 821 ms median, p95 1.8 s.
+- **Latency depends on the deployment's load:** one bundle-era replay of the TEP quickstart
+  (1,826 windows) ran at ~2.6 s median per query, about three times the usual ~0.9 s.
 - **A query holds the whole window, and the agent keeps nothing between queries.** It numbers
   the samples 0, 1, 2… itself and answers with sample indices for `start_timestamp` and
   `finish_timestamp`; records come back with their keys in alphabetical order.
@@ -138,5 +153,5 @@ and the IMS bearings example. AD support in these APIs landed on Dev on 2026-10-
   worst 2.0 s; the TEP quickstart 928 ms). Free-trial accounts serve on CPU only and can be
   slower. A busy Dev stretched the sample's tail to a 3.1 s p95 and a 30 s worst query.
   16 windows per query took 11 s, 13% less per window.
-- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
-  is silently ignored, so pick the serving agents client-side (`select(.mode=="serving")`).
+- **Listing:** `GET /agents/deployments?status=ready`, then `select(.kind=="serving")`, shows
+  the serving deployments holding workers.
