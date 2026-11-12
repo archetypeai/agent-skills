@@ -1,4 +1,4 @@
-"""Stdlib HTTP helpers for Path 2 (Optimize → promote → Evals → bundle → run), and Path 1's
+"""Stdlib HTTP helpers for Path 2 (Optimize → promote → Evals → package → deployment → sessions), and Path 1's
 package → batch deployment → session.
 
 The same helpers as the OSM and AD skills' Path 2, with RED's metrics report (target
