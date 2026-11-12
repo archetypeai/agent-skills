@@ -62,9 +62,9 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (agents, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
-                       list_trials, load_dotenv, open_session, package_ready, request, root, same_deployment,
-                       upload_all, upload_file, wait, wait_for)
+from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
+                       list_trials, load_dotenv, open_session, package_ready, ready_package, request, root,
+                       same_deployment, upload_all, upload_file, wait, wait_for)
 from common import base_values, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from deliver import download, poll  # noqa: E402
 from promote_and_test import promote  # noqa: E402
@@ -128,10 +128,7 @@ def run_batch(a, files, emb, step, state, save):
     if not todo:
         return True, 0
     if not state.get("deployment"):
-        if not state.get("package"):
-            state["package"] = create_package(emb["id"], f"{a.name} library embeddings")["id"]
-            save()
-        package_ready(state["package"])
+        ready_package(state, emb["id"], f"{a.name} library embeddings", save, log)
         state["deployment"] = deploy(state["package"], "batch")["id"]
         save()
         deployment_ready(state["deployment"])
@@ -154,7 +151,7 @@ def run_batch(a, files, emb, step, state, save):
             log(f"  {f['file']}: complete")
             return True
         log(f"  {f['file']}: {status}, no complete output; rerun to retry")
-        if status in ("failed", "canceled", "cancelled"):
+        if status in TERMINAL:   # even `completed` with no full output: a rerun opens a new one
             error = str(request("GET", lifecycle_url("sessions", runs[f["file"]])).get("error") or "")
             if "DeadlineExceeded" in error:
                 log(f"  {f['file']}: {error[:200]} A plain rerun hits it again: rerun with a larger --step "

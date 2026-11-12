@@ -228,7 +228,7 @@ class DeliverResume(unittest.TestCase):
     """A file whose session failed without a complete output gets a new session on the next run;
     a file longer than --max-windows-per-run goes in several sessions whose outputs join to its own."""
 
-    def deliver(self, status, *args):
+    def deliver(self, status, *args, empty=False):
         started, self.cancelled = [], []
 
         def fake(method, url, body=None):
@@ -247,7 +247,7 @@ class DeliverResume(unittest.TestCase):
             return {"id": f"ses_new{len(started)}"}
 
         def download(session, dst, src, ts_col):     # a batch output: a window every `step` rows of src
-            if status != "completed":
+            if status != "completed" or empty:
                 return None
             ts = pd.read_csv(src)["t"].tolist()
             rows = [(ts[s + 3], ts[s], "x") for s in range(0, len(ts) - 4 + 1, 2)]
@@ -280,6 +280,10 @@ class DeliverResume(unittest.TestCase):
         started, runs = self.deliver("timeout")             # still running when this run stopped waiting
         self.assertEqual(len(started), 1)
         self.assertEqual(runs, {"delivery/d.csv": "ses_new1"})
+
+    def test_a_completed_session_with_no_full_output_is_replaced(self):
+        started, runs = self.deliver("completed", empty=True)
+        self.assertEqual((started, runs), ([], {}))          # forgotten: the next run opens a new one
 
     def test_a_completed_or_still_running_session_is_kept(self):
         for status in ("completed", "timeout"):
@@ -665,9 +669,10 @@ class LibraryBatch(unittest.TestCase):
             return None
         with mock.patch.multiple(library_embeddings, request=lambda method, url, body=None: {"error": "rpc error: DeadlineExceeded"},
                                  lifecycle_url=lambda kind, obj="": f"https://x/api/agents/{kind}/{obj}",
-                                 create_package=lambda bp, name: made.append(("package", bp)) or {"id": "pkg_l"},
+                                 ready_package=lambda st, bp, name, save, log: made.append(("package", bp))
+                                 or st.update(package="pkg_l") or {"status": "ready"},
                                  deploy=lambda pkg, kind: made.append(("deployment", kind)) or {"id": "dpl_l"},
-                                 package_ready=lambda pid: {}, deployment_ready=lambda did: {},
+                                 deployment_ready=lambda did: {},
                                  open_session=lambda dpl, fid: made.append(("session", fid)) or {"id": f"ses_{len(made)}"},
                                  upload_file=lambda src, name: {"file_id": name}, poll=lambda session: outcome,
                                  download=download, stamp=lambda: "T"):

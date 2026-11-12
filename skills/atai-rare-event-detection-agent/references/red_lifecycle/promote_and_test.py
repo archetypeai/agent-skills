@@ -245,7 +245,7 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="red")
-    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <blueprint>-otr_<trial id>")
+    ap.add_argument("--blueprint-key", help="promote under this key (needs the admin role outside projects); default: the platform's, <copy key>-otr_<trial id>")
     ap.add_argument("--trial", help="promote this trial instead of the best")
     ap.add_argument("--max-windows", type=int, default=0,
                     help="test in pieces of at most this many windows, one eval each (0: one eval)")
