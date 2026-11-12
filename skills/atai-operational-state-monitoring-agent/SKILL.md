@@ -45,7 +45,7 @@ either.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), stdlib only, on Path 2's HTTP helper | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~40 s on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on packages, deployments and sessions: verified on dev, 2026-10-30 and 2026-11-04** (PROD-PENDING) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on projects, packages, deployments and sessions: verified on production, 2026-11-12** (first on dev, 2026-10-30 and 2026-11-04) |
 
 Both paths' outputs share one schema, so the output schema and scoring below apply to both.
 
@@ -230,8 +230,8 @@ finish_timestamp, start_timestamp, predicted_state, invalid, p_<state>, p_<state
 
 ## What the demo scores on its sample
 
-`python3 run_osm_agent.py` on the bundled log, on dev (2026-11-04): 68 windows, 0 invalid,
-37 s from packaging to a completed session.
+`python3 run_osm_agent.py` on the bundled log, on production (2026-11-12): 68 windows, 0 invalid,
+the same scores as on dev (2026-11-04, 37 s from packaging; 5.5 min on production, waiting for a worker).
 
 ```
 accuracy: 0.5441   steady-state accuracy: 0.5625 (64 windows)
@@ -254,7 +254,7 @@ own data, take Path 2.
 
 **Runtime is dominated by worker contention, not window count.** With a clear queue, the
 sample ran in **37 s** from packaging to a completed session (dev, 2026-11-04), the 4.9 MB
-download included; on production (2026-11-12) the same run took 5.5 min, waiting for a worker. Under the former bundles, the same 4,185-window slice took 1–2 min with
+download included; on production (2026-11-12) the same run took 5.5 min, waiting for a worker. Under the former bundles, the former 4,185-window sample slice took 1–2 min with
 a clear queue and 22–27 min when workers were contended (~17× slower). Budget by the
 **session's events, not the clock**: you cannot see other tenants' jobs, so the queue state
 is only observable from your run's own event timing.
@@ -298,11 +298,10 @@ windows and predicted states, and scores against the `_labels.csv` sidecar when 
 
 # Path 2 — Build an OSM agent on your own data
 
-> **Status: on projects, packages, deployments and sessions, verified end to end on dev
-> (2026-10-30, and again 2026-11-04 with a member key in a new project: validation 0.7920, test
-> 0.8463, delivery 0.7431, 367/367 served as batch, the same library view).** Dev and staging serve
-> deployments and sessions (staging since 2026-11-09); production and the free trial still run bundles
-> and agent instances until their next platform release. Check first: `GET
+> **Status: on projects, packages, deployments and sessions, verified end to end on
+> production (2026-11-12, a member key in a new project: validation 0.7920, test 0.8463,
+> delivery 0.7431, 367/367 served as batch, the same library view), as on dev before.**
+> Production no longer serves bundles and agent instances. To check another deployment: `GET
 > /agents/sessions?limit=1` answers 200, not 404. The bundle
 > version was verified end to end on production, staging, Tokyo (2026-10-01) and dev
 > (2026-09-30), with identical results on all four: the prep skill's sample below scored the
@@ -461,7 +460,7 @@ last row), `"objective": "macro_f1"`, a `budget.max_trials`, `overrides.values` 
   (rows = true).
 
 Writes `out/optimize_<id>.json`. **Expect, on the sample** (2 trials, ~3 min plus the 85 MB
-upload; reproduced exactly by two runs on dev):
+upload; production, 2026-11-12, as on dev):
 
 ```
   #1   w=512   step=512   k=5   cosine uniform  completed macro-F1 0.7920  drain 0.87  fill 1.00  spin 0.57  wash 0.73  windows 386
@@ -477,7 +476,7 @@ python promote_and_test.py --roles $R --out out --name osm-sample --background  
 1. **Promote** the best completed trial (by `objective_value`; `--trial otr_…` for another):
    `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a `name` and `description`
    returns a **blueprint with the setting and the fitted kNN attached**: a reusable model with no
-   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `osm-otr_<trial id>`, unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
+   S3 artifact to build. Keys must be **unique per trial**, so a rerun never tests an older model. Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `<copy key>-otr_<trial id>` (here `osm-sample-base-otr_…`), unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, `name`, `emit_predictions: false` and
    one example per test file (ground truth as in validation). Poll `GET /agents/evals/{id}`. The
    `metrics_report` has the same shape as a trial's, **pooled over all files** (no per-file
@@ -488,7 +487,7 @@ again. Once you've seen the test number, the setting is frozen: tuning after it 
 optimistic. **Expect, on the sample** (~1 min for the eval):
 
 ```
-promoted otr_… -> osm-sample-w512-s512-cosine-k5-uniform-<6 chars> (blp_…)
+promoted otr_… -> osm-sample-base-otr_… (blp_…)
 test, 1 files: macro-F1 0.8463  drain 0.87  fill 0.98  spin 0.60  wash 0.93  windows 1,076
 ```
 
@@ -516,7 +515,10 @@ finds a package or deployment that failed or was interrupted.
 
 **Outputs don't name their inputs:** the script matches every output row to its delivery file by
 `finish_timestamp` (recordings must not overlap in time) and writes `out/delivery/<file>.csv`.
-Session ids are saved to `out/delivery/runs.json` as each starts; `--resume` collects them.
+Session ids are saved to `out/delivery/runs.json` as each starts; a rerun (or `--resume`)
+collects them first. It then replaces what can't finish: a failed package is deleted and built
+again once, and a session that failed, or whose outputs are still short (below), is ended and
+dropped, and its files get a new session.
 
 **A session counts as completed only once its outputs are.** Under bundles the platform could
 report a run `completed` while its last output file was still being written, so the script
@@ -530,7 +532,8 @@ script's apart, and `runs.json` records `completed` only after the check:
 ```
 
 Outputs still short 10 min after the platform said `completed` are logged as a warning and
-recorded on the session (`error: outputs incomplete: …`); `--resume` downloads them again.
+recorded on the session (`error: outputs incomplete: …`); a rerun downloads them once more,
+then replaces the session if they are still short.
 **Expect, on the sample** (~1 min): `1 of 1 files have predictions: 367 windows (0 invalid); 0
 rows matched no file`.
 
@@ -595,12 +598,12 @@ until it is stopped; free-trial accounts serve on CPU only, so answers can be sl
    SIGTERM and SIGHUP included). Each id goes to `out/serve_state.json` before the script
    waits on it, and stays there until then, for `cleanup.py`.
 
-**Expect, on the sample** (production through bundles, 2026-10-29, 3 min):
+**Expect, on the sample** (production, 2026-11-12, 3 min):
 
 ```
-served 367 windows of 1 file(s) in 367 queries, 174 s
+served 367 windows of 1 file(s) in 367 queries, 195 s
   against the delivery (batch): predicted_state identical in 367/367, probabilities within 1e-4 in 367/367 (max difference 0.0e+00); invalid 0
-  latency per query: median 453 ms, p95 519 ms, max 616 ms
+  latency per query: median 501 ms, p95 610 ms, max 680 ms
   served  macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
   batch   macro-F1 0.7431  drain 0.80  fill 0.84  spin 0.71  wash 0.62
 ```
@@ -681,7 +684,7 @@ own state's centre in 2-D:
 | LARCO quickstart (800 windows, k 5) | 70% | **86%** |
 
 (79% and 85% on windows held out of the fit, so not an overfit.) On the prep skill's sample
-(production, 2026-10-29): 1,600 windows, 84% nearest their own state's centre. **LD 1** is the direction
+(production, 2026-11-12): 1,600 windows, 84% nearest their own state's centre. **LD 1** is the direction
 along which the states' centres sit furthest apart relative to each state's own spread,
 **LD 2** the next best; neither has a physical unit. Writes `library-view.json` (states,
 channels, the layout) and `library-view.bin` (float32: each window's 2-D point and state, the
@@ -701,8 +704,8 @@ replayer and a bridge) taught, for any app that streams a machine's windows to a
 - **Publish the agent's phase on a retained topic,** with a broker will (last-will message)
   that says stopped, so a page opened later sees the phase, and a killed bridge doesn't leave
   "running" behind.
-- **Start with retries:** a deployment or session that fails to start (all 3 workers busy,
-  say) is tried again after 15 s, doubling to 120 s. A package that fails to build never
+- **Start with retries:** a deployment or session that fails to start (every serving worker
+  busy, say) is tried again after 15 s, doubling to 120 s. A package that fails to build never
   becomes ready: delete it so the retry builds a new one. **On a 409, replace the session:**
   open a new one and resend.
 - **Send only while the agent is running,** and hold the replay a few windows ahead of the
@@ -710,7 +713,7 @@ replayer and a bridge) taught, for any app that streams a machine's windows to a
 - **Delete the sessions, the deployment and the package on every exit** (SIGINT, SIGTERM,
   SIGHUP, an error), and keep their ids in `out/app_serving_state.json`, each written before
   waiting on it: `cleanup.py` finds them after a `kill -9`. A serving deployment holds one of
-  the 3 shared workers until it is stopped.
+  the deployment's shared serving workers until it is stopped.
 - **Show the agent's calls only.** Labels and the batch comparison belong to `serve.py`; a live
   page that also showed the truth and batch's answer read as three opinions, and in
   production there is no truth to show.

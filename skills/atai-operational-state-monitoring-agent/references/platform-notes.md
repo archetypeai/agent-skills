@@ -98,7 +98,8 @@ Why they exist:
 - **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
   from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
   of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
-  projects it can't see). Without one the platform keys the blueprint `osm-otr_<trial id>`, and
+  projects it can't see). Without one the platform keys the blueprint `<copy key>-otr_<trial id>`
+  (`osm-sample-base-otr_…` for the sample), and
   the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
   `promote_and_test.py` sends no key unless `--blueprint-key` is given.
 - **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
