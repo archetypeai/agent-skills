@@ -45,7 +45,7 @@ either.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_osm_agent.py`](references/run_osm_agent.py), stdlib only, on Path 2's HTTP helper | [`references/osm_lifecycle/`](references/osm_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~40 s on a clear queue | minutes to hours, with the dataset's size and the platform's load |
-| status | **on packages, deployments and sessions: verified on dev, 2026-11-04**; production doesn't serve `playground-osm-drilling` or sessions yet (the bundle version was verified there) | **on packages, deployments and sessions: verified on dev, 2026-10-30 and 2026-11-04**; production doesn't serve deployments and sessions yet (the bundle version was verified on production 2026-10-28/29, staging and dev, identical results) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on packages, deployments and sessions: verified on dev, 2026-10-30 and 2026-11-04** (PROD-PENDING) |
 
 Both paths' outputs share one schema, so the output schema and scoring below apply to both.
 
@@ -68,12 +68,12 @@ hard dataset): support@archetypeai.dev.
 
 # Path 1 — Run the platform's demo blueprint
 
-> **Status: on projects, packages, deployments and sessions, verified on dev (2026-11-04).**
-> The pre-packaged "OSM Quick Start" bundles are gone with the bundle API: the platform
-> publishes a Volve six-state classifier as a demo blueprint, `playground-osm-drilling`, which
-> you copy into a project and run. Production doesn't serve it, nor deployments and sessions,
-> yet. Check your deployment first: `GET /agents/blueprints/playground-osm-drilling` answers
-> 200, and `GET /agents/sessions?limit=1` 200, not 404.
+> **Status: on projects, packages, deployments and sessions, verified on production
+> (2026-11-12): macro-F1 0.4790 on the sample, as below.** The pre-packaged "OSM Quick Start"
+> bundles are gone with the bundle API: the platform publishes a Volve six-state classifier as
+> a demo blueprint, `playground-osm-drilling` ("Playground: OSM drilling"), which you copy into
+> a project and run. To check another deployment: `GET /agents/blueprints/playground-osm-drilling`
+> answers 200, and `GET /agents/sessions?limit=1` 200, not 404.
 
 One session = one input file. You upload the CSV, copy the demo into a project, package it,
 deploy the package as `batch`, run a session over the file and download one output CSV of
@@ -182,10 +182,11 @@ curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/ses
 curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/events"
 ```
 
-A session goes `pending → running → completed | failed | cancelled`, and **its `status` is
-reliable**: a failed one reaches `failed` and carries `error`. Its `/events` (newest first)
-say what happened. There is no `/logs`. **Run sessions sequentially**: workers are shared,
-and concurrent runs have run about N× slower each under load.
+A session goes `pending → running → completed | failed | cancelled`; a failed one carries
+`error`, and its `/events` (newest first) say what happened. There is no `/logs`. **`completed`
+means the job ended, not that the output is whole:** Step 5 checks the output reaches the
+input's end. **Run sessions sequentially**: workers are shared, and concurrent runs slow
+each other down under load.
 
 ## Step 5 — Download the results
 
@@ -253,7 +254,7 @@ own data, take Path 2.
 
 **Runtime is dominated by worker contention, not window count.** With a clear queue, the
 sample ran in **37 s** from packaging to a completed session (dev, 2026-11-04), the 4.9 MB
-download included. Under the former bundles, the same 4,185-window slice took 1–2 min with
+download included; on production (2026-11-12) the same run took 5.5 min, waiting for a worker. Under the former bundles, the same 4,185-window slice took 1–2 min with
 a clear queue and 22–27 min when workers were contended (~17× slower). Budget by the
 **session's events, not the clock**: you cannot see other tenants' jobs, so the queue state
 is only observable from your run's own event timing.
@@ -276,7 +277,7 @@ is only observable from your run's own event timing.
 # The bare deployment root; the runner appends /api itself:
 cat > .env <<EOF
 ATAI_API_KEY=sk_...
-ATAI_API_ENDPOINT=https://platform.dev.u1.archetypeai.app
+ATAI_API_ENDPOINT=https://platform.u1.archetypeai.app
 EOF
 
 R=skills/atai-operational-state-monitoring-agent/references

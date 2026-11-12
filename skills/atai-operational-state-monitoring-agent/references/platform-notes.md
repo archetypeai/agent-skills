@@ -82,7 +82,7 @@ Why they exist:
   waits for the first. The platform draws distinct points at random: `max_trials`
   below the search space's size is a random search with no repeats; at or above it,
   every point runs once. Trials that share `window_size` and `step_size` share their
-  embeddings (atai_core's trial grouping), so those two settings set the cost.
+  embeddings (the platform groups such trials), so those two settings set the cost.
 - **Every trial's `created_at` is the optimization's creation time,** so time a trial
   from the previous trial's `completed_at`, not from its own `created_at` (the latter
   includes its wait in the queue).
