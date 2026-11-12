@@ -3,7 +3,7 @@
 
     python library_embeddings.py --roles roles --out out              # one batch run per library file, then the view
     python library_embeddings.py --roles roles --out out --serving    # a serving agent, one query per window
-    python library_embeddings.py --roles roles --out out --serving --agent agt_...   # one already running
+    python library_embeddings.py --roles roles --out out --serving --session ses_...   # one already running
     python library_embeddings.py --roles roles --out out --view       # the view again from the saved outputs, no platform calls
     python library_embeddings.py --roles roles --out out --view-dir ../my-app/static
 
@@ -22,11 +22,11 @@ package of it, one batch deployment, and a session per library file.
 
 --serving gets the same embeddings from a serving agent instead, one window per /query, cut
 here as the platform cuts them: from each file's row 0 at the blueprint's step, leaving out
-the windows that cross a join between the file's pieces (training skips those). One agent for
-the whole library: no job slots, queue or 2-hour cap on the free trial. With --agent, an
-agent of the promoted blueprint already running with output_embeddings (a live app's) is used
-and left running; otherwise one is started and deleted at the end (ids in
-<out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
+the windows that cross a join between the file's pieces (training skips those). One serving
+session for the whole library: no job slots, queue or 2-hour cap on the free trial. With
+--session, a session already running the embeddings blueprint (a live app's) is used and left
+running; otherwise a package, serving deployment and session are made and deleted at the end
+(ids in <out>/library_serving_state.json until then). Measured on the AD skill's SKAB library
 (2026-10-31): the same 1,950 windows as batch, embeddings within 4.0e-6.
 
 The view is the two directions that best separate the states: each embedding scaled to unit
@@ -58,8 +58,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, lifecycle_url,  # noqa: E402
-                       list_trials, load_dotenv, open_session, package_ready, request, root, same_deployment,
-                       trial_setting, upload_all, wait, wait_for)
+                       list_trials, load_dotenv, open_session, package_ready, ready_package, request, root,
+                       same_deployment, trial_setting, upload_all, wait, wait_for)
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from deliver import END_SLACK_MS, OUTPUT_WAIT_S, fetch, time_range, to_ms  # noqa: E402
 from optimize import pinned_values, search_space  # noqa: E402
@@ -396,10 +396,8 @@ def main(argv=None):
         if not state.get("deployment"):
             emb = embeddings_blueprint(args, manifest, test, state, save)
             if not state.get("package"):
-                state.update({"endpoint": root(), "package": create_package(emb["id"], f"{args.name} library embeddings")["id"],
-                              "blueprint": key, "runs": {}})
-                save()
-            package_ready(state["package"])
+                state.update({"endpoint": root(), "blueprint": key, "runs": {}})
+            ready_package(state, emb["id"], f"{args.name} library embeddings", save, log)
             state["deployment"] = deploy(state["package"], "batch")["id"]
             save()
             deployment_ready(state["deployment"])

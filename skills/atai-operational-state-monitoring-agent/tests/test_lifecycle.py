@@ -145,6 +145,34 @@ class TestTimestamps(unittest.TestCase):
         got = deliver.incomplete(["a.csv", "b.csv", "c.csv"], state, per_file, ["finish_timestamp"])
         self.assertEqual(got, ["b.csv", "c.csv"])
 
+    def test_a_failed_or_short_session_is_ended_and_dropped(self):
+        state = {"runs": [{"session": "ses_ok", "files": ["a.csv"], "status": "completed", "error": None},
+                          {"session": "ses_fail", "files": ["b.csv"], "status": "failed", "error": "boom"},
+                          {"session": "ses_short", "files": ["c.csv"], "status": "completed",
+                           "error": "outputs incomplete: c.csv"}]}
+        ended = []
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(deliver, "end", lambda kind, obj: ended.append(obj)), \
+                mock.patch.object(deliver, "log"):
+            deliver.drop_unfinished(state, os.path.join(out, "runs.json"))
+        self.assertEqual([r["session"] for r in state["runs"]], ["ses_ok"])
+        self.assertEqual(ended, ["ses_fail", "ses_short"])
+
+    def test_a_rerun_opens_sessions_only_for_files_no_run_holds(self):
+        manifest = {"delivery": {"files": [{"file": "delivery/a.csv"}, {"file": "delivery/b.csv"}]}}
+        state = {"endpoint": "https://x", "blueprint": "bp", "deployment": "dpl_1", "files": {},
+                 "runs": [{"session": "ses_ok", "files": ["delivery/a.csv"]}]}
+        opened = []
+        args = mock.Mock(roles="roles", out="out", name="osm", upload_jobs=1, files_per_run=0)
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(deliver, "upload_all", lambda paths, *a, **k: {p: "fil_" + os.path.basename(p) for p in paths}), \
+                mock.patch.object(deliver, "open_session", lambda d, ids: opened.append(ids) or {"id": "ses_new"}), \
+                mock.patch.object(deliver, "log"):
+            deliver.start(args, manifest, os.path.join(out, "runs.json"),
+                          {"blueprint": {"key": "bp", "id": "blp_1"}}, state)
+        self.assertEqual(opened, [["fil_b.csv"]])
+        self.assertEqual([r["files"] for r in state["runs"]], [["delivery/a.csv"], ["delivery/b.csv"]])
+
     def test_run_is_completed_only_once_its_outputs_are(self):
         calls = {"status": 0, "results": 0}
 
@@ -391,7 +419,7 @@ class Promote(unittest.TestCase):
             calls.append((method, body))
             if method == "GET":
                 return {"id": "blp_0", "blueprint_key": url.rsplit("/", 1)[1]}
-            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "osm-otr_abc123")}
+            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "osm-sample-base-otr_abc123")}
         with mock.patch.object(promote_and_test, "request", fake), \
                 mock.patch.object(promote_and_test, "agents", lambda: "https://x/api/agents"), \
                 mock.patch.object(promote_and_test, "trial_setting", lambda t: (512, 512, 5, "cosine", "uniform")), \
@@ -402,14 +430,14 @@ class Promote(unittest.TestCase):
         bp, calls = self.promote()
         self.assertEqual([m for m, _ in calls], ["POST"])
         self.assertNotIn("blueprint_key", calls[0][1])
-        self.assertEqual(bp["blueprint_key"], "osm-otr_abc123")
+        self.assertEqual(bp["blueprint_key"], "osm-sample-base-otr_abc123")
 
     def test_a_chosen_key_when_asked(self):
         bp, calls = self.promote("osm-mine")
         self.assertEqual(calls[0][1]["blueprint_key"], "osm-mine")
 
     def test_an_already_promoted_trial_is_reused_by_id(self):
-        bp, calls = self.promote(trial={"id": "otr_abc123", "promoted_blueprint": {"id": "blp_9", "blueprint_key": "osm-otr_abc123"}})
+        bp, calls = self.promote(trial={"id": "otr_abc123", "promoted_blueprint": {"id": "blp_9", "blueprint_key": "osm-sample-base-otr_abc123"}})
         self.assertEqual([m for m, _ in calls], ["GET"])
         self.assertEqual(bp["blueprint_key"], "blp_9")      # the fake echoes the last path segment: looked up by id
 

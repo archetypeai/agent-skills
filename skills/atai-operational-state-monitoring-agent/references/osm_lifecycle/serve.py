@@ -85,7 +85,9 @@ def chunks(firsts, window, wpq):
 
 def end(ex):
     """End the session, then the deployment, then delete the package; an id already gone
-    counts as done. Each holds the next."""
+    counts as done. Each is tried even when one before it fails: a session that won't delete
+    must not leave the serving deployment holding its worker."""
+    ok = True
     for kind in ("sessions", "deployments", "packages"):
         obj = ex.get(kind[:-1])
         if not obj:
@@ -94,8 +96,8 @@ def end(ex):
             end_one(kind, obj)
         except RuntimeError as e:
             log(f"cleanup: {e}; cleanup.py retries it")
-            return False
-    return True
+            ok = False
+    return ok
 
 
 def stop(signum, _frame):

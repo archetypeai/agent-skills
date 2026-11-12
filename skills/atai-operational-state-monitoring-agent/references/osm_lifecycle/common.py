@@ -65,7 +65,8 @@ def base_blueprint(out, project_name, source, base_key, log=print):
         json.dump(state, open(path, "w"), indent=1)
         log(f"project {state['project']} ({project_name})")
     if "base" not in state:
-        found = request("GET", f"{agents()}/blueprints?project_id={state['project']}&key={base_key}")["data"]
+        found = [bp for bp in request("GET", f"{agents()}/blueprints?project_id={state['project']}&key={base_key}")["data"]
+                 if bp["blueprint_key"] == base_key]   # never a blueprint promoted from it
         if found:
             bp = found[0]
             log(f"reusing {base_key} in {state['project']} ({bp['id']})")
