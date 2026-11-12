@@ -70,7 +70,7 @@ class State:
 
 def ensure_project(st: State, name: str) -> str:
     if "project" not in st.d:
-        found = [p for p in A.request("GET", f"{A.api_base()}/projects?limit=1000")["data"] if p["name"] == name]
+        found = [p for p in A.list_all(f"{A.api_base()}/projects") if p["name"] == name]
         st.d["project"] = found[0]["id"] if found else A.request(
             "POST", f"{A.api_base()}/projects", body={"name": name, "description": "Omega Encoder agent embeddings"})["id"]
         st.save(); log(f"project {st.d['project']}")
@@ -83,7 +83,8 @@ def ensure_package(st: State, window: int, project_name: str, prefix: str) -> di
     key = f"{prefix}-w{window}"
     if "blueprint" not in ws:
         project = ensure_project(st, project_name)
-        found = A.request("GET", f"{A.agents_base()}/blueprints?project_id={project}&key={key}")["data"]
+        found = [b for b in A.request("GET", f"{A.agents_base()}/blueprints?project_id={project}&key={key}")["data"]
+                 if b.get("blueprint_key") == key]
         bp = found[0] if found else A.request(
             "POST", f"{A.agents_base()}/blueprints/omega-embeddings/copy",
             body={"project_id": project, "blueprint_key": key,
@@ -92,18 +93,17 @@ def ensure_package(st: State, window: int, project_name: str, prefix: str) -> di
     values = A.request("GET", f"{A.agents_base()}/blueprints/{ws['blueprint']}")["document"]["values"]
     if (values["window_size"], values["step_size"]) != (window, window):
         sys.exit(f"blueprint {key} has window {values['window_size']}, step {values['step_size']}; expected {window}")
-    pkg = ws.get("package")
-    if not pkg or A.request("GET", A.packages_url(pkg))["status"] != "ready":
-        ws["package"] = A.create_package(ws["blueprint"], key)["id"]; st.save(); log(f"package {ws['package']}")
+    A.ready_package(ws, ws["blueprint"], key, st.save, log)    # a failed one is rebuilt, once
     return ws
 
 
 def ensure_batch(st: State, window: int, project_name: str, prefix: str) -> dict:
     ws = ensure_package(st, window, project_name, prefix)
     dpl = ws.get("deployment")
-    if not dpl or A.request("GET", A.deployments_url(dpl))["status"] != "ready":
-        ws["deployment"] = A.deploy(ws["package"], "batch")["id"]; st.save()
+    if not dpl or A.status_of(A.deployments_url(dpl)) not in ("ready", "deploying"):
+        ws["deployment"] = A.deploy(ws["package"], "batch")["id"]; st.save()   # saved before waiting
         log(f"batch deployment {ws['deployment']} (window {window})")
+    A.deployment_ready(ws["deployment"])
     return ws
 
 
@@ -149,9 +149,13 @@ def fetch_all_results(session_id: str, expected: int, settle_s: int = 600) -> li
         if len(rows) == expected:
             return rows
         if time.time() > deadline:
-            sys.exit(f"{session_id}: {len(rows)} windows after {settle_s}s, expected {expected}")
+            raise Unfinished(f"{session_id}: {len(rows)} windows after {settle_s}s, expected {expected}")
         log(f"  {session_id}: {len(rows)}/{expected} windows; waiting")
         time.sleep(15)
+
+
+class Unfinished(Exception):
+    """A role's session that failed, or whose output stayed short."""
 
 
 def map_windows(rows: list[dict], files: list[dict], window: int, step: float, channels: list[str],
@@ -167,7 +171,7 @@ def map_windows(rows: list[dict], files: list[dict], window: int, step: float, c
             continue
         out.append([[by_start[s][c] for c in channels] for s in starts])
     if missing:
-        sys.exit(f"no window at the expected start times of: {missing[:5]}")
+        raise Unfinished(f"no window at the expected start times of: {missing[:5]}")
     return np.asarray(out, dtype=np.float32)
 
 
@@ -192,9 +196,17 @@ def run_role(st: State, a, m: dict, window: int, role: str) -> None:
         log(f"{role} @ {window}: batch session {sid} over {len(fids)} files, {expected} windows expected")
     t = time.time()
     status = A.poll_session(sid, timeout_s=6 * 3600, interval_s=20)
-    if status != "completed":
-        sys.exit(f"{role} @ {window}: session {sid} ended {status}")
-    emb = map_windows(fetch_all_results(sid, expected), files, window, m["step_s"], m["channels"], per_file)
+    try:
+        if status != "completed":
+            raise Unfinished(f"session {sid} ended {status}")
+        emb = map_windows(fetch_all_results(sid, expected), files, window, m["step_s"], m["channels"], per_file)
+    except Unfinished as e:                  # end and forget it: the next run opens a new session
+        try:
+            A.end_session(sid)
+        except SystemExit as err:
+            log(f"  could not end {sid}: {err}")
+        ws["sessions"].pop(key, None); st.save()
+        raise Unfinished(f"{role} @ {window}: {e}; rerun to start a new session") from None
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     np.savez_compressed(out_path, files=np.asarray([os.path.basename(f["path"]) for f in files]), emb=emb,
                         run_key=np.asarray(run_key), window=np.asarray(window))
@@ -231,9 +243,16 @@ def main() -> None:
     windows = windows_arg(a.window, m["rows"], a.eval)
     log(f"endpoint {A.api_base()}")
     st = State(a.out)
+    unfinished = []
     for window in windows:
         for role in a.role:
-            run_role(st, a, m, window, role)
+            try:
+                run_role(st, a, m, window, role)
+            except Unfinished as e:              # the other roles and windows go on
+                log(str(e))
+                unfinished.append(f"{role} @ {window}")
+    if unfinished:
+        sys.exit(f"{len(unfinished)} without a complete output ({', '.join(unfinished)}): rerun to start new sessions")
 
 
 if __name__ == "__main__":

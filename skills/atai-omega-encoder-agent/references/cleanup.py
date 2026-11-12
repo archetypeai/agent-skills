@@ -28,16 +28,16 @@ def main() -> None:
     ap.add_argument("--yes", action="store_true", help="actually delete")
     a = ap.parse_args()
     A.load_dotenv()
-    projects = [p["id"] for p in A.request("GET", f"{A.api_base()}/projects?limit=1000")["data"] if p["name"] == a.project]
+    projects = [p["id"] for p in A.list_all(f"{A.api_base()}/projects") if p["name"] == a.project]
     if not projects:
         print("nothing left")
         return
     for prj in projects:
-        packages = A.request("GET", f"{A.packages_url()}?project_id={prj}&limit=1000")["data"]
-        deployments = A.request("GET", f"{A.deployments_url()}?project_id={prj}&limit=1000")["data"]
+        packages = A.list_all(f"{A.packages_url()}?project_id={prj}")
+        deployments = A.list_all(f"{A.deployments_url()}?project_id={prj}")
         sessions = [s for d in deployments
-                    for s in A.request("GET", f"{A.sessions_url()}?deployment_id={d['id']}&limit=1000")["data"]]
-        blueprints = [b for b in A.request("GET", f"{A.agents_base()}/blueprints?project_id={prj}&limit=1000")["data"]
+                    for s in A.list_all(f"{A.sessions_url()}?deployment_id={d['id']}")]
+        blueprints = [b for b in A.list_all(f"{A.agents_base()}/blueprints?project_id={prj}")
                       if b.get("project_id") == prj]
         print(f"project {prj}: {len(sessions)} sessions, {len(deployments)} deployments, "
               f"{len(packages)} packages, {len(blueprints)} blueprints")

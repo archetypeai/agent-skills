@@ -90,8 +90,35 @@ def test_map_windows_back_to_files_by_start():
     out = E.map_windows(list(rng.permutation(rows)), files, 256, 0.01, CH, 4)
     assert out.shape == (2, 4, 3, 768)
     assert out[1, 3, 0, 0] == 203.0                       # file 2, window 4
-    with pytest.raises(SystemExit):
+    with pytest.raises(E.Unfinished):                     # the run drops that session and goes on
         E.map_windows(rows[:-1], files, 256, 0.01, CH, 4)
+
+
+def test_a_create_post_is_not_retried_and_a_get_is(monkeypatch):
+    monkeypatch.setenv("ATAI_API_KEY", "sk-1")
+    calls = []
+
+    def boom(req, timeout):
+        calls.append(req.get_method())
+        raise TimeoutError("lost")
+    monkeypatch.setattr(A.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(A.time, "sleep", lambda s: None)
+    with pytest.raises(SystemExit):
+        A.request("POST", "https://x.test/api/agents/deployments", body={"kind": "serving"})
+    assert calls == ["POST"]
+    with pytest.raises(SystemExit):
+        A.request("GET", "https://x.test/api/agents/sessions/ses_1", retries=2)
+    assert calls == ["POST", "GET", "GET", "GET"]
+
+
+def test_the_shell_wins_over_dotenv(monkeypatch, tmp_path):
+    (tmp_path / ".env").write_text('ATAI_API_KEY="sk-from-dotenv"\nATAI_API_ENDPOINT=https://x.example\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ATAI_API_KEY", "sk-from-shell")
+    monkeypatch.delenv("ATAI_API_ENDPOINT", raising=False)
+    A.load_dotenv()
+    assert os.environ["ATAI_API_KEY"] == "sk-from-shell"
+    assert os.environ["ATAI_API_ENDPOINT"] == "https://x.example"
 
 
 def test_windows_arg(tmp_path):
