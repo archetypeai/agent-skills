@@ -17,7 +17,15 @@ dozen random points usually land close to the best, and a grid's extra trials bu
 little. --max-trials sets the budget (the product's size forces the full grid).
 Trials run one after another. Step > window skips records and needs --allow-gaps.
 
-Writes <out>/optimize_<optimization id>.json (the optimization, every trial, a summary).
+The optimization searches the project's own copy of --blueprint (--project, created or
+reused; the copy is keyed `<--name>-base`), so the blueprints it promotes, and their
+packages, deployments and sessions, land in that project. A package runs a blueprint exactly
+as promoted, so the values serving needs are pinned here: `data_columns` and
+`timestamp_column` (batch reads them from the CSV header, the serving source from values),
+and `states` where the blueprint takes them.
+
+Writes <out>/optimize_<optimization id>.json (the optimization, every trial, a summary) and
+<out>/project_state.json.
 
     python optimize.py --roles roles --dry-run                   # the plan: no uploads, no jobs
     python optimize.py --roles roles --k 5 31 --background       # 2 trials, detached
@@ -30,9 +38,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import agents, check_auth, list_trials, load_dotenv, report_f1, request, states_override, trial_setting, upload_all, wait  # noqa: E402
+from atai_http import agents, check_auth, root, list_trials, load_dotenv, report_f1, request, states_override, trial_setting, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
-from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
+from common import base_blueprint, cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 
 
 def search_space(windows, steps, k, metrics, weights):
@@ -57,6 +65,14 @@ def budget(size, max_trials=None):
     """Trials to run: --max-trials if given, else the whole grid up to DEFAULT_TRIALS
     points, else a DEFAULT_TRIALS-trial random search. Never more than the grid."""
     return min(max_trials or min(size, DEFAULT_TRIALS), size)
+
+
+def pinned_values(blueprint, training, manifest, extra=None):
+    """The optimization's `overrides`: the columns (serving reads them from values), the states
+    where the blueprint takes them, and any `extra` values (e.g. output_embeddings)."""
+    values = {"data_columns": manifest["channels"], "timestamp_column": "timestamp",
+              **states_override(blueprint, training).get("overrides", {}).get("values", {}), **(extra or {})}
+    return {"values": values}
 
 
 def gap_pairs(points):
@@ -96,7 +112,8 @@ def main():
                     help=f"the trial budget (default: every point up to {DEFAULT_TRIALS}, else a "
                          f"{DEFAULT_TRIALS}-trial random search)")
     ap.add_argument("--allow-gaps", action="store_true", help="allow step > window (skips the records between windows)")
-    ap.add_argument("--blueprint", default="osm", help="blueprint key or blp_ id to optimize (default: the canonical osm)")
+    ap.add_argument("--blueprint", default="osm", help="blueprint key or blp_ id to copy into the project and optimize (default: the canonical osm)")
+    ap.add_argument("--project", default="Operational State Monitoring", help="the project to work in (created if you have none of that name)")
     ap.add_argument("--upload-jobs", type=int, default=3)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resume", metavar="OPT_ID")
@@ -127,14 +144,15 @@ def main():
         opt_id = args.resume
     else:
         ids = upload_all(library + validation, args.roles, cache_path(args.out), prefix=args.name, jobs=args.upload_jobs, log=log)
-        bp = request("GET", f"{agents()}/blueprints/{args.blueprint}")
+        base = base_blueprint(args.out, args.project, args.blueprint, f"{args.name}-base", log=log)
+        bp = request("GET", f"{agents()}/blueprints/{base['id']}")
         training = [example(os.path.basename(p)[:-4], ids[p], os.path.basename(p).split("__")[0]) for p in library]
         body = {
             "name": f"{args.name} optimize {stamp()}", "blueprint_id": bp["id"], "objective": "macro_f1",
             "search_space": space, "budget": {"max_trials": n},
             "training_examples": training,
             "validation_examples": [example(os.path.basename(p)[:-4], ids[p]) for p in validation],
-            **states_override(bp, training),
+            "overrides": pinned_values(bp, training, manifest),
         }
         opt_id = request("POST", f"{agents()}/optimizations", body=body)["id"]
         log(f"optimization {opt_id} created (collect later with --resume {opt_id})")
@@ -149,7 +167,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"optimize_{opt_id}.json")
     with open(path, "w") as f:
-        json.dump({"optimization": opt, "trials": trials, "summary": rows, "search_space": space,
+        json.dump({"endpoint": root(), "optimization": opt, "trials": trials, "summary": rows, "search_space": space,
                    "validation": [os.path.relpath(p, args.roles) for p in validation]}, f, indent=1)
     log(f"wrote {path}; next: python promote_and_test.py --roles {args.roles} --out {args.out} --name {args.name}")
 
