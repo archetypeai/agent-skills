@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Path 2, step 3: deliver the promoted blueprint as a bundle, one agent run per delivery file.
+"""Path 2, step 3: deliver the promoted blueprint in batch, one session per delivery file.
 
-POST /agents/bundles {"blueprint": <your key>, "values": {...}} creates the deployable agent.
-Its values override the promoted blueprint's: by default it adds `step_size: 1` (a score
-for every sample; --step to change), `output_score: true` and checkpointing off. --threshold
-labels windows at another threshold with the same detector (an operating point, not a new
-detector). Then POST /agents/bundles/{id}/run per delivery file, --parallel at a time.
+POST /agents/packages packages the promoted blueprint (its encoder and fitted detector
+resolved once); POST /agents/deployments deploys it as `batch`; then POST /agents/sessions
+with the file as a source connector runs it over each delivery file, --parallel at a time.
+A package carries no values: it runs at the trial's own window, step and threshold, with
+`output_score` on as optimize.py pinned it. There is no step-1 delivery: choose the step at
+Optimize. score.py rescores at any threshold offline, from the scores.
 
---max-windows-per-run N splits a longer file into runs of at most N windows, for a
+--max-windows-per-run N splits a longer file into sessions of at most N windows, for a
 deployment that caps a run's time (the free trial: 2 hours). Each run's rows overlap the
 next by window - step, so every window lies whole in one run; the runs' outputs are joined
 into the file's, the same windows as one run gives. Off by default (a run per file), except
@@ -18,13 +19,13 @@ A rerun at another N names its runs' files by row range, so it never reuses
 another split's; that split's runs are forgotten, any still going cancelled first.
 
 Each output is downloaded again every 15 s until its last window reaches the input's last
-timestamp: a run can report `completed` while its output is still being written. A
+timestamp: a session can report `completed` while its output is still being written. A
 network outage is waited out (every 60 s, up to an hour), not counted as a failed file.
 
 Writes <out>/delivery/<file>.csv (split runs' inputs and outputs in <out>/delivery-runs/)
-and <out>/deliver_state.json (resume: finished outputs are skipped, running agents are
-polled, not started again; a file whose agent failed or was cancelled without a complete
-output gets a new agent).
+and <out>/deliver_state.json (resume: finished outputs are skipped, running sessions are
+polled, not started again; a file whose session failed or was cancelled without a complete
+output gets a new session).
 
     python deliver.py --roles roles --out out --name ad-sample
 """
@@ -38,12 +39,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (TERMINAL, agents, check_auth, deployment, files_url, load_dotenv, request, root,  # noqa: E402
-                       same_deployment, upload_file)
+from atai_http import (TERMINAL, check_auth, deploy, deployment, deployment_ready, lifecycle_url,  # noqa: E402
+                       load_dotenv, open_session, ready_package, request, result_url, root, same_deployment,
+                       upload_file)
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import load_manifest, log, stamp  # noqa: E402
 
-CHECKPOINTING_OFF = {"checkpointing": {"trigger_after_input_byte_size": 0, "trigger_after_delay_ms": 0}}
 NETWORK_WAIT_S, NETWORK_RETRIES = 60, 60
 lock = threading.Lock()
 TRIAL = "try.archetypeai.app"
@@ -82,19 +83,19 @@ def pieces(rows, window, step, max_windows):
 
 
 def retire_other_splits(state, save, planned, names):
-    """Forget the runs of another split of a file delivered now: a rerun at another
+    """Forget the sessions of another split of a file delivered now: a rerun at another
     --max-windows-per-run cuts it differently and never reads them. One still going would
     hold a job slot until it ends (2 hours on the free trial), so it is cancelled first;
-    cleanup.py deletes them with the bundle."""
-    runs = state.get("agents", {})
+    cleanup.py deletes them with the deployment."""
+    runs = state.get("sessions", {})
     for name in [n for n in runs if n not in names and n.split(" rows ")[0] in planned]:
-        agent = runs[name]
+        ses = runs[name]
         try:
-            if request("GET", f"{agents()}/instances/{agent}").get("status") not in TERMINAL:
-                request("POST", f"{agents()}/instances/{agent}/cancel", {})
-                log(f"{name}: cancelled agent {agent}, a run of another split")
+            if request("GET", lifecycle_url("sessions", ses)).get("status") not in TERMINAL:
+                request("POST", lifecycle_url("sessions", ses) + "/cancel", {})
+                log(f"{name}: cancelled session {ses}, a run of another split")
         except RuntimeError as e:
-            log(f"{name}: agent {agent}: {e}; cleanup.py deletes it")
+            log(f"{name}: session {ses}: {e}; cleanup.py deletes it")
         del runs[name]
     save()
 
@@ -128,18 +129,14 @@ def covered(out_path, source_end):
     return source_end - end <= 1.5 * win + 1e-6
 
 
-def poll(agent_id, timeout_s=3 * 3600):
-    """Status, until terminal. An error-level log entry is terminal too: a pod can die while
-    `status` still reads `running`. (Match the level, not the word "terminated": the happy
-    path logs "Agent execution terminated successfully".)"""
+def poll(session_id, timeout_s=3 * 3600):
+    """The session's status, once terminal. A session reaches a terminal status and carries
+    `error`; its /events say what happened (opened, dispatched as a job, completed)."""
     t0 = time.time()
     while time.time() - t0 < timeout_s:
-        a = request("GET", f"{agents()}/instances/{agent_id}")
-        if a.get("status") in TERMINAL:
-            return a["status"]
-        logs = request("GET", f"{agents()}/instances/{agent_id}/logs").get("data", [])
-        if any(e.get("level") == "error" for e in logs):
-            return "failed"
+        st = request("GET", lifecycle_url("sessions", session_id)).get("status")
+        if st in TERMINAL:
+            return st
         time.sleep(20)
     return "timeout"
 
@@ -150,7 +147,7 @@ def artifact_status(item):
                 .get("job_output", {}).get("status"))
 
 
-def download(agent_id, dst, source, ts_col):
+def download(session_id, dst, source, ts_col):
     """The run's output, once it covers the input; None after 10 min of short downloads.
 
     The platform reports a run completed while its output is still being written; the
@@ -158,11 +155,10 @@ def download(agent_id, dst, source, ts_col):
     check a second opinion."""
     end = last_ts(source, ts_col)
     for _ in range(40):
-        res = request("GET", f"{agents()}/instances/{agent_id}/results").get("data", [])
+        res = request("GET", lifecycle_url("sessions", session_id) + "/results").get("data", [])
         if res and artifact_status(res[0]) in (None, "complete"):
-            name = res[0]["data"]["filename"]
             import urllib.request
-            req = urllib.request.Request(f"{files_url()}/download/{name}")
+            req = urllib.request.Request(result_url(res[0]["data"]["ref"]))
             req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
             with urllib.request.urlopen(req, timeout=300) as resp, open(dst + ".part", "wb") as fh:
                 fh.write(resp.read())
@@ -178,11 +174,9 @@ def main(argv=None):
     ap.add_argument("--roles", default="roles")
     ap.add_argument("--out", default="out")
     ap.add_argument("--name", default="ad")
-    ap.add_argument("--step", type=int, default=1, help="step_size for delivery (the trial's, if 0)")
-    ap.add_argument("--threshold", type=float, help="label windows at this threshold instead of the trial's")
     ap.add_argument("--max-windows-per-run", type=int, default=None, metavar="N",
-                    help="split a longer file into runs of at most N windows (default: a run per file; on the "
-                         "free trial, sized to finish well inside its 2-hour cap); 0 never splits")
+                    help="split a longer file into sessions of at most N windows (default: a session per file; on "
+                         "the free trial, sized to finish well inside its 2-hour cap); 0 never splits")
     ap.add_argument("--parallel", type=int, default=3)
     add_background_flag(ap, "{out}/deliver.log")
     a = ap.parse_args(argv)
@@ -194,7 +188,7 @@ def main(argv=None):
     if not same_deployment(test):
         sys.exit(f"the blueprint in {a.out}/test_state.json is on {test['endpoint']}, "
                  f"a different deployment from {root()}: run promote_and_test.py here first")
-    key = test["blueprint"]["key"]
+    key, bp_id = test["blueprint"]["key"], test["blueprint"]["id"]
     sf = os.path.join(a.out, "deliver_state.json")
     state = json.load(open(sf)) if os.path.exists(sf) else {}
     if state.get("blueprint", key) != key:
@@ -209,20 +203,17 @@ def main(argv=None):
         with lock:
             json.dump(state, open(sf, "w"), indent=1)
 
-    if "bundle" not in state:
-        values = {"output_score": True, "runner_config": CHECKPOINTING_OFF}
-        if a.step:
-            values["step_size"] = a.step
-        if a.threshold is not None:
-            values["threshold"] = a.threshold
-        b = request("POST", f"{agents()}/bundles", {"blueprint": key, "name": f"{a.name} delivery", "values": values})
-        state["bundle"], state["values"] = b["id"], values
+    if "bundle" in state:
+        sys.exit(f"{sf} is from a bundle delivery: move it aside to deliver through a package")
+    if "deployment" not in state:
+        ready_package(state, bp_id, f"{a.name} delivery", save, log)
+        state["deployment"] = deploy(state["package"], "batch")["id"]
         save()
-        log(f"bundle {b['id']} on {key}: {json.dumps({k: v for k, v in values.items() if k != 'runner_config'})}")
+        log(f"batch deployment {state['deployment']}")
+        deployment_ready(state["deployment"])
     out_dir = os.path.join(a.out, "delivery")
     os.makedirs(out_dir, exist_ok=True)
-    window = test["blueprint"]["values"]["window_size"]
-    step = state["values"].get("step_size") or test["blueprint"]["values"]["step_size"]
+    window, step = test["blueprint"]["values"]["window_size"], test["blueprint"]["values"]["step_size"]
     max_windows = a.max_windows_per_run
     if max_windows is None:
         max_windows = 0
@@ -230,27 +221,27 @@ def main(argv=None):
             max_windows = trial_max_windows(len(m["channels"]))
 
     def one(job):
-        """One agent run: job's source to its output (resume: a finished output is kept)."""
+        """One session: job's source to its output (resume: a finished output is kept)."""
         name, src, dst = job
         if os.path.exists(dst):
             return dst
-        runs = state.setdefault("agents", {})
+        runs = state.setdefault("sessions", {})
         if name not in runs:
             fid = upload_file(src, f"{a.name}-{os.path.basename(src).replace('.csv', '')}-{stamp()}.csv")["file_id"]
-            agent = request("POST", f"{agents()}/bundles/{state['bundle']}/run",
-                            {"connectors": {"source": [{"type": "file", "id": fid, "format": "csv"}]}})
+            ses = open_session(state["deployment"], fid)
             with lock:
-                runs[name] = agent["id"]
+                runs[name] = ses["id"]
             save()
-            log(f"{name}: agent {agent['id']}")
+            log(f"{name}: session {ses['id']}")
         status = poll(runs[name])
         got = download(runs[name], dst, src, m["timestamp_column"])
-        if not got and status in ("failed", "canceled", "cancelled"):   # forget the dead agent: a rerun starts a new one
-            error = str(request("GET", f"{agents()}/instances/{runs[name]}").get("error") or "")
+        if not got and status in TERMINAL:   # forget it, even `completed` with no full output: a rerun opens a new one
+            error = str(request("GET", lifecycle_url("sessions", runs[name])).get("error") or "")
             if "DeadlineExceeded" in error:
                 log(f"{name}: {error[:200]} A plain rerun hits it again: rerun with --max-windows-per-run N "
-                    f"(the same windows in runs of N, each well under the limit) or --step 0 (the trial's step: "
-                    f"fewer windows, a coarser delay)")
+                    f"(the same windows in sessions of N, each well under the limit)")
+            elif error:
+                log(f"{name}: {error[:300]}")
             with lock:
                 del runs[name]
             save()
@@ -279,7 +270,7 @@ def main(argv=None):
         planned.add(f["file"])
         with open(src) as fh:
             header, *lines = fh.readlines()
-        if max_windows and a.max_windows_per_run is None and f["file"] in state.get("agents", {}):
+        if max_windows and a.max_windows_per_run is None and f["file"] in state.get("sessions", {}):
             parts = [(0, len(lines))]      # a run already started on the whole file: keep it
         else:
             parts = pieces(len(lines), window, step, max_windows)
