@@ -107,7 +107,7 @@ def test_demo_is_copied_into_the_project_once(monkeypatch):
 def test_existing_copy_is_reused(monkeypatch):
     """A second copy under the same key answers 409; the lookup needs ?project_id=,
     since a key registered in a project resolves only with it."""
-    api = FakeAPI({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old"}]}})
+    api = FakeAPI({("GET", "/agents/blueprints?"): {"data": [{"id": "blp_old", "blueprint_key": runner.COPY_KEY}]}})
     monkeypatch.setattr(runner, "request", api)
     assert runner.demo_copy("prj_1")["id"] == "blp_old"
     assert api.calls == [("GET", f"/agents/blueprints?project_id=prj_1&key={runner.COPY_KEY}", None)]

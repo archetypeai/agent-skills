@@ -36,8 +36,8 @@ import urllib.request
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "ad_lifecycle"))
 from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
-                       lifecycle_url, list_all, load_dotenv, open_session, package_ready, project_url,
-                       request, result_url, upload_file)
+                       lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
+                       result_url, upload_file)
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -63,7 +63,13 @@ SUSTAIN = 3
 
 def project_id(name: str = PROJECT) -> str:
     """Your project of that name, created on first use."""
-    found = [p for p in list_all(project_url()) if p["name"] == name]
+    found, after = [], ""
+    while True:                                    # every page: the cursor is opaque, passed back as is
+        page = request("GET", f"{project_url()}?limit=1000{after}")
+        found += [p for p in page.get("data", []) if p["name"] == name]
+        if not page.get("has_more"):
+            break
+        after = f"&after={page['next_cursor']}"
     if found:
         return found[0]["id"]
     pid = request("POST", project_url(), {"name": name})["id"]

@@ -342,38 +342,36 @@ class Cleanup(unittest.TestCase):
 
 
 class Promote(unittest.TestCase):
-    """Choosing the key can need the admin role (the free trial): promote again without one."""
+    """Choosing the key needs the admin role outside projects: promote under the platform's unless asked."""
 
-    def promote(self, error):
+    def promote(self, key=None):
         calls = []
 
         def fake(method, url, body=None):
             calls.append(body)
-            if "blueprint_key" in body:
-                raise error(url)
-            return {"id": "blp_1", "blueprint_key": "ad-otr_abc123"}
+            return {"id": "blp_1", "blueprint_key": body.get("blueprint_key", "ad-sample-base-otr_abc123")}
         run = {"optimization": "opt_1", "pinned": {"window_size": 64}}
         trial = {"id": "otr_abc123", "trial_values": {"values": {}}}
         with mock.patch.object(promote_and_test, "request", fake), \
                 mock.patch.object(promote_and_test, "agents", lambda: "https://x/api/agents"):
-            return promote_and_test.promote(run, trial, "ad-sample"), calls
+            return promote_and_test.promote(run, trial, "ad-sample", key), calls
 
-    def test_a_forbidden_key_falls_back_to_the_platforms(self):
-        bp, calls = self.promote(lambda url: RuntimeError(f"POST {url} failed (403): choosing the `blueprint_key` of a promoted blueprint requires the admin role"))
-        self.assertEqual(calls[0]["blueprint_key"], "ad-sample-abc123")
-        self.assertNotIn("blueprint_key", calls[1])
-        self.assertEqual(calls[0]["name"], calls[1]["name"])
-        self.assertEqual(bp["key"], "ad-otr_abc123")
+    def test_the_platforms_key_by_default(self):
+        bp, calls = self.promote()
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("blueprint_key", calls[0])
+        self.assertEqual(bp["key"], "ad-sample-base-otr_abc123")
 
-    def test_any_other_error_still_stops(self):
-        with self.assertRaises(RuntimeError):
-            self.promote(lambda url: RuntimeError(f"POST {url} failed (409): conflict"))
+    def test_a_chosen_key_when_asked(self):
+        bp, calls = self.promote("ad-mine")
+        self.assertEqual(calls[0]["blueprint_key"], "ad-mine")
+        self.assertEqual(bp["key"], "ad-mine")
 
 class DeliverResume(unittest.TestCase):
     """A file whose session failed without a complete output gets a new session on the next run;
     a file longer than --max-windows-per-run goes in several sessions whose outputs join to its own."""
 
-    def deliver(self, status, *args):
+    def deliver(self, status, *args, empty=False):
         started, self.cancelled = [], []
 
         def fake(method, url, body=None):
@@ -391,7 +389,7 @@ class DeliverResume(unittest.TestCase):
             return {"id": f"ses_new{len(started)}"}
 
         def download(agent, dst, src, ts_col):     # a batch output: a window every `step` rows of src
-            if status != "completed":
+            if status != "completed" or empty:
                 return None
             ts = pd.read_csv(src)["t"].tolist()
             rows = [(ts[s + 3], ts[s], "x") for s in range(0, len(ts) - 4 + 1, 2)]
@@ -431,6 +429,26 @@ class DeliverResume(unittest.TestCase):
             started, runs = self.deliver(status)
             self.assertEqual((started, runs), ([], {"delivery/d.csv": "ses_dead"}))
 
+    def test_a_completed_session_with_no_full_output_is_replaced(self):
+        started, runs = self.deliver("completed", empty=True)
+        self.assertEqual((started, runs), ([], {}))          # forgotten: the next run opens a new one
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        calls, statuses = [], {"pkg_bad": "failed", "pkg_new": "ready"}
+        state = {"package": "pkg_bad"}
+
+        def fake(method, url, body=None, idempotent=None):
+            calls.append((method, url.split("/agents/")[-1]))
+            if method == "POST" and url.rstrip("/").endswith("/packages"):
+                return {"id": "pkg_new"}
+            if method == "GET" and "/packages/" in url:
+                return {"status": statuses[url.split("/")[-1]]}
+            return {}
+        with mock.patch.object(atai_http, "request", fake), mock.patch.object(atai_http, "root", lambda: "https://x"):
+            pkg = atai_http.ready_package(state, "blp_1", "d", save=lambda: None, log=lambda m: None)
+        self.assertEqual((pkg["status"], state["package"]), ("ready", "pkg_new"))
+        self.assertIn(("DELETE", "packages/pkg_bad"), calls)
+
     def test_a_bundle_state_is_refused(self):
         sf = os.path.join(self.out, "deliver_state.json")
         json.dump({"endpoint": "https://x", "blueprint": "bp", "bundle": "bnd_1"}, open(sf, "w"))
@@ -462,8 +480,8 @@ class DeliverResume(unittest.TestCase):
         self.assertEqual(len(one), 9)
 
     def test_trial_run_size_scales_with_channels(self):
-        self.assertEqual(deliver.trial_max_windows(8), 4_800)      # SKAB: ~60 min at ~80 windows a minute
-        self.assertEqual(deliver.trial_max_windows(33), 1_100)     # TEP: its sample ran 1,000 in 24-34 min
+        self.assertEqual(deliver.trial_max_windows(8), 125_000)    # SKAB: its longest file (10,414) in one run
+        self.assertEqual(deliver.trial_max_windows(33), 30_300)    # TEP: a delivery file (~20,000) in one run
         self.assertEqual(deliver.trial_max_windows(10_000), 100)
 
     def on_trial(self, *args, running=None, completed=False, keep_state=False):

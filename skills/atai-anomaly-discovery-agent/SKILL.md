@@ -86,7 +86,7 @@ inputs abort and why only one feature mode is reachable.
 | APIs | files, **projects**, **packages**, **deployments**, **sessions** | files, **projects**, **Optimizations**, **promote**, **Evals**, **packages**, **deployments**, **sessions** |
 | scripts | [`references/run_ad_agent.py`](references/run_ad_agent.py), stdlib only, on Path 2's HTTP helper | [`references/ad_lifecycle/`](references/ad_lifecycle/), a small stdlib HTTP helper (the client doesn't cover Optimizations / Evals / promote yet) |
 | time | ~30 s–1 min on a clear queue | ~30 min on the sample; longer with the dataset and the platform's load |
-| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on packages, deployments and sessions: verified on dev, 2026-10-30**; production doesn't serve deployments and sessions yet (the bundle version was verified there, 2026-10-28/29) |
+| status | **verified on production, 2026-11-12** (on packages, deployments and sessions; first on dev, 2026-11-04) | **on projects, packages, deployments and sessions: verified on production, 2026-11-12** (first on dev, 2026-10-30) |
 
 The demo detector encodes one bearing's notion of normal, so running your own
 asset through it is a transfer test, not a deployment: for your own asset, take Path 2.
@@ -405,7 +405,7 @@ Verified 2026-08-11 → 2026-08-20, updated 2026-10-13. Path 2's own measurement
   `checkpoint boundary reached with unequal buffered rows per port ([0, 2]); the
   branches are not row-aligned`. The runner checkpoints every 50 MiB of input or
   10 minutes, and the forked graph's barrier copies misaligned at `fuse`.
-  **Fixed in runtime `1.1.9-590-194e878`** (atai_core #6317, Dev since
+  **Fixed in runtime `1.1.9-590-194e878`** (since
   2026-08-17): full 102 MB and 299 MB inputs then completed with every window
   valid. On a runtime without the fix, split inputs under 50 MiB, or turn the
   triggers off in the blueprint's values (pinned in an optimization):
@@ -501,12 +501,10 @@ clear queue, and minutes when workers are contended. The runner self-scores agai
 
 # Path 2 — Build an AD agent on your own data
 
-> **Status: on projects, packages, deployments and sessions, verified end to end on dev
-> (2026-10-30; Steps 1–6 again on 2026-11-04 with a member key in a new project, the same
-> numbers as below).** Dev and staging serve deployments and sessions (staging since 2026-11-09); production
-> and the free trial still run bundles and agent instances until their next platform release,
-> and the bundle version of these steps was verified on production (2026-10-28/29). Check
-> first: `GET /agents/sessions?limit=1` answers 200, not 404. Built on the Tennessee Eastman Process:
+> **Status: on projects, packages, deployments and sessions, verified end to end on
+> production (2026-11-12, Steps 1–6 with a member key in a new project: the numbers below).**
+> Production no longer serves bundles and agent instances. To check another deployment:
+> `GET /agents/sessions?limit=1` answers 200, not 404. Built on the Tennessee Eastman Process:
 > [anomaly-discovery-agent-example-tep-quickstart](https://github.com/archetypeai/anomaly-discovery-agent-example-tep-quickstart)
 > (the whole lifecycle in about 30 minutes, reproduced exactly by a second run from
 > scratch). The scripts use a small stdlib HTTP helper
@@ -546,9 +544,9 @@ copies `ad` into your project (`POST /agents/blueprints/ad/copy`) and optimizes 
   on a worker (seconds) and holds it until stopped; a serving session is a client's handle
   on it, queried at `/sessions/{id}/query`, and several can share one deployment.
 - **No admin-only call.** Registering a blueprint and choosing a promoted blueprint's key
-  take the org-admin role; the scripts do neither unless allowed (`promote_and_test.py`
-  falls back to the platform's key). The 2026-10-30 run used an admin key; a run with a
-  member key is still to be confirmed.
+  take the org-admin role; the scripts do neither unless asked (`promote_and_test.py`
+  uses the platform's key unless `--blueprint-key` is given). Runs with an admin key and
+  with a member key, each in its own project, gave the same numbers.
 
 Measured platform behaviour, with the numbers: [`references/platform-notes.md`](references/platform-notes.md).
 
@@ -622,7 +620,7 @@ Give an option several values to search it; `--threshold LOW:HIGH` searches a fl
   their embeddings, so windows and steps are the expensive settings; `n_neighbors`,
   `metric`, `pca_components` and `threshold` are cheap.
 
-**Expect, on the sample** (2 trials, ~10 min on a busy queue):
+**Expect, on the sample** (production, 2026-11-12: 2 trials in 1.5 min; ~10 min on a busy queue):
 
 ```
   otr_…  completed {"n_neighbors": 5}   macro-F1 0.8417  anomaly F1 0.8285  recall 0.717  precision 0.982  windows 1,265
@@ -636,8 +634,8 @@ python promote_and_test.py --roles $R --out out --name ad-sample
 ```
 
 1. **Promote** the best trial: `POST /agents/optimizations/{opt}/trials/{trial}/promote` with a
-   `blueprint_key` unique per trial (`<name>-<last 6 of the trial id>`). The blueprint pins the
-   trial's values and carries the fitted detector as a registry artifact (`aar_…`). On the free trial (`try.archetypeai.app`, 2026-10-29) choosing the key answered **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role"; the script then promotes without it and the platform keys the blueprint `ad-otr_<trial id>`: the same trial, the same model, and still the `name` we chose (the console's "Blueprint name" is that `name`; it never asks for a key). Production accepted the chosen key with our accounts.
+   `name` and no key. The blueprint pins the trial's values and carries the fitted detector as a
+   registry artifact (`aar_…`). Choosing the key outside a project needs the admin role: a developer (every free-trial user) gets **403**, "choosing the `blueprint_key` of a promoted blueprint requires the admin role". So the script lets the platform key the blueprint, `<copy key>-otr_<trial id>` (here `ad-sample-base-otr_…`), unique per trial, with the `name` we chose (the console's "Blueprint name"; it never asks for a key). `--blueprint-key` chooses one, for an admin.
 2. **Test once:** `POST /agents/evals` with `blueprint_id`, every test file and
    `emit_predictions: true`. An eval takes no value overrides: it runs at the trial's own
    threshold and step.
@@ -646,10 +644,10 @@ python promote_and_test.py --roles $R --out out --name ad-sample
    is its rank within its file by `key.predicted`, its [start, end] in epoch seconds), and
    the offline confusion matrix equals the platform's.
 
-**Expect, on the sample** (~3–8 min for the eval):
+**Expect, on the sample** (1 min for the eval on production, 2026-11-12; up to ~8 on a busy queue):
 
 ```
-promoted otr_… -> ad-sample-<6 chars> (blp_…)
+promoted otr_… -> ad-sample-base-otr_… (blp_…)
 test, 2 files: macro-F1 0.7462  anomaly F1 0.8247  recall 0.702  precision 1.000  windows 805 (25 abstained)
   false alarms on normal windows: 0 / 205 (0.00%)
   idv01          window detection   100 /   100  1.000
@@ -683,7 +681,7 @@ python deliver.py --roles $R --out out --name ad-sample --background     # tail 
 
 The delivery runs at the trial's window, step and threshold, with scores on (pinned at
 Optimize): a package carries no values. On the sample that is step 8, a score every 24
-minutes. **Expect, on the sample** (dev, 2026-10-30, 83 s): `2 of 2 delivery files have
+minutes. **Expect, on the sample** (production, 2026-11-12, 82 s): `2 of 2 delivery files have
 complete outputs`, 805 scored windows in `delivery_01.csv`.
 
 - **No step-1 delivery any more.** A bundle could deliver at `step_size: 1` over a step-8
@@ -697,20 +695,23 @@ complete outputs`, 805 scored windows in `delivery_01.csv`.
   hours, with no output). A plain rerun hits it again. `--max-windows-per-run N` delivers the
   same windows in sessions of at most N: each starts on a multiple of the step and overlaps
   the next by window − step rows, and the outputs are joined, so the scores equal one
-  session's. **On the free trial it is on by default**, sized to 40–60 min a session at the
-  rates below: 38,400 ÷ channels windows (4,800 at 8 channels, 1,100 at 33), so a long file
-  is split before it starts, not after a session has spent 2 hours and died. Split sessions'
+  session's. **On the free trial it is on by default**, sized to about 5 min a session at the
+  rate below: 1,000,000 ÷ channels windows (125,000 at 8 channels, 30,300 at 33), so only a
+  very long file is split, before it starts, not after a session has spent 2 hours and died. Split sessions'
   files are named by row range, so a rerun at another size never reuses a different split's
   files; the earlier split's sessions are forgotten, and any still going is cancelled first,
   so it doesn't hold a job slot for up to 2 hours. `--max-windows-per-run 0` turns it off;
   elsewhere it is off unless you set it.
 
-  **On the free trial, through bundles** (CPU): a run got through roughly 640–1,400
-  channel-windows a minute. On 2026-10-30, the sample (33 channels) at step 1 stopped at 2 h on
-  both files; with `--max-windows-per-run 1000` its 12 runs took 24–34 min each. On 2026-10-31,
-  SKAB (8 channels) ran ~80 windows a minute a run: a 10,414-window file stopped at 2 h, and in
-  4 runs of at most 3,000 (37 min each) it finished in 75 min. Queued runs report `running`
-  too; whether queue time counts toward the limit is not known, so keep `--parallel` at 3.
+  **On the free trial, through bundles** (GPU since 2026-11-06): the TEP quickstart's step-1
+  delivery took ~3.5 min a file (~20,000 windows × 33 channels, at least 190,000
+  channel-windows a minute), with production's scores; at step 8, ~3 min a file, most of it
+  start-up, so splitting a file into many short sessions costs more than it saves. On CPU
+  (2026-10-30/31) a run got through 640–1,400 channel-windows a minute: the sample (33
+  channels) at step 1 stopped at 2 h on both files and finished in runs of at most 1,000
+  windows (12 runs of 24–34 min); SKAB's 10,414-window file (8 channels) stopped at 2 h too
+  and finished in runs of at most 3,000 (75 min). Queued runs report `running` too; whether
+  queue time counts toward the limit is not known, so keep `--parallel` at 3.
 - **Embeddings from your own detector** need a blueprint with `output_embeddings: true`,
   since a package can't switch an output on: a 1-trial optimization pinning the winner's
   values plus the switch, promoted. Copying the promoted blueprint with
@@ -740,7 +741,7 @@ in the recording), **delay** to that detection in operating hours (a gap counts 
 sample, as in `serve.py`), and **AUROC** against every normal window; overall, the
 **false-alarm rate**.
 
-**Expect, on the sample** (dev, 2026-10-30, step 8):
+**Expect, on the sample** (production, 2026-11-12, step 8):
 
 ```
 delivery: 1 files, 805 windows scored; left out: 50 invalid, 0 with no label at finish time
@@ -821,12 +822,12 @@ stopped; free-trial accounts serve on CPU only, so answers can be slower than be
    deleted**, however the replay ends (Ctrl-C, SIGTERM and SIGHUP included); the ids stay in
    `out/serve_state.json` until then, for `cleanup.py`.
 
-**Expect, on the sample** (dev, 2026-10-30; ~4 min):
+**Expect, on the sample** (production, 2026-11-12; ~4 min):
 
 ```
-served 230 windows of 2 recording(s) in 230 queries, 208 s
+served 230 windows of 2 recording(s) in 230 queries, 196 s
   against the delivery (batch): predicted_label identical 230/230, anomaly_score within 1e-4 230/230 (max relative difference 1.3e-05); invalid 0
-  latency per query: median 836 ms, p95 901 ms, max 1001 ms
+  latency per query: median 802 ms, p95 917 ms, max 1023 ms
   normal_48h_run43   first sustained alarm: served none; batch none
   idv05_run3         first sustained alarm: served 1.15 h after onset; batch 1.15 h after onset
 ```
@@ -881,7 +882,9 @@ embeddings within 4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' p
 - **`--serving`:** a serving deployment of the embeddings blueprint and one session, the
   windows cut client-side exactly as the platform cuts them and sent one per query, 4 at a
   time. No job slots or queue, and on the free trial no 2-hour cap. SKAB's 1,950 windows took
-  5.6 min served, against 11.6 min for its 11 batch runs, 3 at a time. With `--session` it
+  5.6 min served, against 11.6 min for its 11 batch runs, 3 at a time, when batch ran on CPU
+  (2026-10-31); batch now runs on GPU and serving on CPU (the TEP quickstart's 40 library
+  runs: 36 min on CPU, 10 on GPU). With `--session` it
   uses a session already running the embeddings blueprint (it checks the package's
   blueprint), and leaves it running; otherwise it makes the package, deployment and session
   and deletes all three however the run ends, signals included (their ids stay in
@@ -889,10 +892,10 @@ embeddings within 4.0×10⁻⁶, scores within 2×10⁻⁷, and the two views' p
   Better when an app's session is up, or on the trial; batch is better for a library of tens of
   thousands of windows.
 
-**Expect, on the sample** (dev, 2026-11-04): the embeddings blueprint's 1-trial optimization
+**Expect, on the sample** (production, 2026-11-12): the embeddings blueprint's 1-trial optimization
 in 1.5 min, then `library: 570 windows from 10 files, window 48, step 8`, scores 0.971–1.158
 (median 1.006), none over 1.215, PCA 1–2 explaining 7.2% and 6.4%; batch in about 3 min, 10
-sessions 3 at a time. `--serving` gave the same 570 windows and timestamps in 6.6 min, each
+sessions 3 at a time. `--serving` (dev, 2026-11-04) gave the same 570 windows and timestamps in 6.6 min, each
 embedding within 0.07% of batch's (cosine ≥ 0.9999997), scores within 8.4×10⁻⁶, the view's
 points within 5.5×10⁻⁴ and the same explained variance.
 
