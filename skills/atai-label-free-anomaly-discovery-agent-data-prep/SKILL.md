@@ -43,7 +43,7 @@ file starts and ends.
 
 **Do not use this skill when:**
 - You'll fit a detector on normal-only data and monitor new data: [`atai-anomaly-discovery-agent-data-prep`](../atai-anomaly-discovery-agent-data-prep/SKILL.md)
-- The data has labelled states or labelled incidents to learn from: the OSM or RED data-prep skills
+- The data has labelled states or labelled incidents to learn from: [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) or [`atai-rare-event-detection-agent-data-prep`](../atai-rare-event-detection-agent-data-prep/SKILL.md)
 
 ## Your input
 
@@ -92,7 +92,7 @@ RESULT: PASS  (8 PASS, 2 WARN, 0 FAIL, 3 INFO)
    a gap: invented data is the kind of stretch `od` would rank as unusual.
 3. **Frozen stretches cut.** Every channel holding one value for `--frozen-min` (30) or
    more is the logger, not the machine. On the full MetroPT-3 record that is 170 hours, in
-   stretches of 15–62 hours. Measured on three weeks of it (Apr 4–25, 2020, staging) with
+   stretches of 15–62 hours. Measured on three weeks of it (Apr 4–25, 2020) with
    them left in: all 36 frozen hours were flagged and took ranks 3 to ~40, pushing most of
    the reported leak from ranks 3–36 down to 42 and below; the leak's AUROC fell from
    0.974 to 0.883.

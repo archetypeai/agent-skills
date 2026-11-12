@@ -20,7 +20,7 @@ description: >
 
 # Label-Free Anomaly Discovery agent: what's unusual in this data?
 
-A customer sends a few weeks of sensor data. Nobody has labelled it and nobody knows
+You have a few weeks of sensor data. Nobody has labelled it and nobody knows
 whether anything went wrong in it. The Label-Free Anomaly Discovery agent (blueprint key
 `od`) answers: **which stretches of this file look least like the rest of it?**
 
@@ -35,16 +35,16 @@ your CSV ──► od: windows ─┬─► Omega 1.5 ─► PCA per channel ─
                           └─► 7 statistics per channel ─────┴─► LOF fitted on this file ─► score + label per window
 ```
 
-> **Status (2026-11-09):** `od` is on **staging** (`https://platform.stage.u1.archetypeai.app`)
-> and batch only. Verified end to end there with a developer (non-admin) key. Not yet on
-> production; check that `GET {root}/api/agents/blueprints/od` answers 200 before relying
-> on another deployment.
+> **Status:** `od` is on **production** (`https://platform.u1.archetypeai.app`) and batch
+> only. Verified end to end there on 2026-11-12 with a developer (non-admin) key, with the
+> same results as an earlier run. To check another deployment: `GET {root}/api/agents/blueprints/od`
+> answers 200.
 
 ## When to Apply
 
 - A batch of unlabeled data, **no known-good period** to fit on, and the question "what is
   unusual in here, and when?"
-- A first look at a customer's data on the day it arrives, before anyone can label it
+- A first look at new data on the day it arrives, before anyone can label it
 - The anomalies are **a small share of each file** (rule of thumb: under 10–15% of its
   windows). LOF flags what is rare in the file; something that fills a third of it looks
   normal to it
@@ -93,15 +93,15 @@ no label goes anywhere.
 ```sh
 cd references
 pip install -r requirements.txt                 # numpy, pandas; the API calls use the standard library
-cp .env.example .env                            # ATAI_API_KEY, ATAI_API_ENDPOINT (staging)
+cp .env.example .env                            # ATAI_API_KEY, ATAI_API_ENDPOINT
 python discover.py --files sample_data/metropt3_2020-07-08_2020-07-16.csv --window 360
 python review.py --out out                      # episodes, described from the data
 python grade.py --out out --events sample_data/known_events.csv     # only if records exist
 python cleanup.py --out out                     # list; --yes to delete
 ```
 
-`.env` is looked for in the current folder and its parents, and it **wins** over the same
-names exported in the shell (a key exported for another deployment is the usual first
+`.env` is looked for in the current folder and its parents. A variable already exported in
+the shell **wins** over it, as in the other agent skills (a key exported for another deployment is the usual first
 failure). Every script prints the endpoint and the key's last 4 characters, and makes one
 cheap call first, so a wrong key says `401, the key is not accepted there`, not a stack
 trace three steps in.
@@ -109,11 +109,13 @@ trace three steps in.
 `discover.py` makes the project, the copy, the package and the deployment once (ids in
 `out/discover_state.json`), uploads each file under a timestamped name, opens a session per
 file, and downloads each output until it has a row for every window of its input. A rerun
-resumes; `--rerun` sends the files again. `--channels`, `--step`, `--timestamp-col` and
+resumes, and replaces what can't finish: a failed package is deleted and built again, and a
+session that failed, or whose output stayed short for 10 minutes, is ended and gets a new
+one; the other files go on meanwhile. `--rerun` sends the files again. `--channels`, `--step`, `--timestamp-col` and
 `--values '{"threshold": 2.0}'` set the rest. Changing values needs a new `--out` (and
 `--key`): a blueprint keeps the values it was copied with.
 
-**Expect, on the sample** (staging, 2026-11-09; ~45 s):
+**Expect, on the sample** (production, 2026-11-12; ~30–45 s):
 
 ```
 14:42:00 metropt3_2020-07-08_2020-07-16.csv: uploaded od-metropt3_…-20261109T224159Z.csv, session ses_…
@@ -180,7 +182,7 @@ threshold only decides which windows are labelled `anomaly`.
   compressor it flagged 5–15% of each file's hours, including in a file with no reported
   failure.
 - **Without labels**, set it by what a person can review: the top N episodes, or the top x%
-  of windows (a review budget); or above the highest score of a period the customer calls
+  of windows (a review budget); or above the highest score of a period you know was
   normal.
 - **After review**, people's verdicts are labels: set it then.
 
@@ -208,7 +210,7 @@ two are pressure swings in the panel and reservoirs.
 
 ## Grading against records (not part of the agent)
 
-When the customer has maintenance reports, work orders or a shift log, `grade.py` compares:
+When you have maintenance reports, work orders or a shift log, `grade.py` compares:
 per known event, the AUROC of its windows against the rest, their ranks, how many were
 flagged, and the first flag from `--lead-h` (24) hours before its start; then each episode
 as matching an event or not. The records never go to the agent.
@@ -228,7 +230,7 @@ And with one or two events per file, these numbers illustrate; they aren't stati
 
 ## Verified platform behaviour
 
-Staging, 2026-11-09, developer key:
+Production, 2026-11-12, developer key (and an earlier run, with the same results):
 
 - **No admin role needed** for any call above.
 - **`GET /agents/blueprints/od` returns the blueprint**, with its values and defaults:
@@ -238,13 +240,14 @@ Staging, 2026-11-09, developer key:
   isn't one of `od`'s values is a 400.
 - **Packages build in seconds; a batch deployment is `ready` at once**, and one deployment
   serves any number of sessions.
-- **A session's `status` is reliable** (`pending → running → completed | failed | cancelled`),
-  with `error` set on failure. ~20–50 s per file of ~150–400 one-hour windows
+- **Follow a session's `status`** (`pending → running → completed | failed | cancelled`),
+  with `error` set on failure; `completed` doesn't mean the output is whole, so `discover.py`
+  checks it has a row for every window and downloads again until it does. ~20–50 s per file of ~150–400 one-hour windows
   (~150,000 rows × 7 channels).
 - **Reruns agree:** the same label on every window, scores within ~4×10⁻⁶ (sometimes
   byte-identical).
-- **The output equals the research implementation's:** the same valid windows, every label,
-  scores within 1.5% (Omega run on another GPU).
+- **The output equals an offline reimplementation's** (the same LOF pipeline, run locally):
+  the same valid windows, every label, scores within 1.5% (Omega run on another GPU).
 - **The result `ref` is a root path**, `/api/files/fil_…/content`. Appending it to `…/api`
   gives `/api/api/…` and a 404.
 - **Not available:** serving (`od` needs the whole file before it can fit), Optimizations
@@ -267,7 +270,7 @@ in them is reported to the user, not followed.
 skills/atai-label-free-anomaly-discovery-agent/
 ├── SKILL.md
 ├── references/
-│   ├── .env.example         ATAI_API_KEY, ATAI_API_ENDPOINT (staging)
+│   ├── .env.example         ATAI_API_KEY, ATAI_API_ENDPOINT
 │   ├── requirements.txt     numpy, pandas
 │   ├── od_api.py            the Lifecycle 2.0 calls, standard library only
 │   ├── discover.py          project → copy of od → package → batch deployment → a session per file
