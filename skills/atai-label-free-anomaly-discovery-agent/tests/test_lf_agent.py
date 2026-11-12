@@ -76,18 +76,38 @@ def test_output_check_counts_windows_and_coverage(tmp_path):
 def fresh_env(monkeypatch, tmp_path):
     monkeypatch.setattr(od_api, "_LOADED", False)
     monkeypatch.setattr(od_api, "_CHECKED", False)
+    for k in ("ATAI_API_KEY", "ATAI_API_ENDPOINT"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
-def test_dotenv_wins_over_the_shell_and_is_found_upwards(fresh_env, monkeypatch):
+def test_the_shell_wins_over_dotenv_which_is_found_upwards(fresh_env, monkeypatch):
     (fresh_env / ".env").write_text('ATAI_API_KEY="sk-from-dotenv"\nATAI_API_ENDPOINT=https://x.example/api\n')
     sub = fresh_env / "a" / "b"
     sub.mkdir(parents=True)
     monkeypatch.chdir(sub)
     monkeypatch.setenv("ATAI_API_KEY", "sk-from-shell")
-    assert od_api.root() == "https://x.example"
-    assert os.environ["ATAI_API_KEY"] == "sk-from-dotenv"
+    assert od_api.root() == "https://x.example"           # not in the shell: from the .env
+    assert os.environ["ATAI_API_KEY"] == "sk-from-shell"
+
+
+def test_a_create_post_is_not_retried(fresh_env, monkeypatch):
+    monkeypatch.setenv("ATAI_API_KEY", "sk-1")
+    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.example")
+    calls = []
+
+    def boom(req, timeout):
+        calls.append(req.get_method())
+        raise TimeoutError("lost")
+    monkeypatch.setattr(od_api.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(od_api.time, "sleep", lambda s: None)
+    with pytest.raises(TimeoutError):
+        od_api.request("POST", "/agents/sessions", {"deployment_id": "dpl_1"})
+    assert calls == ["POST"]
+    with pytest.raises(TimeoutError):
+        od_api.request("GET", "/agents/sessions/ses_1", retries=2)
+    assert calls == ["POST", "GET", "GET", "GET"]
 
 
 def test_endpoint_forms_and_placeholder(fresh_env, monkeypatch):
