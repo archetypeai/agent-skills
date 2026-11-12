@@ -163,7 +163,7 @@ Omega:     POST /api/lens/query per channel ──► embeddings ──► local
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
-**Agents — the Agents API, on Agent Lifecycle 2.0.** Everything lives in a project: you copy a platform blueprint into it, package it, deploy the package, and run sessions on the deployment; the model runs server-side. (Bundles and agent instances, the earlier flow, are gone on production; the RED, MGA and TVA skills are moving off them.)
+**Agents — the Agents API, on Agent Lifecycle 2.0.** Everything lives in a project: you copy a platform blueprint into it, package it, deploy the package, and run sessions on the deployment; the model runs server-side. (Bundles and agent instances, the earlier flow, are gone on production; the MGA and TVA skills are moving off them.)
 
 ```
 Project:  POST /api/projects ────────────────────────────────► prj_…
@@ -187,7 +187,7 @@ Fit (OSM, RED and AD Path 2: your own data):
 A session can report `completed` before its last output file is fully written: check that an
 output reaches its input's end before using it, as the agent skills' runners do.
 
-The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The Model and Integration skills, and the RED, MGA and TVA agent skills, are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), declared in each skill's `references/requirements.txt`. The OSM, AD, Label-Free AD and Omega Encoder skills (every path), and RED's Path 2, use a small standard-library HTTP helper of their own instead, since the client doesn't cover projects, packages, deployments and sessions, or the Optimizations, Evals and promote endpoints, yet.
+The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The Model and Integration skills, and the MGA and TVA agent skills, are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`), declared in each skill's `references/requirements.txt`. The OSM, RED, AD, Label-Free AD and Omega Encoder skills (every path) use a small standard-library HTTP helper of their own instead, since the client doesn't cover projects, packages, deployments and sessions, or the Optimizations, Evals and promote endpoints, yet.
 
 ## API Base URL
 
