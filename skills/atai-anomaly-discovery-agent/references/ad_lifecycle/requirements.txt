@@ -1,0 +1,3 @@
+# Path 2: numpy, pandas (score.py, promote_and_test.py); the rest is stdlib.
+numpy>=2.3
+pandas>=2.0

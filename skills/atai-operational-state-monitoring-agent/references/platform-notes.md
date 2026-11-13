@@ -82,7 +82,7 @@ Why they exist:
   waits for the first. The platform draws distinct points at random: `max_trials`
   below the search space's size is a random search with no repeats; at or above it,
   every point runs once. Trials that share `window_size` and `step_size` share their
-  embeddings (atai_core's trial grouping), so those two settings set the cost.
+  embeddings (the platform groups such trials), so those two settings set the cost.
 - **Every trial's `created_at` is the optimization's creation time,** so time a trial
   from the previous trial's `completed_at`, not from its own `created_at` (the latter
   includes its wait in the queue).
@@ -93,8 +93,22 @@ Why they exist:
 - **Status spelling:** a cancelled optimization is `"cancelled"`, not `"canceled"`.
 - **Promote** (`POST /agents/optimizations/{opt}/trials/{trial}/promote`) makes a
   blueprint with the trial's setting and fitted kNN attached; no S3, no classifier
-  artifact. Give each promotion a **unique `blueprint_key`** (ours ends in the trial
+  artifact. Each promotion needs a **unique key** (the platform's ends in the trial
   id): a key reused across runs makes a "promote or reuse" script test an older model.
+- **Choosing the key needs the admin role outside projects.** A promote with a `blueprint_key`
+  from a developer (every free-trial user, 2026-10-29) answers 403, "choosing the `blueprint_key`
+  of a promoted blueprint requires the admin role" (so a non-admin can't probe for keys in
+  projects it can't see). Without one the platform keys the blueprint `<copy key>-otr_<trial id>`
+  (`osm-sample-base-otr_…` for the sample), and
+  the `name` (a display label, what the console's "Blueprint name" sets) is still ours.
+  `promote_and_test.py` sends no key unless `--blueprint-key` is given.
+- **The free trial runs optimizations on GPU (always), evals and agent runs on GPU since
+  2026-11-06 (CPU before), and agent serving on CPU, at most 3 jobs per org at once, each for
+  at most 2 hours.**
+  Further jobs queue, and a queued one already reports `running`. On 2026-10-29/30, on CPU, the
+  sample ran end to end there (optimize, test, delivery, serving) with the production scores; a much
+  larger delivery run can reach the 2-hour limit (`DeadlineExceeded`): split it with
+  `deliver.py --files-per-run`.
 - **The Evals report is pooled over all its files.** There is no per-file breakdown:
   for a score without one file, run a second eval on that file and subtract its
   confusion matrix (confusion matrices add up).
@@ -102,7 +116,23 @@ Why they exist:
   flatters the winner; the full example's +0.014 margin on its 6 search cycles was
   +0.001 on the 15 validation cycles the search never saw.
 
-## Bundles and runs
+## Packages, deployments and sessions
+
+- **One project holds everything:** an optimization takes its project from the blueprint it
+  searches, so `optimize.py` copies `osm` into the project first (`POST
+  /agents/blueprints/osm/copy`); promoted blueprints, packages, deployments and sessions follow.
+- **A package carries no values.** What a later step needs is pinned at Optimize
+  (`data_columns`, `timestamp_column`, `states`); an output such as `output_embeddings` needs
+  a blueprint of its own (a 1-trial optimization at the trial's point, promoted).
+- **A batch deployment is ready at once; a serving one in seconds,** and it holds a serving
+  worker until stopped. A batch session over several files writes one output per file.
+- **Delete in order:** sessions, then the deployment (stopped), then the package; each holds
+  the next. `GET /agents/deployments?package_id=` and `GET /agents/sessions?deployment_id=`
+  find what a rerun replaced; an unknown filter parameter is ignored, not rejected.
+- **Record an id before waiting on it:** a package that fails to build stays `failed`, and
+  only its id lets you delete it.
+
+## Bundles and runs (before packages and sessions)
 
 - **A bundle from your blueprint:** `POST /agents/bundles {"blueprint": "<key>"}`,
   then `POST /agents/bundles/{id}/run` with the files as source connectors. One run =
@@ -119,6 +149,40 @@ Why they exist:
   (`deliver.py` reports a run completed only once its outputs reach every file's end).
 - **`finish_timestamp` is the window's last row**, so pair each prediction with the
   label at that row, as the Evals API does (`downsampling: last_record`).
+
+- **A bundle that still has agents can't be deleted** (409), even when they're cancelled:
+  delete its agents first. `GET /agents/instances?bundle_id=<bnd_…>` lists every agent a
+  bundle ran, including the attempts a rerun replaced.
+- **`output_embeddings: true` works on a promoted blueprint's bundle,** in batch and in
+  serving: an `embedding_<channel>` column per channel (768 values, a JSON list in the CSV),
+  predictions unchanged. Nothing else returns embeddings: not trials, not evals, and the
+  promoted kNN has no download route. Running the library files through the promoted
+  blueprint recomputes the fit's reference windows (the same encoder and windows).
+
+## Agent serving (through bundles: production 2026-10-29; first on Dev 2026-10-16 to 10-18, Staging 2026-10-24)
+
+- **A bundle of the promoted blueprint** runs with `{"mode": "serving"}` and answers
+  `POST /agents/instances/{id}/query`; the platform supplies the `atai-records` serving
+  source and sink in place of the CSV ones. The bundle must set `data_columns` and
+  `timestamp_column`, which the osm source templates from values. A running serving agent
+  holds a serving worker; free-trial accounts serve on CPU only.
+- **Production (2026-10-29):** the prep skill's sample, 367 windows, every state and
+  probability as batch's, 453 ms median per query; the LARCO quickstart's 3,178 windows (k 5),
+  every state as batch's (2 probabilities a vote off), 448 ms median.
+- **Staging (2026-10-24):** both LARCO examples served 500 windows (the first 100 of each
+  quickstart cycle) with every state as batch's, ~0.9 s median per query; with k 31 one
+  window's probabilities were a neighbour's vote (1/31) off.
+- **Served answers are batch's, but for a neighbour now and then:** LARCO's 5 quickstart
+  cycles (3,178 windows) matched step 3 on every state and probability but 7 windows a
+  neighbour's vote off with k 31 (2 changed state at a near-tie), and on all 3,178 with k 5.
+- **A query holds the whole window** (one list per channel) and gets one record per
+  window; the agent keeps nothing between queries and numbers the rows itself (0 to
+  window − 1).
+- **Latency:** median about 0.45 s a query at one window on production, p95 about 0.5 s;
+  0.43–0.52 s on Dev, with rare stalls of 2–22 s when it was busy. 8 windows a query: 1.9 s (0.23 s a window).
+- **Released after 20 minutes idle:** a query to it then answers 409; start a new agent.
+- **Listing:** `GET /agents/instances?status=running` filters on the server; `mode=serving`
+  is ignored there, so filter client-side.
 
 ## Timing
 

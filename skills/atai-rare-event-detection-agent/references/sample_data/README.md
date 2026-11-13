@@ -13,10 +13,11 @@ ground-truth sidecar:
 | `pump_eval_inc04.csv` | 8,798 | 4,096 normal → 606 fault → 4,096 normal |
 | `pump_eval_inc04_labels.csv` | 8,798 | `timestamp,label` |
 
-Incident #4 is a genuinely held-out event — the pre-packaged classifier's
-prototypes come from incidents #1–#2 only — and at 606 rows it is the shortest incident this configuration
-reliably catches. Its 8,192 rows of normal context are what make the false-alarm
-rate meaningful: it is measured over ~8,000 windows containing zero fault rows.
+Incident #4 was held out from the former Quick Start classifier, whose prototypes came
+from incidents #1–#2 only, and at 606 rows it is the shortest incident that configuration
+reliably caught. Its 8,192 rows of normal context are what the false-alarm rate is measured
+on: `playground-red`'s window and step of 200 rows leave 39 windows with zero fault rows (a
+step of 1 would leave about 8,000).
 
 The fault class is **0.5–7% of windows** depending on the slice, which is the
 point: standard accuracy is close to useless here. See the SKILL's scoring
@@ -24,7 +25,7 @@ section.
 
 ## Regenerating, or using other slices
 
-These slices were produced by Archetype AI's internal prep pipeline from the
+These slices were produced from the
 Kaggle source below (per-channel selection + z-scoring + slicing around the
 labelled incidents; the source has seven breakdown episodes, so equivalent
 eval slices exist for incidents #3, #5, #6 and #7). If you prep your own
@@ -32,8 +33,10 @@ slices from the raw Kaggle data, don't skip a leakage audit: the raw data
 contains two distinct leakage mechanisms — five channels that go NaN *only*
 inside fault episodes, and several that read a saturated zero when the pump
 stops. Interpolating the first group would teach a model "sensor offline =
-fault" rather than any pump behaviour. For prepared slices or a detector
-tailored to your own data, contact support@archetypeai.dev.
+fault" rather than any pump behaviour. The
+[`atai-rare-event-detection-agent-data-prep`](../../../atai-rare-event-detection-agent-data-prep/SKILL.md)
+skill runs that audit (on the raw recording) and builds role files for Path 2, which
+fits a detector on your own data.
 
 ## Data attribution
 
