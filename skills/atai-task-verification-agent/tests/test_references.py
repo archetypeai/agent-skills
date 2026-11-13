@@ -2,15 +2,15 @@
 
     python -m unittest discover -s skills/atai-task-verification-agent/tests
 
-No credentials, no network, no GPU. Everything here checks either request shapes
-built in memory, or the committed sample outputs.
+No credentials, no network, no GPU. Everything here checks request shapes built in
+memory, the whole lifecycle against an in-memory fake platform, or the committed
+sample outputs.
 """
 import contextlib
 import importlib.util
 import io
 import json
 import os
-import tokenize
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,33 +30,13 @@ EMPTY_OUT = os.path.join(DATA, "tva-output-1_pass_2_pass_3_fail_A-mnt2048-EMPTY.
 SOP = os.path.join(DATA, "oring-numbered.txt")
 
 
-def code_only(src: str) -> str:
-    """Source with comments and string literals removed.
-
-    The runner's docstrings deliberately discuss what it must NOT do ("poll
-    /logs, NOT /events"), so a naive grep reports a violation for the warning
-    against it. These tests care about executable code.
-    """
-    out = []
-    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        # f-strings are one STRING token before Python 3.12 and FSTRING_* parts from
-        # 3.12 on: drop both, so every version sees the same code
-        if tok.type in (tokenize.COMMENT, tokenize.STRING) or tokenize.tok_name[tok.type].startswith("FSTRING_"):
-            continue
-        out.append(tok.string)
-    return " ".join(out)
-
-
-RUNNER_CODE = code_only(RUNNER_SRC)
-
-
 def load(path):
     with open(path) as fh:
         return [json.loads(l) for l in fh if l.strip()]
 
 
 class TestEndpointResolution(unittest.TestCase):
-    """The endpoint reduces to a bare deployment root; the client appends /api."""
+    """The endpoint reduces to a bare deployment root; the runner appends /api."""
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in
@@ -70,32 +50,31 @@ class TestEndpointResolution(unittest.TestCase):
                 os.environ[k] = v
 
     def test_bare_endpoint_kept(self):
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app"
-        self.assertEqual(tva.env()[1], "https://api.dev.u1.archetypeai.app")
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.example.com"
+        self.assertEqual(tva.env()[1], "https://platform.example.com")
 
     def test_version_suffix_stripped(self):
         # Someone pasting the /query base URL should still work; otherwise every
         # agent path becomes /v0.5/agents/... and 404s.
         for suffix in ("/v0.5", "/v0.4", "/v1"):
             os.environ["ATAI_API_ENDPOINT"] = \
-                "https://api.dev.u1.archetypeai.app" + suffix
-            self.assertEqual(tva.env()[1], "https://api.dev.u1.archetypeai.app")
+                "https://platform.example.com" + suffix
+            self.assertEqual(tva.env()[1], "https://platform.example.com")
 
     def test_trailing_slash_stripped(self):
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app/"
-        self.assertEqual(tva.env()[1], "https://api.dev.u1.archetypeai.app")
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.example.com/"
+        self.assertEqual(tva.env()[1], "https://platform.example.com")
 
     def test_missing_key_exits(self):
         os.environ.pop("ATAI_API_KEY")
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app"
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.example.com"
         with self.assertRaises(SystemExit):
             tva.env()
 
     def test_env_does_not_editorialise_about_the_endpoint(self):
         # This used to print "Prod returns 404 for every /agents path" for any
         # endpoint that was not Dev or Staging. That is false — the production
-        # deployment serves /agents/blueprints, /agents/bundles and
-        # /agents/instances, and the `tva` blueprint is active there. env()
+        # deployment serves /agents, and the `tva` blueprint is active there. env()
         # resolves the endpoint and says nothing about which one it is.
         for endpoint in ("https://platform.u1.archetypeai.app",
                          "https://platform.u1.archetypeai.app/v0.5",
@@ -262,7 +241,7 @@ class TestOutputSchema(unittest.TestCase):
 
 
 class TestEmptyResultIsRecognised(unittest.TestCase):
-    """job.completed + results:[] is the failure that correlates with defects."""
+    """completed + results:[] is the failure that correlates with defects."""
 
     def test_empty_output_parses_but_has_no_verdicts(self):
         recs = load(EMPTY_OUT)
@@ -320,61 +299,15 @@ class TestLabelParsing(unittest.TestCase):
         self.assertIn("always says", buf.getvalue())
 
 
-class TestRequestShapes(unittest.TestCase):
-    """Shapes that have each cost someone real time."""
-
-    def test_bundle_endpoint_is_plural(self):
-        # the client's bundles API is the plural /agents/bundles
-        self.assertIn("agents . bundles .", RUNNER_CODE)
-        self.assertNotIn("agents . bundle .", RUNNER_CODE)
-
-    def test_run_accepts_202(self):
-        # the client owns HTTP status handling, including 202 on /run.
-        # RUNNER_CODE has strings stripped and spacing normalised, so
-        # assert against the raw source.
-        raw = open(os.path.join(REFS, "run_tva_agent.py")).read()
-        self.assertIn("client().agents.bundles.run(", raw)
-
-    def test_polls_logs_not_events(self):
-        self.assertIn("get_logs", RUNNER_CODE)
-        self.assertNotIn("get_events", RUNNER_CODE)
-
-    def test_no_artifacts_map(self):
-        # The tva blueprint pins its own models; unlike red/osm there is nothing
-        # to fit and no artifact to pin.
-        self.assertNotIn("artifacts", RUNNER_CODE)
-
-    def test_run_sends_both_video_and_sop_inputs(self):
-        """The whole point of TVA: two source inputs, routed by `format`.
-
-        Asserted against the --dry-run payload rather than the source text,
-        because code_only() strips plain string literals (f-strings survive
-        tokenization, bare ones do not) — so grepping for "mp4" was testing the
-        test helper, not the runner.
-        """
-        payload = self.dry_run_payload()
-        source = payload["connectors"]["source"]
-        self.assertEqual(len(source), 2)
-        self.assertEqual({e["format"] for e in source}, {"mp4", "txt"})
-        # Every entry is a file reference by basename, not a fil_ uid.
-        for entry in source:
-            self.assertEqual(entry["type"], "file")
-            self.assertFalse(entry["id"].startswith("fil_"))
-
-    def test_run_payload_has_no_artifacts_key(self):
-        self.assertNotIn("artifacts", self.dry_run_payload())
+class TestDryRun(unittest.TestCase):
+    """The request bodies, captured from --dry-run: no API call and no key."""
 
     @staticmethod
-    def dry_run_payload():
-        """The run payload the runner would POST, captured from --dry-run."""
+    def blocks(*extra):
         import sys as _sys
         argv = _sys.argv
-        env_saved = {k: os.environ.get(k) for k in
-                     ("ATAI_API_KEY", "ATAI_API_ENDPOINT")}
-        os.environ["ATAI_API_KEY"] = "test-key"
-        os.environ["ATAI_API_ENDPOINT"] = "https://api.dev.u1.archetypeai.app"
-        _sys.argv = ["run_tva_agent.py", "--video", "clip.mp4", "--sop", SOP,
-                     "--dry-run"]
+        env_saved = {k: os.environ.pop(k, None) for k in ("ATAI_API_KEY", "ATAI_API_ENDPOINT")}
+        _sys.argv = ["run_tva_agent.py", "--video", "clip.mp4", "--sop", SOP, "--dry-run", *extra]
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
@@ -382,23 +315,321 @@ class TestRequestShapes(unittest.TestCase):
         finally:
             _sys.argv = argv
             for k, v in env_saved.items():
-                os.environ.pop(k, None)
                 if v is not None:
                     os.environ[k] = v
-        # The second JSON object in the output is the run payload.
-        blocks = [b for b in buf.getvalue().split("\n{") if '"connectors"' in b]
-        return json.loads("{" + blocks[0].split("\n\nSOP")[0])
+        out = buf.getvalue()
+        bodies, i = {}, 0
+        dec = json.JSONDecoder()
+        while (i := out.find("POST ", i)) >= 0:
+            path = out[i + 5:out.index("\n", i)].split()[0]
+            j = out.index("\n{", i) + 1
+            bodies[path.split("/api/", 1)[1]], end = dec.raw_decode(out, j)
+            i = end
+        return bodies
+
+    def test_needs_no_key(self):
+        self.assertIn("agents/sessions", self.blocks())
+
+    def test_values_go_on_the_copy(self):
+        copy = self.blocks()["agents/blueprints/tva/copy"]
+        self.assertEqual(copy["overrides"]["values"],
+                         {"max_frames": 64, "size": 224, "max_new_tokens": 5760})
+        self.assertEqual(copy["blueprint_key"], "tva-f64-s224-t5760")
+
+    def test_package_deployment_and_session_carry_no_values(self):
+        b = self.blocks()
+        for path in ("agents/packages", "agents/deployments", "agents/sessions"):
+            self.assertNotIn("values", b[path])
+        self.assertEqual(b["agents/packages"]["target"], {"kind": "platform"})
+        self.assertEqual(b["agents/deployments"]["kind"], "batch")
+
+    def test_session_sends_both_video_and_sop_inputs(self):
+        source = self.blocks()["agents/sessions"]["connectors"]["source"]
+        self.assertEqual(len(source), 2)
+        self.assertEqual({e["format"] for e in source}, {"mp4", "txt"})
+        for entry in source:
+            # a file reference by basename, not a fil_ uid
+            self.assertEqual(entry["type"], "file")
+            self.assertFalse(entry["id"].startswith("fil_"))
+        # both halves share one stem, so the pipeline pairs them
+        self.assertEqual(*(os.path.splitext(e["id"])[0] for e in source))
+
+    def test_no_artifacts_anywhere(self):
+        # The tva blueprint pins its own models: nothing to fit, no artifact to pin.
+        for body in self.blocks().values():
+            self.assertNotIn("artifacts", json.dumps(body))
+
+    def test_serving_session_has_no_connectors_and_the_query_carries_the_sop(self):
+        b = self.blocks("--serve")
+        self.assertEqual(b["agents/deployments"]["kind"], "serving")
+        self.assertEqual(b["agents/sessions"], {"deployment_id": "<the deployment>"})
+        query = b["agents/sessions/<id>/query"]
+        self.assertEqual(query["model"], "tv")
+        self.assertEqual(query["query"], tva.sop_text(tva.load_sop(SOP)))
+
+
+class FakePlatform:
+    """Answers the lifecycle calls in memory, and records them."""
+
+    PREFIX = {"packages": "pkg", "deployments": "dpl", "sessions": "ses"}
+
+    def __init__(self, results=None, session_status="completed", package_fails=0,
+                 foreign_blueprint=False):
+        self.calls, self.objs, self.n = [], {}, 0
+        self.results = results
+        self.session_status = session_status
+        self.package_fails = package_fails          # how many builds end `failed`
+        self.foreign_blueprint = foreign_blueprint  # the key filter returns another key
+
+    def new(self, prefix, **fields):
+        self.n += 1
+        obj = {"id": f"{prefix}_{self.n}", **fields}
+        self.objs[obj["id"]] = obj
+        return obj
+
+    def request(self, method, url, body=None, raw=False, allow_status=False, timeout=120, retries=4,
+                idempotent=None):
+        path, _, query = url.split("/api", 1)[1].partition("?")
+        self.calls.append((method, path, body))
+        out, code = self.route(method, path, body, query)
+        return (code, out) if allow_status else out
+
+    def route(self, method, path, body, query=""):
+        parts = path.strip("/").split("/")
+        if path == "/projects":
+            return ({"data": []} if method == "GET" else self.new("prj")), 200
+        if path.startswith("/agents/blueprints") and path.endswith("/copy"):
+            return self.new("blp"), 201
+        if path == "/agents/blueprints":
+            return {"data": [{"id": "blp_other", "blueprint_key": "someone-else"}]
+                    if self.foreign_blueprint else []}, 200
+        if path == "/agents/blueprints/tva":
+            return {"id": "blp_tva", "blueprint_key": "tva", "is_active": True,
+                    "document": {"values": {"max_frames": 16, "size": 224, "max_new_tokens": 8192},
+                                 "nodes": {"n": "${values.max_frames} ${values.size} "
+                                                "${values.max_new_tokens}"},
+                                 "connectors": {"sink": {"config": {"format": "json/per-request"}}}}}, 200
+        kind = parts[1]
+        if len(parts) == 2:
+            if method == "GET":
+                return {"data": [o for o in self.objs.values() if o["id"].startswith(self.PREFIX[kind])
+                                 and o.get("parent") and o["parent"] in query]}, 200
+            if kind == "packages":
+                return self.new("pkg", status="building"), 201
+            if kind == "deployments":
+                return self.new("dpl", status="deploying", parent=body["package_id"]), 201
+            if kind == "sessions":
+                return self.new("ses", status="pending", parent=body["deployment_id"]), 201
+        obj = self.objs.get(parts[2])
+        if obj is None:
+            return "not found", 404
+        if method == "DELETE":
+            del self.objs[obj["id"]]
+            return b"", 204
+        if len(parts) == 4:
+            sub = parts[3]
+            if sub == "events":
+                return {"data": [{"created_at": "2026-11-06T12:00:00Z", "message": "opened"}]}, 200
+            if sub == "results":
+                return {"data": self.results or []}, 200
+            if sub == "query":
+                return {"response": {"data": [{"step": 0, "status": "PASSED"}]}}, 200
+            obj["status"] = {"cancel": "cancelled", "stop": "stopped"}[sub]
+            return obj, 200
+        obj["status"] = {"pkg": "ready", "dpl": "ready",
+                         "ses": self.session_status}.get(obj["id"][:3])
+        if obj["id"].startswith("pkg") and (obj.get("failed") or self.package_fails):
+            if not obj.get("failed"):
+                obj["failed"] = True               # a failed package stays failed
+                self.package_fails -= 1
+            obj["status"] = "failed"
+        if obj["id"].startswith("ses") and obj.get("query"):
+            obj["status"] = "running"
+        return obj, 200
+
+    def posts(self):
+        return [p for m, p, _ in self.calls if m == "POST"]
+
+
+class TestLifecycleAgainstAFakePlatform(unittest.TestCase):
+    """The whole batch path and the serving path, offline."""
+
+    OUTPUT = b'{"id": "clip", "results": [{"step": 0, "status": "PASSED"}]}\n'
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+        self.dir = tempfile.TemporaryDirectory()
+        self.cwd = os.getcwd()
+        os.chdir(self.dir.name)
+        self.video = os.path.join(self.dir.name, "1_pass_2_pass_3_pass_A.mp4")
+        open(self.video, "wb").write(b"\0" * 1000)
+        self.saved = {k: os.environ.get(k) for k in ("ATAI_API_KEY", "ATAI_API_ENDPOINT")}
+        os.environ["ATAI_API_KEY"] = "test-key"
+        os.environ["ATAI_API_ENDPOINT"] = "https://platform.example.com/api"
+        self.patches = [mock.patch.object(tva.time, "sleep"),
+                        mock.patch.object(tva, "upload", side_effect=lambda path, name: name),
+                        mock.patch.object(tva.urllib.request, "urlopen", side_effect=self.download)]
+        for p in self.patches:
+            p.start()
+        self.downloaded = []
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        os.chdir(self.cwd)
+        self.dir.cleanup()
+        for k, v in self.saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def download(self, req, timeout=None):
+        self.downloaded.append(req.full_url)
+        return _Resp(self.OUTPUT)
+
+    def run_main(self, fake, *argv):
+        import sys as _sys
+        from unittest import mock
+        saved = _sys.argv
+        _sys.argv = ["run_tva_agent.py", *argv]
+        buf = io.StringIO()
+        try:
+            with mock.patch.object(tva, "request", side_effect=fake.request), \
+                    contextlib.redirect_stdout(buf):
+                tva.main()
+        finally:
+            _sys.argv = saved
+        return buf.getvalue()
+
+    RESULT = [{"data": {"ref": "/api/files/fil_1/content", "filename": "out.json"}}]
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        fake = FakePlatform(results=self.RESULT, package_fails=1)
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertEqual(fake.posts().count("/agents/packages"), 2)
+        self.assertEqual([p for m, p, _ in fake.calls if m == "DELETE"], ["/agents/packages/pkg_3"])
+
+    def test_a_package_that_fails_twice_stops(self):
+        fake = FakePlatform(results=self.RESULT, package_fails=2)
+        with self.assertRaises(SystemExit):
+            self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertNotIn("/agents/deployments", fake.posts())
+
+    def test_a_copy_under_another_key_is_not_reused(self):
+        fake = FakePlatform(results=self.RESULT, foreign_blueprint=True)
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertIn("/agents/blueprints/tva/copy", fake.posts())
+
+    def test_batch_builds_once_then_reuses(self):
+        fake = FakePlatform(results=self.RESULT)
+        out = self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertEqual(fake.posts(), ["/projects", "/agents/blueprints/tva/copy",
+                                        "/agents/packages", "/agents/deployments", "/agents/sessions"])
+        self.assertIn("1 verdict(s)", out)
+        # the ref is a root path: resolved against the root, not against .../api
+        self.assertEqual(self.downloaded, ["https://platform.example.com/api/files/fil_1/content"])
+        # a second run at the same setting builds nothing
+        fake.calls.clear()
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertEqual(fake.posts(), ["/agents/sessions"])
+        state = json.load(open(tva.STATE_PATH))["https://platform.example.com"]
+        self.assertEqual(len(state["sessions"]), 2)
+        self.assertEqual(set(state["settings"]["tva-f64-s224-t5760"]),
+                         {"source", "values", "blueprint", "package", "batch"})
+
+    def test_empty_results_exit_nonzero_though_the_session_completed(self):
+        type(self).OUTPUT, saved = b'{"id": "clip", "results": []}\n', type(self).OUTPUT
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                self.run_main(FakePlatform(results=self.RESULT), "--video", self.video, "--sop", SOP)
+        finally:
+            type(self).OUTPUT = saved
+        self.assertIn("no verdicts", str(cm.exception))
+
+    def test_failed_session_exits_nonzero(self):
+        with self.assertRaises(SystemExit) as cm:
+            self.run_main(FakePlatform(session_status="failed"), "--video", self.video, "--sop", SOP)
+        self.assertIn("failed", str(cm.exception))
+
+    def test_cleanup_deletes_sessions_then_deployments_then_packages(self):
+        fake = FakePlatform(results=self.RESULT)
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        fake.calls.clear()
+        with self.assertRaises(SystemExit):
+            self.run_main(fake, "--cleanup")
+        self.assertFalse([c for c in fake.calls if c[0] == "DELETE"])     # lists only
+        fake.calls.clear()
+        with self.assertRaises(SystemExit) as cm:
+            self.run_main(fake, "--cleanup", "--yes")
+        self.assertEqual(cm.exception.code, 0)
+        deleted = [p.split("/")[2] for m, p, _ in fake.calls if m == "DELETE"]
+        self.assertEqual(deleted, ["sessions", "deployments", "packages"])
+        # the project and the copy stay
+        self.assertTrue(any(k.startswith("prj") for k in fake.objs))
+        self.assertTrue(any(k.startswith("blp") for k in fake.objs))
+
+    def test_serving_releases_the_deployment_on_exit(self):
+        fake = FakePlatform()
+        orig = fake.new
+
+        def new(prefix, **fields):
+            obj = orig(prefix, **fields)
+            if prefix == "ses":
+                obj["query"] = True                  # a serving session reaches `running`
+            return obj
+        fake.new = new
+        out = self.run_main(fake, "--serve", "--video", self.video, "--sop", SOP)
+        self.assertIn("/agents/sessions/ses_5/query", fake.posts())
+        session = [b for m, p, b in fake.calls if m == "POST" and p == "/agents/sessions"][0]
+        self.assertEqual(session, {"deployment_id": "dpl_4"})
+        self.assertIn(("POST", "/agents/deployments/dpl_4/stop", {}), fake.calls)
+        self.assertEqual([p for m, p, _ in fake.calls if m == "DELETE"],
+                         ["/agents/sessions/ses_5", "/agents/deployments/dpl_4"])
+        self.assertIn("released", out)
+        doc = load("tva-serve-1_pass_2_pass_3_pass_A.json")[0]
+        self.assertEqual(doc["results"], [{"step": 0, "status": "PASSED"}])
+
+
+class _Resp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestHelpers(unittest.TestCase):
+    def test_result_ref_is_a_root_path(self):
+        root = "https://platform.example.com"
+        self.assertEqual(tva.result_url("/api/files/fil_1/content", root),
+                         root + "/api/files/fil_1/content")
+        self.assertEqual(tva.result_url("/files/download/x.json", root),
+                         root + "/api/files/download/x.json")
+        self.assertEqual(tva.result_url("https://s3.example.com/x?sig=1", root),
+                         "https://s3.example.com/x?sig=1")
+
+    def test_event_times_are_printed_in_local_time(self):
+        import datetime
+        utc = datetime.datetime(2026, 11, 6, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(tva.local_time("2026-11-06T12:00:00Z"),
+                         utc.astimezone().strftime("%H:%M:%S"))
+
+    def test_setting_key_names_the_values(self):
+        values = {"max_frames": 32, "size": 448, "max_new_tokens": 8192}
+        self.assertEqual(tva.setting_key(values), "tva-f32-s448-t8192")
+        self.assertTrue(tva.setting_key(values, "blp_abc123def").startswith("tva-123def-"))
 
     def test_default_budget_is_above_the_empty_result_value(self):
         # 2048 produced results:[] on a clip with a skipped step.
         self.assertGreaterEqual(tva.DEFAULT_MAX_NEW_TOKENS, 4096)
 
-    def test_terminality_comes_from_log_events(self):
-        for ev in ("pod.terminated", "job.completed", "job.failed", "job.canceled"):
-            self.assertIn(ev, tva.TERMINAL_EVENTS)
+    def test_no_bundles_instances_or_logs(self):
+        for gone in ("/bundles", "/instances", "/logs\"", "get_logs", "archetypeai import"):
+            self.assertNotIn(gone, RUNNER_SRC)
 
     def test_runner_is_stdlib_only(self):
-        third_party = ("requests", "numpy", "pandas", "httpx", "aiohttp",
+        third_party = ("archetypeai", "requests", "numpy", "pandas", "httpx", "aiohttp",
                        "sklearn", "torch")
         for mod in third_party:
             self.assertNotIn(f"import {mod}", RUNNER_SRC)
