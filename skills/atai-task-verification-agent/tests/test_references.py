@@ -373,10 +373,13 @@ class FakePlatform:
 
     PREFIX = {"packages": "pkg", "deployments": "dpl", "sessions": "ses"}
 
-    def __init__(self, results=None, session_status="completed"):
+    def __init__(self, results=None, session_status="completed", package_fails=0,
+                 foreign_blueprint=False):
         self.calls, self.objs, self.n = [], {}, 0
         self.results = results
         self.session_status = session_status
+        self.package_fails = package_fails          # how many builds end `failed`
+        self.foreign_blueprint = foreign_blueprint  # the key filter returns another key
 
     def new(self, prefix, **fields):
         self.n += 1
@@ -384,7 +387,8 @@ class FakePlatform:
         self.objs[obj["id"]] = obj
         return obj
 
-    def request(self, method, url, body=None, raw=False, allow_status=False, timeout=120, retries=4):
+    def request(self, method, url, body=None, raw=False, allow_status=False, timeout=120, retries=4,
+                idempotent=None):
         path, _, query = url.split("/api", 1)[1].partition("?")
         self.calls.append((method, path, body))
         out, code = self.route(method, path, body, query)
@@ -397,7 +401,8 @@ class FakePlatform:
         if path.startswith("/agents/blueprints") and path.endswith("/copy"):
             return self.new("blp"), 201
         if path == "/agents/blueprints":
-            return {"data": []}, 200
+            return {"data": [{"id": "blp_other", "blueprint_key": "someone-else"}]
+                    if self.foreign_blueprint else []}, 200
         if path == "/agents/blueprints/tva":
             return {"id": "blp_tva", "blueprint_key": "tva", "is_active": True,
                     "document": {"values": {"max_frames": 16, "size": 224, "max_new_tokens": 8192},
@@ -433,6 +438,11 @@ class FakePlatform:
             return obj, 200
         obj["status"] = {"pkg": "ready", "dpl": "ready",
                          "ses": self.session_status}.get(obj["id"][:3])
+        if obj["id"].startswith("pkg") and (obj.get("failed") or self.package_fails):
+            if not obj.get("failed"):
+                obj["failed"] = True               # a failed package stays failed
+                self.package_fails -= 1
+            obj["status"] = "failed"
         if obj["id"].startswith("ses") and obj.get("query"):
             obj["status"] = "running"
         return obj, 200
@@ -493,6 +503,23 @@ class TestLifecycleAgainstAFakePlatform(unittest.TestCase):
         return buf.getvalue()
 
     RESULT = [{"data": {"ref": "/api/files/fil_1/content", "filename": "out.json"}}]
+
+    def test_a_failed_package_is_rebuilt_once(self):
+        fake = FakePlatform(results=self.RESULT, package_fails=1)
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertEqual(fake.posts().count("/agents/packages"), 2)
+        self.assertEqual([p for m, p, _ in fake.calls if m == "DELETE"], ["/agents/packages/pkg_3"])
+
+    def test_a_package_that_fails_twice_stops(self):
+        fake = FakePlatform(results=self.RESULT, package_fails=2)
+        with self.assertRaises(SystemExit):
+            self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertNotIn("/agents/deployments", fake.posts())
+
+    def test_a_copy_under_another_key_is_not_reused(self):
+        fake = FakePlatform(results=self.RESULT, foreign_blueprint=True)
+        self.run_main(fake, "--video", self.video, "--sop", SOP)
+        self.assertIn("/agents/blueprints/tva/copy", fake.posts())
 
     def test_batch_builds_once_then_reuses(self):
         fake = FakePlatform(results=self.RESULT)

@@ -55,6 +55,7 @@ import argparse
 import base64
 import datetime
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -170,16 +171,20 @@ def agents_url(path: str = "") -> str:
 
 
 def request(method: str, url: str, body=None, raw: bool = False,
-            allow_status: bool = False, timeout: int = 120, retries: int = 4):
+            allow_status: bool = False, timeout: int = 120, retries: int = 4,
+            idempotent: bool | None = None):
     """Call the API. Returns the parsed JSON (or bytes with raw=True).
 
     allow_status=True returns (status, body) instead of exiting on an HTTP error:
-    a 404 during cleanup is a finding, not a crash. Network errors are retried for
-    GET and DELETE only — a repeated POST /sessions would start a second run.
+    a 404 during cleanup is a finding, not a crash. Network errors and 502/503/504
+    are retried only for calls that are safe to repeat: GET, HEAD and DELETE, and
+    POSTs marked idempotent (cancel, stop). A repeated create POST would make a
+    second object: a second run, package or deployment.
     """
     key, _ = env()
     data = json.dumps(body).encode() if body is not None else None
-    attempts = retries + 1 if method in ("GET", "DELETE") else 1
+    safe = method in ("GET", "HEAD", "DELETE") if idempotent is None else idempotent
+    attempts = retries + 1 if safe else 1
     for attempt in range(attempts):
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {key}")
@@ -192,10 +197,16 @@ def request(method: str, url: str, body=None, raw: bool = False,
                 return (resp.status, out) if allow_status else out
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")
+            if e.code in (502, 503, 504) and attempt < attempts - 1:
+                wait = 5 * (2 ** attempt)
+                print(f"  HTTP {e.code}; retrying in {wait}s")
+                time.sleep(wait)
+                continue
             if allow_status:
                 return e.code, detail
             sys.exit(f"{method} {url} failed ({e.code}): {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError,
+                http.client.HTTPException) as e:          # incl. a body cut off mid-transfer
             if attempt == attempts - 1:
                 if allow_status:
                     return 0, str(e)
@@ -411,16 +422,32 @@ def _alive(url: str) -> dict | None:
     return obj if status == 200 and isinstance(obj, dict) else None
 
 
-def wait_for(url: str, want: str, waiting: str, timeout_s: int, every_s: int = 5) -> dict:
-    """Poll while the status is `waiting`; exit unless it then reaches `want`."""
+def list_all(url: str) -> list:
+    """Every item of a paginated list; the cursor is opaque and passed back as is."""
+    items, after = [], ""
+    sep = "&" if "?" in url else "?"
+    while True:
+        page = request("GET", f"{url}{sep}limit=1000{after}")
+        items += page.get("data") or []
+        if not page.get("has_more"):
+            return items
+        after = f"&after={page['next_cursor']}"
+
+
+def wait_for(url: str, want: str, waiting: str, timeout_s: int, every_s: int = 5,
+             exit: bool = True) -> dict:
+    """Poll while the status is `waiting`; exit unless it then reaches `want`
+    (exit=False: return it as it is)."""
     t0 = time.time()
     obj = request("GET", url)
     while obj["status"] == waiting:
         if time.time() - t0 > timeout_s:
+            if not exit:
+                return obj
             sys.exit(f"{obj['id']} still {waiting} after {timeout_s} s")
         time.sleep(every_s)
         obj = request("GET", url)
-    if obj["status"] != want:
+    if obj["status"] != want and exit:
         sys.exit(f"{obj['id']} is {obj['status']}, not {want}: {obj.get('error')}")
     return obj
 
@@ -429,8 +456,7 @@ def project_id(state: dict) -> str:
     mine = state[env()[1]]
     if "project" not in mine:
         root = env()[1]
-        found = [p for p in request("GET", f"{root}/api/projects?limit=1000")["data"]
-                 if p["name"] == PROJECT]
+        found = [p for p in list_all(f"{root}/api/projects") if p["name"] == PROJECT]
         mine["project"] = found[0]["id"] if found else request(
             "POST", f"{root}/api/projects",
             body={"name": PROJECT, "description": "Task Verification (TVA) skill runs"})["id"]
@@ -453,7 +479,8 @@ def agent(values: dict, kind: str, source: str = "tva") -> dict:
 
     if not rec.get("blueprint") or not _alive(agents_url(f"/blueprints/{rec['blueprint']}")):
         # A key in a project resolves only with ?project_id=.
-        found = request("GET", agents_url(f"/blueprints?project_id={pid}&key={key}"))["data"]
+        found = [b for b in request("GET", agents_url(f"/blueprints?project_id={pid}&key={key}"))["data"]
+                 if b.get("blueprint_key") == key]
         if found:
             rec["blueprint"] = found[0]["id"]
             print(f"  reusing copy {key} ({rec['blueprint']})")
@@ -464,16 +491,24 @@ def agent(values: dict, kind: str, source: str = "tva") -> dict:
         rec.pop("package", None)
         save_state(state)
 
-    pkg = _alive(agents_url(f"/packages/{rec['package']}")) if rec.get("package") else None
-    if not pkg or pkg["status"] not in ("ready", "building"):
-        pkg = request("POST", agents_url("/packages"), body=package_body(rec["blueprint"], key))
-        rec["package"] = pkg["id"]
-        for k in ("batch", "serving"):
-            rec.pop(k, None)
-        save_state(state)
-        print(f"  package {pkg['id']} building (models resolved once) ...")
-    if pkg["status"] != "ready":
-        wait_for(agents_url(f"/packages/{rec['package']}"), "ready", "building", 900)
+    # A failed package never becomes ready: it is deleted and built again, once.
+    for attempt in range(2):
+        pkg = _alive(agents_url(f"/packages/{rec['package']}")) if rec.get("package") else None
+        if not pkg or pkg["status"] not in ("ready", "building"):
+            if pkg:                                # failed: don't strand it
+                request("DELETE", agents_url(f"/packages/{pkg['id']}"), raw=True, allow_status=True)
+            pkg = request("POST", agents_url("/packages"), body=package_body(rec["blueprint"], key))
+            rec["package"] = pkg["id"]
+            for k in ("batch", "serving"):
+                rec.pop(k, None)
+            save_state(state)
+            print(f"  package {pkg['id']} building (models resolved once) ...")
+        pkg = wait_for(agents_url(f"/packages/{rec['package']}"), "ready", "building", 900, exit=False)
+        if pkg["status"] == "ready":
+            break
+        if pkg["status"] != "failed" or attempt:
+            sys.exit(f"{rec['package']} is {pkg['status']}, not ready: {pkg.get('error')}")
+        print(f"  {rec['package']} failed ({pkg.get('error')}): building a new one")
 
     dpl = _alive(agents_url(f"/deployments/{rec[kind]}")) if rec.get(kind) else None
     if not dpl or dpl["status"] not in ("ready", "deploying"):
@@ -650,9 +685,9 @@ def end(kind: str, obj_id: str) -> bool:
         return True
     if status == 200 and isinstance(obj, dict):
         if kind == "sessions" and obj.get("status") not in TERMINAL:
-            request("POST", f"{url}/cancel", body={}, allow_status=True)
+            request("POST", f"{url}/cancel", body={}, allow_status=True, idempotent=True)
         if kind == "deployments" and obj.get("status") not in ("stopped", "failed"):
-            request("POST", f"{url}/stop", body={}, allow_status=True)
+            request("POST", f"{url}/stop", body={}, allow_status=True, idempotent=True)
     status, _ = request("DELETE", url, raw=True, allow_status=True)
     return 200 <= status < 300 or status == 404
 
@@ -682,10 +717,9 @@ def cleanup(yes: bool) -> int:
         pkg = rec.get("package")
         if not pkg or not _alive(agents_url(f"/packages/{pkg}")):
             continue
-        dpls = [d["id"] for d in request(
-            "GET", agents_url(f"/deployments?package_id={pkg}&limit=1000"))["data"]]
-        targets += [("sessions", s["id"]) for d in dpls for s in request(
-            "GET", agents_url(f"/sessions?deployment_id={d}&limit=1000"))["data"]]
+        dpls = [d["id"] for d in list_all(agents_url(f"/deployments?package_id={pkg}"))]
+        targets += [("sessions", s["id"]) for d in dpls
+                    for s in list_all(agents_url(f"/sessions?deployment_id={d}"))]
         targets += [("deployments", d) for d in dpls] + [("packages", pkg)]
     for kind in ("sessions", "deployments", "packages"):
         print(f"  {sum(t[0] == kind for t in targets)} {kind}")
@@ -872,7 +906,7 @@ def run_batch(args, values: dict, steps: list[str]) -> None:
             # Never leave a run on the GPU: an abandoned run blocks everyone behind it.
             print(f"\ninterrupted — cancelling {session_id}")
             request("POST", agents_url(f"/sessions/{session_id}/cancel"), body={},
-                    allow_status=True)
+                    allow_status=True, idempotent=True)
             sys.exit(130)
         print(f"\nsession {status}")
         payload = fetch_results(session_id, out_path)
