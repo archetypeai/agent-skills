@@ -30,6 +30,7 @@ Omega is a **time-series encoder**: feed it a window of sensor readings, get bac
 **Do not use this skill when:**
 - The input is text, an image, or a video — that's the Newton fusion model (`/query` with `Newton::c2_6_8b_fp8_...`)
 - You need fully-managed, server-side classification over millions of rows
+- You want Omega embeddings from a deployed agent — batch sessions over many files, or a serving deployment that matches them — with the window set on the platform: that's [`atai-omega-encoder-agent`](../atai-omega-encoder-agent/SKILL.md)
 
 For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, temporal-order train/test split, the joint-state feature matrix), see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
 

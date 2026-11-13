@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
 
@@ -28,11 +28,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        # Path 1 (run_osm_agent.py) needs the official client; Path 2 (osm_lifecycle/) numpy + pandas
+        # Path 1 (run_osm_agent.py) is stdlib only; Path 2 (osm_lifecycle/) needs numpy + pandas
         run: |
           python -m pip install --upgrade pip
-          pip install -r skills/atai-operational-state-monitoring-agent/references/requirements.txt \
-                      -r skills/atai-operational-state-monitoring-agent/references/osm_lifecycle/requirements.txt
+          pip install -r skills/atai-operational-state-monitoring-agent/references/osm_lifecycle/requirements.txt
 
       - name: Run the network-free tests
         run: python -m unittest discover -s skills/atai-operational-state-monitoring-agent/tests -v
