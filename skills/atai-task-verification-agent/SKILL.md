@@ -21,14 +21,18 @@ description: >
 
 # TVA Agent — Managed Task Verification via the Agents API
 
-> **Draft: Agent Lifecycle 2.0.** This skill runs TVA on projects, blueprint copies,
-> packages, deployments and sessions. **Dev and staging serve these calls** (staging since 2026-11-09); production
-> and the free trial keep bundles and agent instances until their next platform
-> release. Check first: `GET {root}/api/agents/sessions?limit=1` answers 200, not 404.
-> Verified on dev on 2026-11-05/06 with the 12 clips and 3-step SOP below: a 12-clip batch
-> returned `results` equal to the production bundle outputs for **12 of 12 clips** (28/36
-> steps), and serving returned **12 outputs byte-identical** to the bundle-era serving
-> ones. Unless marked as lifecycle, every measurement here was taken with bundles.
+> **Agent Lifecycle 2.0.** This skill runs TVA on projects, blueprint copies, packages,
+> deployments and sessions; bundles and agent instances are gone. Check your endpoint
+> first: `GET {root}/api/agents/sessions?limit=1` answers 200, not 404.
+>
+> **Verified on production** (`https://platform.u1.archetypeai.app`), **2026-11-12**,
+> with `run_tva_agent.py`, the 12 clips and the 3-step SOP below: a batch session on
+> `1_pass_2_pass_3_pass_A` returned the same verdicts as the production run of
+> 2026-10-26 (10.1 min), and `--serve` over all 12 clips returned `results` identical
+> to the worked example's serving outputs for **12 of 12 clips** (28/36 steps; the
+> deployment ready after 731 s, 766 s in all). The worked example is
+> [task-verification-agent-example](https://github.com/archetypeai/task-verification-agent-example).
+> Unless marked as lifecycle, the older measurements here were taken with bundles.
 
 The TVA agent checks a recording against a procedure you supply. You hand the platform an `.mp4` **and** an SOP as a `.txt`; it samples frames, transcribes the audio, fuses both with your procedure in one pass, and returns one verdict per SOP step:
 
@@ -150,8 +154,7 @@ returned the identical wrong verdict or no verdict at all. Budget for human revi
 
 Re-measured on production with bundles on 2026-10-26 (12 labelled clips, 5760,
 the shipped SOP; the three shipped clips also through this runner, with identical
-results). The lifecycle rerun on dev (2026-11-05/06) returned the same `results` for
-all 12 clips:
+results). The lifecycle runs on production (2026-11-12) returned the same verdicts:
 
 | | before 2026-10-15 | 2026-10-15 blueprint |
 |---|---|---|
@@ -529,14 +532,9 @@ Measured on production with bundles and the 2026-10-15 blueprint, 13 runs on 202
 
 **Do not count on these jobs being serialized — or on them running in parallel.** Whether concurrent submissions queue depends on what else is running on the deployment at that moment. Both have been observed: one pod waited 7 minutes and started **3 seconds** after the previous finished; on 2026-10-26 twelve submissions ran **two at a time**, each new pod starting within 2 s of one of the pair finishing. Other tenants' workloads aren't visible to you, so neither is a guarantee. Submit one at a time unless you have measured otherwise.
 
-[Agent serving](#agent-serving--load-once-query-many-preview) pays the load once for many clips.
+[Agent serving](#agent-serving--load-once-query-many) pays the load once for many clips.
 
-## Agent serving — load once, query many (preview)
-
-> **Measured on dev.** Serving deployments, like the rest of the lifecycle, run only on
-> dev today. The lifecycle numbers below are from 2026-11-06, with the 12 clips and 3-step
-> O-ring SOP above; the rest were measured with bundles on dev, 2026-10-26 to -28, and are
-> labelled so.
+## Agent serving — load once, query many
 
 A batch session downloads and loads the model for **every** clip. A **serving deployment** of the same package loads it once and holds it on a GPU worker; a session on it answers one request per clip in about 3 s:
 
@@ -561,7 +559,7 @@ No uploads and no connectors. The SOP travels in `query`, so one session still s
 | | wall clock |
 |---|---|
 | batch, production, bundles, 2026-10-26 | 51 min (12 jobs of 488–729 s, two at a time) |
-| **serving, lifecycle, dev, 2026-11-06** | **deployment ready in 693 s**, then **2.8–8.0 s per clip** (median 3.3); **739 s** for all 12 |
+| **serving, lifecycle, production, 2026-11-12** | **deployment ready in 710–731 s**, then ~3 s per clip; **752–766 s** for all 12 |
 | serving, bundles, load once per agent | 657–929 s across eight agents (once 1,385 s); none downloading |
 | serving, bundles, one query | 2–5 s |
 | serving, bundles, all 12 whole clips | 11.6–12.9 min, almost all of it the load |
@@ -583,8 +581,8 @@ No uploads and no connectors. The SOP travels in `query`, so one session still s
 
 **Limits:**
 
-- **One GPU worker at a time on dev.** A serving deployment that can't be placed fails with *"there was no capacity to start the deployment's agent"* (with bundles, a second agent failed within a minute with *"no worker is free"*). Stop yours when done.
-- **The deployment takes minutes to become ready** — 693 s here — because that is when the model downloads and loads. A session has no `/logs` to show the load (with bundles, *"Still loading newton-fusion-1-0 model after 4min0s"* once a minute); wait for the deployment `ready`, then the session `running`.
+- **A serving deployment can fail to place** with *"there was no capacity to start the deployment's agent"*: retry later. Stop yours when done.
+- **The deployment takes minutes to become ready** — 710–731 s on production — because that is when the model downloads and loads. A session has no `/logs` to show the load (with bundles, *"Still loading newton-fusion-1-0 model after 4min0s"* once a minute); wait for the deployment `ready`, then the session `running`.
 - **The whole request is capped at 2 MiB** — about 1.5 MB of video after base64. `--serve` refuses a clip over it and prints an `ffmpeg` line to shrink it.
 - **Each query has a 58 s budget** (bundles), then `504 query_timeout`. None hit it here (TVA answers in ~3 s), but retry 5xx, and set a client-side timeout (~90–120 s): with bundles on 2026-10-26, one query never returned at all.
 - **A session with no query for 30 minutes is closed** (the deployment's default), and later queries fail — with bundles, as a `409`. A hung request is not activity. Stop on a 409 and open a new session on the same deployment, which stays up until it is stopped.
@@ -596,7 +594,6 @@ No uploads and no connectors. The SOP travels in `query`, so one session still s
 
 | Symptom | Cause |
 |---|---|
-| `404` on `/agents/sessions`, `/agents/deployments` or `/agents/packages` | This deployment of the platform doesn't serve Agent Lifecycle 2.0 yet — dev and staging do (2026-11-09); the others still run bundles and agent instances |
 | `404` on every `/agents` path | The endpoint is not `<root>/api` — a missing `/api`, or a `/vX.Y` prefix |
 | `404` on uploads or downloads only | A hand-built `/v0.5/files` URL. Files are at `<root>/api/files` |
 | `404` downloading a result, at `/api/api/files/…` | A session's result `ref` is a root path that already includes `/api`; resolve it against the root |
@@ -609,7 +606,7 @@ No uploads and no connectors. The SOP travels in `query`, so one session still s
 | `completed` but **`results: []`** | Generation most likely ended inside the reasoning block. A session can't confirm it — there is no `/logs`. Change the budget one step and re-run |
 | **A step that was skipped came back `PASSED`** | **Expected, and not fixable from the SOP.** The part was on screen, so the action was assumed — see §1. Human-review every `PASSED` |
 | **A step that was performed came back `FAILED` or `MISSING`** | Observed on the 2026-10-15 blueprint. The reason describes the clip's final frames (the tool lying idle), not the action — see §1. Human-review every verdict |
-| `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue — often a colleague on the same org. Give every upload a `<UTC>-<hex>` tail |
+| `S3 object not found`, inside a run that had already started | Something re-uploaded an input name while this run sat in the queue — often someone else in the same organization. Give every upload a `<UTC>-<hex>` tail |
 | Verdicts for some steps only | The SOP had a wrapped line, or the budget truncated mid-answer |
 | Last `reason` cut mid-sentence | Raise `max_new_tokens` — this is the one case where raising helps |
 | Every step scores correct on fail clips | A scorer crediting NOT REPORTED as a correct FAIL |
