@@ -1,9 +1,9 @@
 """
 Classification on Omega embeddings — client-side KNN, held-out.
 
-The managed batch classification pipeline, done over Direct
-Query: embed short windows with Omega, then KNN against a small n-shot library
-of labelled windows. No batch job, no lens session.
+The managed batch classification pipeline, done over Model Serving: embed
+short windows with Omega 1.5, then KNN against a small n-shot library of
+labelled windows. No batch job.
 
 This is a genuine held-out evaluation:
   * Library (n-shot): contiguous windows from the labelled shot files
@@ -12,28 +12,33 @@ This is a genuine held-out evaluation:
     so leakage is structurally impossible) whose timestamps are DISJOINT from
     the shot files, scored against ground truth in `bearing_labels.csv`.
 
-Normalization follows the data-prep / omega-1-4-preflight convention: fit ONE
-per-channel scaler (mean/std) on the n-shot pool, apply it to every window, and
-call /query with `normalize_input=false`. Windows that would span a timestamp
-gap are skipped (Omega reads a window as a contiguous series).
+Each window length gets its own Model Serving session (`window_size` =
+`step_size` = the length), used for both the library and the test windows,
+and cancelled when that eval finishes. All of a window's channels go in one
+request.
 
-The shipped `bearing_inference.csv` holds ~1000 non-overlapping windows. The
-default run embeds all of them — that's ~1000 independent /query calls, ~6–7 min
-at 8-way parallel. Dial it down for a quick check, or point at your own data:
+Normalization follows the data-prep / omega-1-5-preflight convention: fit ONE
+per-channel scaler (mean/std) on the n-shot pool and apply it to every window.
+Windows that would span a timestamp gap are skipped (Omega reads a window as
+a contiguous series).
 
-    # full shipped eval (~1000 windows, several minutes)
+The shipped `bearing_inference.csv` holds ~1000 non-overlapping 1024-timestep
+windows (more at shorter lengths). The default run embeds up to 1000 of them —
+one session query each, a couple of minutes at 8-way parallel:
+
+    # full shipped eval (up to 1000 windows)
     python classify_knn.py
 
-    # quick check (50 windows, ~30s)
+    # quick check (50 windows)
     python classify_knn.py --max-windows 50
 
     # compare window lengths (one full eval each + a comparison table at the end)
-    python classify_knn.py --window-size 16 256 1024
+    python classify_knn.py --window-size 16 64 256 1024
 
     # your own data
     python classify_knn.py --inference my.csv --labels my_labels.csv --workers 8
 
-Embeds are independent /query calls, so `--workers` fans them out concurrently.
+Queries are independent, so `--workers` sends several to the session at once.
 """
 
 from __future__ import annotations
@@ -46,9 +51,7 @@ from pathlib import Path
 
 import numpy as np
 
-from archetypeai.api_client import ArchetypeAI
-
-from _common import WINDOW, banner, embed, make_client, read_series, read_series_and_time, window_at
+from _common import WINDOW, OmegaSession, banner, make_client, read_series, read_series_and_time, window_at
 
 SAMPLE = Path(__file__).parent / "sample_data"
 HEALTHY_SHOT = SAMPLE / "bearing_healthy.csv"
@@ -69,16 +72,16 @@ def fit_scaler(series: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def _embed_resilient(client: ArchetypeAI, scaled_window, retries: int = 4):
-    """One /query embed with retry/backoff on transient failures.
+def _embed_resilient(session: OmegaSession, scaled_window, retries: int = 4):
+    """One session query with retry/backoff on transient failures.
 
-    The official client already retries 5xx/429 internally; this adds a
-    backoff loop around hard failures. Returns the L2 joint feature, or
-    None on persistent failure.
+    The official client already retries 5xx/429 internally, and the session
+    reopens itself if it has ended; this adds a backoff loop around hard
+    failures. Returns the L2 joint feature, or None on persistent failure.
     """
     for attempt in range(retries):
         try:
-            embeddings, _, _ = embed(client, scaled_window)
+            embeddings = session.embed(scaled_window)
         except Exception:
             time.sleep(1.5 * (attempt + 1))
             continue
@@ -91,15 +94,15 @@ def _embed_resilient(client: ArchetypeAI, scaled_window, retries: int = 4):
     return None
 
 
-def feature(client, window, mean, std):
-    return _embed_resilient(client, ((np.asarray(window, dtype=float) - mean) / std).tolist())
+def feature(session, window, mean, std):
+    return _embed_resilient(session, ((np.asarray(window, dtype=float) - mean) / std).tolist())
 
 
-def _embed_start(client, series, start, mean, std, window_size):
-    return start, feature(client, window_at(series, start, window_size), mean, std)
+def _embed_start(session, series, start, mean, std, window_size):
+    return start, feature(session, window_at(series, start, window_size), mean, std)
 
 
-def features_parallel(client, series, starts, mean, std, workers, window_size):
+def features_parallel(session, series, starts, mean, std, workers, window_size):
     """Embed many windows concurrently, with a live progress line. Returns {start: feature}."""
     features_by_start: dict[int, np.ndarray] = {}
     total = len(starts)
@@ -107,7 +110,7 @@ def features_parallel(client, series, starts, mean, std, workers, window_size):
     start_time = time.time()
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(_embed_start, client, series, start, mean, std, window_size) for start in starts
+            executor.submit(_embed_start, session, series, start, mean, std, window_size) for start in starts
         ]
         for done, future in enumerate(as_completed(futures), 1):
             start, joint_feature = future.result()
@@ -246,15 +249,21 @@ def run_eval(client, args, window_size: int, healthy, degraded, mean, std) -> di
     banner(f"Held-out classification eval — Omega embeddings + {K_NEIGHBORS}-NN vs ground truth "
            f"(window_size={window_size})")
 
-    print("Building n-shot library from shot files (scaled, normalize_input=false)...")
+    with OmegaSession(client, window_size=window_size) as session:
+        return _run_eval(session, args, window_size, healthy, degraded, mean, std)
+
+
+def _run_eval(session, args, window_size, healthy, degraded, mean, std) -> dict:
+    print(f"Building n-shot library from shot files (session {session.session_id}, "
+          f"window_size={window_size})...")
     healthy_starts = list(range(0, len(healthy[0]) - window_size + 1, LIB_STRIDE))
     degraded_starts = list(range(0, len(degraded[0]) - window_size + 1, LIB_STRIDE))
     library = [
-        (feature(client, window_at(healthy, start, window_size), mean, std), "healthy")
+        (feature(session, window_at(healthy, start, window_size), mean, std), "healthy")
         for start in healthy_starts
     ]
     library += [
-        (feature(client, window_at(degraded, start, window_size), mean, std), "degraded")
+        (feature(session, window_at(degraded, start, window_size), mean, std), "degraded")
         for start in degraded_starts
     ]
     library = [(joint_feature, label) for joint_feature, label in library if joint_feature is not None]
@@ -273,7 +282,7 @@ def run_eval(client, args, window_size: int, healthy, degraded, mean, std) -> di
     )
 
     start_time = time.time()
-    features_by_start = features_parallel(client, inference, starts, mean, std, args.workers, window_size)
+    features_by_start = features_parallel(session, inference, starts, mean, std, args.workers, window_size)
     truths, preds = [], []
     for start in starts:
         if start not in features_by_start or timestamps[start] not in truth_by_timestamp:
@@ -305,13 +314,13 @@ def main() -> None:
     parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="ground-truth labels CSV (timestamp,label)")
     parser.add_argument("--label-column", default="label", help="name of the label column in --labels (default 'label')")
     parser.add_argument("--max-windows", type=int, default=1000, help="cap on test windows (default 1000)")
-    parser.add_argument("--workers", type=int, default=8, help="concurrent /query embeds")
+    parser.add_argument("--workers", type=int, default=8, help="session queries in flight")
     parser.add_argument("--window-size", type=int, nargs="+", default=[WINDOW],
                         help=f"one or more window lengths to evaluate (each applied to BOTH the\n"
                              f"n-shot library and the test windows — mixing lengths within one eval\n"
                              f"would invalidate KNN distances). With several values, each runs as a\n"
                              f"separate full eval and a comparison table is printed at the end.\n"
-                             f"The encoder's trained range is 16-{WINDOW} (default {WINDOW})")
+                             f"Each length gets its own session. Range 16-{WINDOW} (default {WINDOW})")
     args = parser.parse_args()
 
     client = make_client()

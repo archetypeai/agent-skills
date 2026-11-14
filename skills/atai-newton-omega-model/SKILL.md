@@ -1,25 +1,24 @@
 ---
 name: atai-newton-omega-model
 description: >
-  Get time-series embeddings from Archetype AI's Omega encoder
-  (`OmegaEncoder::omega_embeddings_1_4`) over the prod `/query` endpoint —
-  send a window of sensor readings, get back a fixed-size vector per
-  channel, no batch job and no session. Use this skill when the user wants
-  to embed multivariate sensor windows (vibration, flow, pressure,
-  network, etc.) for lightweight downstream ML — KNN
-  classification, anomaly scoring, similarity search, or 2D projection —
-  done client-side over the embeddings. Covers the request shape (`data.numeric_array`,
-  channel-first window), the per-channel 768-d output, the supported
-  16–1024 window-length range, `normalize_input`, and the
-  "joint multi-channel state" + KNN pattern. For cleaning / splitting /
-  windowing raw sensor CSVs first, see `atai-newton-omega-model-data-prep`.
-  Do NOT use for text / image / video reasoning (that's the Newton fusion
-  model on `/query`).
+  Get time-series embeddings from Archetype AI's Omega encoder (Newton Omega
+  1.5, model `omega-embedding`) on Model Serving (`/api/inference/*`) — send a
+  window of sensor readings, get back a 768-d vector per channel, no batch
+  job. Use this skill when the user wants to embed multivariate sensor windows
+  (vibration, flow, pressure, network, etc.) for lightweight downstream ML —
+  KNN classification, anomaly scoring, similarity search, or 2D projection —
+  done client-side over the embeddings. Covers sessions and `window_size`
+  (16–1024), the request shape (`data.numeric_array`, channel-first, all
+  channels in one query), the `[windows, channels x 768]` response, the
+  shared-scaler convention, the request-size limit, and the "joint
+  multi-channel state" + KNN pattern. For cleaning / splitting / windowing raw
+  sensor CSVs first, see `atai-newton-omega-model-data-prep`. Do NOT use for
+  text / image / video reasoning (that's the Newton fusion model on `/query`).
 ---
 
-# Newton Omega Encoder — Time-Series Embeddings via `/query`
+# Newton Omega Encoder — Time-Series Embeddings via Model Serving
 
-Omega is a **time-series encoder**: feed it a window of sensor readings, get back a fixed-size embedding you can do ML on. This skill calls the cloud Omega model on the same `/query` endpoint as the Newton fusion model — one stateless POST per window, embeddings back, no batch job or session lifecycle.
+Omega is a **time-series encoder**: feed it a window of sensor readings, get back a fixed-size embedding you can do ML on. This skill calls Newton Omega 1.5 on **Model Serving**: open a session with your window length, send windows to it, get embeddings back. No batch job.
 
 ## When to Apply
 
@@ -37,99 +36,129 @@ For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, tempo
 ## The Model
 
 ```
-OmegaEncoder::omega_embeddings_1_4
+omega-embedding
 ```
 
-Note the `OmegaEncoder::` prefix (not `Newton::`). Output is a **768-dimensional embedding per channel**.
+Newton Omega 1.5. Output is a **768-dimensional embedding per channel**.
 
-## Endpoint
+**Coming from Omega 1.4** (`OmegaEncoder::omega_embeddings_1_4` on `/api/lens/query`)? The two models' embeddings are not comparable (cosine similarity about 0.03 for the same window), so rebuild every n-shot library with 1.5 — never mix vectors from the two.
 
-```
-POST {ATAI_API_ENDPOINT}/api/lens/query
-Authorization: Bearer <API_KEY>
-Content-Type: application/json
-```
+## Endpoints
 
-Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. Prod is `https://platform.u1.archetypeai.app/api`.
+All under `{ATAI_API_ENDPOINT}` (e.g. `https://platform.u1.archetypeai.app/api`), with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`:
 
-## Request Shape
+| Call | Request | Purpose |
+|---|---|---|
+| Open a session | `POST /inference/sessions` with `{"model": "omega-embedding", "values": {"window_size": N, "step_size": N}}` | Fix the window length (16–1024). Returns `{"id": ...}` |
+| Query the session | `POST /inference/sessions/{id}/query` | Embed windows of length N |
+| Cancel the session | `POST /inference/sessions/{id}/cancel` (empty body) | Free its place under the org's session limit |
+| Query without a session | `POST /inference/query` | Window fixed at 1024 |
 
-**Recommended: one request per channel, fanned out in parallel.** Each request carries a **`data.numeric_array` event** with a single channel — `contents` is `[[/* one channel: w floats */]]`. No `file_ids`, no prompt. Per-channel requests cap the request/response payload size (a single request carrying many channels eventually exceeds REST payload limits and corrupts in transit), and a thread-pool / async fan-out keeps wall-clock close to a single call — see `embed()` in [`_common.py`](references/_common.py).
+**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup.
+
+## Request Shape — all channels in one query
 
 ```json
 {
+  "model": "omega-embedding",
   "query": "",
-  "model": "OmegaEncoder::omega_embeddings_1_4",
-  "normalize_input": false,
   "events": [
-    { "type": "data.numeric_array", "event_data": { "contents": [[/* one channel: w floats */]] } }
+    { "type": "data.numeric_array", "event_data": { "contents": [[/* channel 1: N floats */], [/* channel 2 */]] } }
   ]
 }
 ```
 
-(The API also accepts all channels in one request — `contents[channel][t]` — but don't, for the payload reason above. And **don't mix the two conventions in one downstream model**: per-channel and all-in-one embeddings of the same data differ slightly, ~2e-2 per coordinate measured, so a KNN library built one way can't score windows embedded the other way.)
+`contents` is **channel-first**: `[channels x timesteps]`. No `file_ids`, no prompt. The session query needs `model` in the body too.
 
-## Response — one 768-d vector per channel
+**Send all of a window's channels in one query.** Omega 1.5 encodes each channel independently, so the vectors are the same whether channels travel together or apart (measured: largest difference 0.0000) — one query is simply fewer calls. The exception is very wide data: request bodies are capped at **2 MiB** (HTTP 413 above it), about 95 channels × 1024 timesteps at full float precision. Split wider windows into groups of channels and join the vectors; [`_common.py`](references/_common.py) does this at 64 channels per request.
 
-A single-channel request returns its 768-d vector **flat** in `response.response`; reassemble per-channel results in channel order client-side (a multi-channel request returns `[channels x 768]` instead — another shape difference between the two conventions).
+## Response — `[windows, channels x 768]`
 
 ```json
 {
   "response": {
-    "response": [0.45, -0.32, ...768...],
-    "warning_messages": []
+    "success": true,
+    "response": [[/* channel 1: 768 floats, then channel 2: 768 floats, ... */]]
   }
 }
 ```
 
-- **Window length: 16–1024 timesteps.** The encoder is trained to handle signal lengths from 16 to 1024. Under the hood, sub-1024 windows are padded **and masked** — the mask tells the model which time samples are real and which are padding, so padding is ignored rather than read as signal. **Don't default to 1024**: pick the window length that matches your signal's dynamics — shorter windows are sometimes more appropriate and more performant. The edges (verified live): any length < 1024 returns an informational `warning_messages` entry per channel (*"Data length N is less than 1024, padding with zeros"* — not a quality alarm within the 16–1024 range); below 16 you get *"the model may not perform well"* (below the trained range); above 1024 the input is **truncated to the last 1024 points** (with a warning).
-- **`normalize_input`** — when `true`, the encoder z-normalizes **each window independently**. That's usually *not* what you want for comparing windows: it erases cross-window amplitude (a low-flow and a high-flow window can look identical). For classification / anomaly / similarity, fit **one** per-channel scaler on your training pool, apply it to every window, and call with `normalize_input=false` (see the downstream pattern below). Reserve `normalize_input=true` for one-off single-window encodes where only within-window shape matters.
-- **Per-channel embeddings.** Omega embeds each channel independently. To get one fingerprint for a multi-channel window, concatenate the per-channel vectors into a **joint multi-channel state** (e.g. 4 channels → a 3072-d feature), optionally L2-normalized. That single vector is what you feed to KNN / anomaly / projection.
+Each **row** is one window: the channels' 768-d vectors concatenated in channel order. Split a row into `channels` slices of 768.
 
-See [`embed_query.py`](references/embed_query.py) for the basic call, window-length behavior across the 16–1024 range, and `normalize_input`.
+## Window length — sessions
+
+The session fixes the window. Every query sent to it is cut into `window_size`-timestep windows, advancing `step_size`, and each full window returns one row:
+
+- **Exactly `window_size` timesteps** → one row. This is the normal case: slice your data yourself and send one window per query.
+- **Longer** → back-to-back windows, one row each; timesteps past the last full window are **dropped**.
+- **Shorter** → `success: false` with an empty response and **no error message**. Check `success`.
+- **Without a session** (`/inference/query`), the window is always 1024.
+
+The encoder is trained for **16–1024 timesteps**. Windows shorter than 1024 are padded **and masked** inside the model, so padding is ignored rather than read as signal. Pick the length that matches your signal's dynamics and **compare a few on held-out data** — the best length depends on the data *and* on how many channels you embed (see the table below).
+
+**Session lifecycle.** A session ends when you cancel it, when it sits idle long enough, or when the server holding it is replaced; a query then returns HTTP 409 with code `session_not_running`. Open a new one and retry — `OmegaSession` in [`_common.py`](references/_common.py) does this. Each org can hold a limited number of open sessions per model (16 at the time of writing), so cancel sessions when you're done (`with OmegaSession(...)` does). Asking for an unknown session value returns HTTP 422 `invalid_session_values`.
+
+## Normalization — one shared scaler
+
+Omega 1.5 z-normalizes each channel **inside every window** and passes the window's overall level (mean and spread) to the model separately, so amplitude differences between windows survive. There is **no `normalize_input` option** to set.
+
+Still fit **one** per-channel scaler (mean/std) on your n-shot pool and apply it to every window — library and inference alike. It keeps the level information on one reference frame. On a single bearing channel it added 7–10 points of held-out accuracy at windows of 64 and 256 (no difference at 1024).
+
+**Per-channel embeddings.** To get one fingerprint for a multi-channel window, concatenate the per-channel vectors into a **joint multi-channel state** (e.g. 4 channels → a 3072-d feature), optionally L2-normalized. That single vector is what you feed to KNN / anomaly / projection.
+
+See [`embed_query.py`](references/embed_query.py): the call without a session, sessions at 16 / 256 / 1024, what a session does with longer and shorter input, and the channel-independence check.
 
 ## Downstream pattern — embeddings → KNN classification
 
-This is what the managed batch pipeline does, reproduced client-side over `/query` embeddings:
+This is what the managed batch pipeline does, reproduced client-side:
 
-0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window, calling `/query` with `normalize_input=false`. This is the data-prep / preflight convention; vet the shot files first with [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) and prep raw CSVs with [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
-1. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
-2. **Classify** a new window the same way and take a majority vote over the *k* nearest library features (euclidean).
+0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window. Vet the shot files first with [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) and prep raw CSVs with [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
+1. **Open a session** with the window length you chose, and use it for every window below.
+2. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
+3. **Classify** a new window the same way and take a majority vote over the *k* nearest library features (euclidean).
 
 A few dozen labelled embeddings make a serviceable classifier — no training, no batch job. See [`classify_knn.py`](references/classify_knn.py): it builds the library from the labelled shot files and runs a **genuine held-out evaluation** against `bearing_inference.csv` (sensors only — **no `label` column**, and timestamps disjoint from the shot files, so leakage is impossible two ways over), scoring predictions against `bearing_labels.csv`.
 
-It reports a full binary metrics report (`degraded` = positive), and `--window-size` accepts one or more lengths — each runs as a separate full eval (library and test windows re-windowed together at that length), with a comparison table at the end. On **1000 held-out windows** (500 healthy + 500 degraded) per length, the full sweep `--window-size 16 256 1024` scored:
+It reports a full binary metrics report (`degraded` = positive), and `--window-size` accepts one or more lengths — each runs as a separate full eval with its own session (library and test windows at that length), with a comparison table at the end. On **1000 held-out windows** per length, the sweep `--window-size 16 64 256 1024` scored:
 
 ```
  window  library  windows  accuracy  precision  recall     f1
 -------------------------------------------------------------
-     16       16     1000     0.671      0.858   0.410  0.555
-    256       14     1000     0.973      0.949   1.000  0.974
-   1024        8     1000     0.944      0.899   1.000  0.947
+     16       16     1000     0.734      0.794   0.632  0.704
+     64       16     1000     0.954      0.987   0.920  0.952
+    256       14     1000     0.970      0.947   0.996  0.971
+   1024        8     1000     0.998      0.996   1.000  0.998
 ```
 
-The shape of that table is the lesson. At 16, the window is shorter than the bearing defect's impulse signature, so recall collapses — most degraded windows genuinely contain no evidence at that zoom. At 256 the signature fits: every degraded window caught, and the fewest false alarms (27 healthy windows flagged). At 1024 recall holds but precision drops (56 false alarms) — the extra context dilutes the defect rather than sharpening it. **256 — a quarter of the data per window — beats 1024 on this dataset**, which is the empirical case for the window-length guidance above: don't default to 1024; sweep a few lengths and let held-out F1 pick.
-
-Each leg embeds ~1000 windows — ~4000 per-channel API calls, ~26 min at the default 8-way window fan-out; use `--max-windows 50` for a fast preview per length.
+With all four channels in the joint feature, accuracy rises with the window: at 16 the window is shorter than the defect's impulse signature and recall collapses; at 1024 only 2 of 1000 windows are wrong. The answer is not universal, though — embedding **one** channel (`bearing_1` only, as in the platform quickstart) reverses it: 64 scored 94%, 256 85% and 1024 82% on 100 held-out windows, because the long single-channel windows flag healthy windows as degraded. Sweep a few lengths on *your* setup and let held-out F1 pick; the default here is 1024 because it wins on this one.
 
 ## Latency
 
+Measured per window (p50, sequential), all channels in one query, 1024 timesteps:
+
+| Channels | Latency | Channel embeddings/s with 8 queries in flight |
+|---:|---:|---:|
+| 1 | ~0.3 s | ~18 |
+| 4 | ~0.5 s | ~35 |
+| 16 | ~0.9 s | ~45 |
+
 | Operation | Observed |
 |-----------|---------:|
-| One window embed (4 channels × 1024, per-channel parallel) | **~2 s** |
-| n-shot library (8 windows) | ~8 embeds, a few seconds |
-| Held-out eval (1000 windows, 8-way parallel) | **~26 min** (~4000 per-channel calls) |
+| n-shot library (8–16 windows) | a few seconds |
+| Held-out eval (1000 windows × 4 channels, 8 in flight) | **~2 min** per window length |
 
-Each embed is an independent stateless call, so `classify_knn.py` fans them out with `--workers`; raise it (or lower `--max-windows`) to trade throughput for budget/time.
+Queries to one session are independent, so `classify_knn.py` sends several at once with `--workers`.
 
 ## Common Pitfalls
 
 - **Channel-first, not row-major.** `contents` is `[channels x timesteps]` (one list per sensor), not `[timesteps x channels]`. Transposing gives garbage embeddings.
 - **Drop the timestamp column.** A `timestamp` parses as a number, so naive "use all numeric columns" includes it as a fake channel — and if your class files have disjoint time ranges, a downstream classifier can cheat on it. Exclude time columns (the helper drops `timestamp`/`time`/… by header name; pass your own `time_columns` set if your data names them differently).
 - **Temporal contiguity matters.** Omega reads a window as an ordered series; randomly-sampled or gap-spanning rows produce meaningless embeddings. Sample contiguous blocks. (See `atai-newton-omega-model-data-prep` for gap-aware windowing.)
-- **`OmegaEncoder::` prefix.** The model id is `OmegaEncoder::omega_embeddings_1_4`, not `Newton::...`.
-- **One embedding convention per model.** Per-channel requests (recommended) and all-channels-in-one-request produce slightly different vectors (~2e-2 per coordinate) for the same data. Build the n-shot library and embed inference windows the same way, or KNN distances are subtly wrong with no error anywhere.
-- **The "padding with zeros" warning is informational, not an error.** Any window in the trained 16–1024 range is handled natively (padding + mask). The warnings to act on are *"less than 16"* (below the trained range) and *"greater than 1024, truncating to the last 1024 points"* (you silently lose everything before the final 1024 samples — window the data yourself instead).
+- **Input shorter than the window fails silently.** The response is `success: false` with an empty list and no message. Check `success`, and slice every query to exactly `window_size` timesteps.
+- **One window length per model.** The library and the inference windows must use the same session `window_size`; mixing lengths invalidates KNN distances.
+- **No mixing of model versions.** Omega 1.4 and 1.5 vectors are not comparable. Rebuild the library when you switch.
+- **Ended sessions return HTTP 409.** Reopen and retry rather than failing the run; cancel sessions you no longer need.
+- **Very wide windows hit HTTP 413.** Above about 95 channels × 1024 timesteps, split channels across requests (the vectors are the same).
 
 ## Local Setup
 
@@ -150,7 +179,7 @@ python embed_query.py     # embedding basics
 python classify_knn.py    # n-shot KNN classification
 ```
 
-The scripts are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`): each script creates one client via `make_client()` and passes it into the helpers, and the `/query` POST goes through the client's retrying transport. They auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` walks up from cwd); otherwise export `ATAI_API_KEY` and `ATAI_API_ENDPOINT`. `numpy` is required for `classify_knn.py`.
+The scripts are built on the [official Archetype AI python client](https://github.com/archetypeai/python-client) (`pip install archetypeai`): each script creates one client via `make_client()`, opens an `OmegaSession`, and the POSTs go through the client's retrying transport. They auto-load `.env` if `python-dotenv` is installed (`find_dotenv()` walks up from cwd); otherwise export `ATAI_API_KEY` and `ATAI_API_ENDPOINT`. `numpy` is required for `classify_knn.py`.
 
 ## File Layout
 
@@ -158,8 +187,8 @@ The scripts are built on the [official Archetype AI python client](https://githu
 skills/atai-newton-omega-model/
 ├── SKILL.md                  ← this file
 ├── references/
-│   ├── _common.py            ← official-client setup, the Omega embed call, CSV/window helpers
-│   ├── embed_query.py        ← embedding basics (call, window lengths, normalize_input)
+│   ├── _common.py            ← official-client setup, OmegaSession, embed_once, CSV/window helpers
+│   ├── embed_query.py        ← embedding basics (no session, window lengths, session input rules, channels)
 │   ├── classify_knn.py       ← embeddings → n-shot KNN classification (held-out eval)
 │   ├── requirements.txt      ← runtime deps (pip install -r requirements.txt)
 │   ├── .env.example          ← copy to .env and fill in

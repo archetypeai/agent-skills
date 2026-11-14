@@ -31,12 +31,12 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 
 ### Models
 
-Direct Query API — one stateless `POST /api/lens/query` per request, for when you want control over the pipeline or the raw vectors to build on.
+Direct model calls, one request per input, for when you want control over the pipeline or the raw vectors to build on. Omega runs on Model Serving (`/api/inference/*`); the fusion model is still on the Direct Query API (`POST /api/lens/query`).
 
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/api/lens/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
+| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (Newton Omega 1.5, `omega-embedding`) on Model Serving (`/api/inference/*`) — a session with your window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
 
 ### Integrations
@@ -133,9 +133,9 @@ cp -r skills/* your-project/.claude/skills/
 /atai-manual-generation-agent                       # Procedure video -> ordered, timestamped manual
 /atai-task-verification-agent                       # Recording + SOP -> per-step PASSED / FAILED / MISSING
 
-# Models — Direct Query API
+# Models — Model Serving (Omega) and the Direct Query API (C 2.6)
 /atai-newton-omega-model-data-prep                  # Clean / split / featurize time-series before the Omega model
-/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
+/atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via Model Serving
 /atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
 # Integrations
@@ -149,7 +149,15 @@ cp -r skills/* your-project/.claude/skills/
 
 Two API surfaces, one per skill family.
 
-**Models — the Direct Query API.** One stateless POST to `/api/lens/query` per request: no session lifecycle, no batch jobs, no SSE plumbing.
+**Models — direct model calls.** No batch jobs, no SSE plumbing.
+
+Omega is on Model Serving: open a session with your window length, then one query per window.
+
+```
+Omega:         POST /api/inference/sessions ──► POST /api/inference/sessions/{id}/query ──► embeddings
+```
+
+The C 2.6 fusion model is on the Direct Query API: one stateless POST to `/api/lens/query` per request.
 
 ```
 Text:          POST /api/lens/query ───────────────────────────────► response
@@ -158,10 +166,10 @@ Video (.mp4):  Upload file → POST /api/lens/query + max_frames ─────
 Video frames:  POST /api/lens/query (frames + query_metadata) ──────► response
 ```
 
-**Integrations** reuse the Direct Query API for the Newton side and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
+**Integrations** reuse the platform API for the Newton side (Model Serving for Omega) and call the partner model on its own API — for Nemotron, NVIDIA's hosted `https://integrate.api.nvidia.com/v1/chat/completions`, with its own `NVIDIA_API_KEY`:
 
 ```
-Omega:     POST /api/lens/query per channel ──► embeddings ──► local KNN ──► verdict
+Omega:     POST /api/inference/sessions/{id}/query ──► embeddings ──► local KNN ──► verdict
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
@@ -197,7 +205,7 @@ The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The 
 https://platform.u1.archetypeai.app
 ```
 
-**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
+**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/inference`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
 
 **A wrong prefix is the most common way to lose a run, because it says nothing:** a 404 comes back with an empty body, which the client raises as `ApiError: {}` — no status, no URL, no message. To tell a wrong path from a wrong key, repeat the call **without the auth header**: 404 means the route isn't registered, 401 means it exists and your key or scope is the problem.
 

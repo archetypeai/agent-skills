@@ -33,7 +33,7 @@ A pre-modeling pipeline for time-series sensor data. Three composable building b
 - User has per-sensor embeddings (from the Omega model) and needs to fold them into a single feature matrix for KNN — that's `FeaturePreparer`.
 - User wants the "joint state" pattern described in [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) in code form.
 
-**Use the external [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) checks instead when**: you want a *read-only go/no-go gate* before committing to a run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
+**Use the external [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) checks instead when**: you want a *read-only go/no-go gate* before committing to a run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
 
 **Do not use this skill when**:
 - The task is video, image, or text (use [`atai-newton-fusion-model`](../atai-newton-fusion-model/SKILL.md)).
@@ -152,7 +152,7 @@ X_train, X_test, y_train, y_test, meta_train, meta_test = splitter.split(X, y, m
 |-------|--------------|
 | [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) | **Sibling + downstream** — the Omega embedding step that sits between `DataPreprocessor.build()` and `FeaturePreparer.prepare()`, then consumes the resulting `(X, y, metadata)` for per-window KNN against the `/query` Omega embedding. This skill is its on-ramp (clean) and off-ramp (featurize). |
 | [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) | **Sibling for the managed OSM agent** — feeding the OSM agent instead of a local KNN? It turns labelled recordings into the role files the OSM platform accepts (exact grid, one training file per state, continuous scored files, a preflight of the platform's rules). Clean messy raw data here first if needed; `FeaturePreparer` has no role there (the platform embeds). |
-| [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) | **Upstream gate (external repo)** — read-only static checks. Run *before* this skill to decide whether the dataset is worth cleaning. |
+| [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) | **Upstream gate (external repo)** — read-only static checks. Run *before* this skill to decide whether the dataset is worth cleaning. |
 
 ## Common Pitfalls
 

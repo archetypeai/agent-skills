@@ -3,7 +3,8 @@ Omega senses, Nemotron explains — end to end on the bundled bearing sample.
 
   1. Fit one per-channel scaler on the n-shot pool (healthy + degraded shot files).
   2. Build a KNN library: 256-step windows from each shot file, embedded with
-     Omega (one /query per channel), concatenated and L2-normalised.
+     Omega through a Model Serving session (all channels in one query),
+     concatenated and L2-normalised.
   3. Classify each window of `bearing_incoming.csv` (two held-out windows: one
      healthy, one degraded) by KNN vote.
   4. For a non-healthy verdict, compute plain statistics for the window and for
@@ -28,8 +29,8 @@ from pathlib import Path
 import numpy as np
 
 from _common import (
+    OmegaSession,
     banner,
-    embed,
     make_client,
     nemotron_brief,
     nemotron_model,
@@ -39,7 +40,7 @@ from _common import (
 )
 
 SAMPLE = Path(__file__).parent / "sample_data"
-WINDOW = 256  # the Omega skill's window sweep: 256 beats 1024 on this bearing data
+WINDOW = 256  # bearing_incoming.csv holds two 256-step held-out windows
 K = 3
 DEFAULT_CONTEXT = (
     "Rolling-element bearing test rig (NASA IMS run-to-failure), 4 accelerometer "
@@ -52,9 +53,9 @@ def fit_scaler(series: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
     return array.mean(axis=1, keepdims=True), array.std(axis=1, keepdims=True) + 1e-9
 
 
-def joint_feature(client, window, mean, std) -> np.ndarray:
+def joint_feature(session, window, mean, std) -> np.ndarray:
     scaled = ((np.asarray(window, dtype=float) - mean) / std).tolist()
-    vector = np.concatenate([np.asarray(v, dtype=float) for v in embed(client, scaled)])
+    vector = np.concatenate([np.asarray(v, dtype=float) for v in session.embed(scaled)])
     return vector / (np.linalg.norm(vector) + 1e-9)
 
 
@@ -85,28 +86,29 @@ def main() -> None:
     pool = [h + f for h, f in zip(healthy, faulty)]
     mean, std = fit_scaler(pool)
 
-    banner(f"Library: {args.window}-step windows, Omega {len(names)} channels")
-    library: list[tuple[np.ndarray, str]] = []
-    for label, series in (("healthy", healthy), (args.faulty_label, faulty)):
-        for start in range(0, len(series[0]) - args.window + 1, args.window):
-            library.append((joint_feature(client, window_at(series, start, args.window), mean, std), label))
-    print(f"{len(library)} library windows ({len(library) * len(names)} /query calls)")
+    with OmegaSession(client, window_size=args.window) as session:
+        banner(f"Library: {args.window}-step windows, Omega {len(names)} channels")
+        library: list[tuple[np.ndarray, str]] = []
+        for label, series in (("healthy", healthy), (args.faulty_label, faulty)):
+            for start in range(0, len(series[0]) - args.window + 1, args.window):
+                library.append((joint_feature(session, window_at(series, start, args.window), mean, std), label))
+        print(f"{len(library)} library windows ({len(library)} Omega queries)")
 
-    # Baseline statistics come from the raw (unscaled) healthy pool, so the numbers keep their units.
-    baseline = window_stats(names, healthy)
+        # Baseline statistics come from the raw (unscaled) healthy pool, so the numbers keep their units.
+        baseline = window_stats(names, healthy)
 
-    banner(f"Classify + explain · Nemotron {nemotron_model()}")
-    for start in range(0, len(incoming[0]) - args.window + 1, args.window):
-        window = window_at(incoming, start, args.window)
-        verdict, votes = knn(joint_feature(client, window, mean, std), library)
-        print(f"\nwindow rows {start}–{start + args.window - 1}: {verdict}  votes={votes}")
-        if verdict == "healthy" and not args.always_brief:
-            print("  healthy — no brief requested")
-            continue
-        started = time.time()
-        brief = nemotron_brief(args.context, verdict, votes, window_stats(names, window), baseline)
-        print(f"  Nemotron brief ({time.time() - started:.1f} s):")
-        print("  " + json.dumps(brief, indent=2).replace("\n", "\n  "))
+        banner(f"Classify + explain · Nemotron {nemotron_model()}")
+        for start in range(0, len(incoming[0]) - args.window + 1, args.window):
+            window = window_at(incoming, start, args.window)
+            verdict, votes = knn(joint_feature(session, window, mean, std), library)
+            print(f"\nwindow rows {start}–{start + args.window - 1}: {verdict}  votes={votes}")
+            if verdict == "healthy" and not args.always_brief:
+                print("  healthy — no brief requested")
+                continue
+            started = time.time()
+            brief = nemotron_brief(args.context, verdict, votes, window_stats(names, window), baseline)
+            print(f"  Nemotron brief ({time.time() - started:.1f} s):")
+            print("  " + json.dumps(brief, indent=2).replace("\n", "\n  "))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-Shared helpers for pairing the Omega encoder (Archetype AI Newton, /query) with
+Shared helpers for pairing the Omega encoder (Newton Omega 1.5 on Model Serving) with
 NVIDIA Nemotron (NVIDIA's hosted, OpenAI-compatible API).
 
 Omega SENSES: it turns a sensor window into embeddings, and a client-side KNN
@@ -7,8 +7,9 @@ turns those into a verdict. Nemotron EXPLAINS: it reads the verdict plus plain
 window statistics and writes operator-facing text. Nemotron never sees an
 embedding — vectors mean nothing to a language model.
 
-The Omega half mirrors `atai-newton-omega-model/references/_common.py` (one
-/query per channel, fanned out). The Nemotron half uses only the standard
+The Omega half is a trimmed copy of `OmegaSession` in
+`atai-newton-omega-model/references/_common.py`: a Model Serving session with
+your window length, all channels of a window in one query. The Nemotron half uses only the standard
 library, so there is no OpenAI SDK dependency.
 
 Credential lookup (first hit wins): env vars, then the nearest .env found by
@@ -31,11 +32,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-OMEGA_MODEL = "OmegaEncoder::omega_embeddings_1_4"
+OMEGA_MODEL = "omega-embedding"  # Newton Omega 1.5 on Model Serving
 EMBED_DIM = 768
 TIME_COLUMNS = {"timestamp", "time", "ts", "datetime", "date"}
 
@@ -98,7 +98,7 @@ def missing_key_message(name: str, create_hint: str) -> str:
     return f"{name} is not set or empty in {', '.join(loaded)} (or the environment). {create_hint}"
 
 
-# ---------------------------------------------------------------- Omega (/query)
+# ---------------------------------------------------------------- Omega (Model Serving)
 
 def make_client():
     """Official ArchetypeAI client. Both ATAI_API_KEY and ATAI_API_ENDPOINT are required."""
@@ -116,33 +116,64 @@ def make_client():
     return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 
-def _embed_channel(client, channel_values: list[float]) -> list[float]:
-    body = {
-        "query": "",
-        "model": OMEGA_MODEL,
-        "normalize_input": False,
-        "events": [{"type": "data.numeric_array", "event_data": {"contents": [channel_values]}}],
-    }
-    payload = client.requests_post(
-        f"{client.api_endpoint}/lens/query",
-        data_payload=json.dumps(body),
-        additional_headers={"Content-Type": "application/json"},
-    )
-    response = payload.get("response")
-    vector = response.get("response") if isinstance(response, dict) else response
-    if vector and isinstance(vector[0], list):
-        vector = vector[0]
-    return vector or []
+class OmegaSession:
+    """A Model Serving session for Omega with a fixed window length.
 
+        with OmegaSession(client, window_size=256) as session:
+            vectors = session.embed(window)   # one 768-d vector per channel
 
-def embed(client, window: list[list[float]], max_workers: int = 8) -> list[list[float]]:
-    """Embed a channel-first `[channels x timesteps]` window: one /query per channel, in parallel.
-
-    Pre-scale the window with a scaler fit once on your reference pool; this sends
-    normalize_input=false so cross-window amplitude survives (see atai-newton-omega-model).
+    Pre-scale windows with a scaler fit once on your reference pool (see
+    atai-newton-omega-model). A query on a session that has ended (HTTP 409
+    session_not_running) reopens it and retries once.
     """
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(window))) as executor:
-        return list(executor.map(lambda channel: _embed_channel(client, channel), window))
+
+    def __init__(self, client, window_size: int):
+        self.client = client
+        self.values = {"window_size": window_size, "step_size": window_size}
+        self.session_id: str | None = None
+
+    def __enter__(self) -> "OmegaSession":
+        self.open()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self.session_id:
+            try:
+                self.client.requests_post(
+                    f"{self.client.api_endpoint}/inference/sessions/{self.session_id}/cancel",
+                    data_payload=b"")
+            except Exception:  # noqa: BLE001 — an idle session expires anyway
+                pass
+            self.session_id = None
+
+    def _post(self, path: str, body: dict) -> dict:
+        return self.client.requests_post(
+            f"{self.client.api_endpoint}{path}",
+            data_payload=json.dumps(body),
+            additional_headers={"Content-Type": "application/json"},
+        )
+
+    def open(self) -> str:
+        self.session_id = self._post("/inference/sessions", {"model": OMEGA_MODEL, "values": self.values})["id"]
+        return self.session_id
+
+    def embed(self, window: list[list[float]]) -> list[list[float]]:
+        """Embed one channel-first `[channels x window_size]` window."""
+        from archetypeai.api_client import ApiError
+
+        body = {"model": OMEGA_MODEL, "query": "",
+                "events": [{"type": "data.numeric_array", "event_data": {"contents": window}}]}
+        try:
+            payload = self._post(f"/inference/sessions/{self.session_id}/query", body)
+        except ApiError as error:
+            if not any(item.get("code") == "session_not_running" for item in (error.errors or [])):
+                raise
+            payload = self._post(f"/inference/sessions/{self.open()}/query", body)
+        response = payload.get("response") or {}
+        rows = response.get("response") or []
+        if not response.get("success") or len(rows) != 1:
+            raise RuntimeError("Omega returned no embedding (is the window shorter than window_size?)")
+        return [rows[0][c * EMBED_DIM:(c + 1) * EMBED_DIM] for c in range(len(window))]
 
 
 def read_series(csv_path: str | Path, time_columns: set[str] = TIME_COLUMNS) -> tuple[list[str], list[list[float]]]:

@@ -2,9 +2,12 @@
 
 Mocks the official archetypeai client's transport, so these run with NO
 credentials and NO network. They lock in the verified invariants:
-  * embed() fans out ONE `data.numeric_array` call per channel, in parallel
-    (caps payload size for high channel counts); single-channel responses
-    arrive flat and are normalized back to per-channel vectors.
+  * OmegaSession opens a Model Serving session with window_size/step_size,
+    sends ALL channels of a window in one `data.numeric_array` query, splits
+    the flat [channels x 768] row back into per-channel vectors, reopens the
+    session on HTTP 409 session_not_running, and cancels it on exit.
+  * Wide windows are split into requests of MAX_CHANNELS_PER_REQUEST channels.
+  * success=false (input shorter than the window) raises.
   * Both ATAI_API_KEY and ATAI_API_ENDPOINT are required — no default
     endpoint.
   * read_series drops the timestamp column (channels = sensors only).
@@ -33,30 +36,42 @@ import numpy as np  # noqa: E402
 import _common  # noqa: E402
 import classify_knn  # noqa: E402
 
-from archetypeai.api_client import ArchetypeAI  # noqa: E402
+from archetypeai.api_client import ApiError, ArchetypeAI  # noqa: E402
 
 SAMPLE = REF / "sample_data"
 
 
-def _capturing_post(payload: dict, store: dict):
-    """Return a fake ArchetypeAI.requests_post that records its args and returns `payload`.
+def _fake_serving(store: dict, dims: int = 768, ended_once: bool = False, success: bool = True):
+    """Return a fake ArchetypeAI.requests_post that plays Model Serving.
 
-    `store["json"]` holds the most recent body; `store["bodies"]` accumulates
-    every body (embed() makes one call per channel, so multi-channel embeds
-    produce several).
+    Records every call in `store["calls"]` as (url, body-or-None). Session
+    opens return ids s1, s2, ...; queries return one flat row of
+    `channels * dims` values. With `ended_once`, the first query fails with
+    HTTP 409 session_not_running, like an expired session.
     """
+    state = {"opened": 0, "ended": ended_once}
 
     def _requests_post(self, api_endpoint, data_payload, additional_headers={}):
-        body = json.loads(data_payload)
-        store.setdefault("bodies", []).append(body)
-        store.update(
-            url=api_endpoint,
-            json=body,
-            headers={**self.auth_headers, **additional_headers},
-        )
-        return payload
+        body = json.loads(data_payload) if data_payload else None
+        store.setdefault("calls", []).append((api_endpoint, body))
+        store["headers"] = {**self.auth_headers, **additional_headers}
+        if api_endpoint.endswith("/inference/sessions"):
+            state["opened"] += 1
+            return {"id": f"s{state['opened']}", "values": body["values"]}
+        if api_endpoint.endswith("/cancel"):
+            return {}
+        if state["ended"] and "/sessions/" in api_endpoint:
+            state["ended"] = False
+            raise ApiError({"errors": [{"code": "session_not_running"}]})
+        channels = body["events"][0]["event_data"]["contents"]
+        row = [float(index) for index in range(len(channels) * dims)]
+        return {"response": {"success": success, "response": [row] if success else []}}
 
     return _requests_post
+
+
+def _queries(store: dict) -> list:
+    return [(url, body) for url, body in store["calls"] if url.endswith("/query")]
 
 
 class _Base(unittest.TestCase):
@@ -105,53 +120,80 @@ class TestMakeClient(_Base):
         self.assertEqual(client.auth_headers["Authorization"], "Bearer test-key")
 
 
-class TestEmbedBody(_Base):
-    def test_embed_fans_out_one_call_per_channel(self):
-        # The recommended pattern (per Nick's review): one API call per
-        # channel, in parallel — caps payload size for high channel counts.
+class TestOmegaSession(_Base):
+    def test_session_lifecycle_and_body(self):
         client = self.hermetic_client()
         window = [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]  # 2 channels x 3 timesteps
         store: dict = {}
-        # A single-channel response carries the vector FLAT (verified live).
-        payload = {"response": {"response": [0.1] * 768, "warning_messages": ["w"]}}
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
-            embeddings, warnings, _elapsed_ms = _common.embed(client, window, normalize_input=True)
-        bodies = store["bodies"]
-        self.assertEqual(len(bodies), 2)  # one call per channel
-        sent_channels = []
-        for body in bodies:
-            self.assertEqual(body["model"], "OmegaEncoder::omega_embeddings_1_4")
-            self.assertTrue(body["normalize_input"])
-            self.assertEqual(body["events"][0]["type"], "data.numeric_array")
-            contents = body["events"][0]["event_data"]["contents"]
-            self.assertEqual(len(contents), 1)  # exactly one channel per request
-            sent_channels.append(contents[0])
-            self.assertNotIn("file_ids", body)
-            self.assertNotIn("sanitize", body)
-        # all channels sent exactly once (parallel order may vary)
-        self.assertEqual(sorted(sent_channels), sorted(window))
-        self.assertTrue(store["url"].endswith("/query"))
+        with mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store)):
+            with _common.OmegaSession(client, window_size=64) as session:
+                vectors = session.embed(window)
+        open_url, open_body = store["calls"][0]
+        self.assertEqual(open_url, "https://example.test/api/inference/sessions")
+        self.assertEqual(open_body, {"model": "omega-embedding",
+                                     "values": {"window_size": 64, "step_size": 64}})
+        queries = _queries(store)
+        self.assertEqual(len(queries), 1)  # all channels in ONE request
+        url, body = queries[0]
+        self.assertEqual(url, "https://example.test/api/inference/sessions/s1/query")
+        self.assertEqual(body["model"], "omega-embedding")
+        self.assertEqual(body["events"][0]["type"], "data.numeric_array")
+        self.assertEqual(body["events"][0]["event_data"]["contents"], window)
+        self.assertNotIn("normalize_input", body)
+        self.assertTrue(store["calls"][-1][0].endswith("/inference/sessions/s1/cancel"))
         self.assertEqual(store["headers"]["Authorization"], "Bearer test-key")
-        self.assertEqual(len(embeddings), 2)  # reassembled in channel order
-        self.assertEqual(len(embeddings[0]), 768)
-        self.assertEqual(warnings, ["w", "w"])  # per-channel warnings collected
+        # The flat [2 x 768] row is split back into per-channel vectors.
+        self.assertEqual(len(vectors), 2)
+        self.assertEqual(vectors[0][0], 0.0)
+        self.assertEqual(vectors[1][0], 768.0)
 
+    def test_reopens_ended_session(self):
+        client = self.hermetic_client()
+        store: dict = {}
+        with mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store, ended_once=True)):
+            with _common.OmegaSession(client, window_size=32) as session:
+                vectors = session.embed([[0.0] * 32])
+        self.assertEqual(len(vectors), 1)
+        urls = [url for url, _ in store["calls"]]
+        self.assertTrue(urls[-2].endswith("/sessions/s2/query"))  # retried on the new session
+        self.assertTrue(urls[-1].endswith("/sessions/s2/cancel"))
 
-class TestExtractEmbeddings(unittest.TestCase):
-    def test_nested(self):
-        embeddings, warnings = _common.extract_embeddings(
-            {"response": {"response": [[1.0]], "warning_messages": ["x"]}}
-        )
-        self.assertEqual(embeddings, [[1.0]])
-        self.assertEqual(warnings, ["x"])
+    def test_wide_window_split_into_chunks(self):
+        client = self.hermetic_client()
+        store: dict = {}
+        channel_count = _common.MAX_CHANNELS_PER_REQUEST + 6
+        window = [[float(channel)] * 16 for channel in range(channel_count)]
+        with mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store, dims=4)), \
+                mock.patch.object(_common, "EMBED_DIM", 4):
+            with _common.OmegaSession(client, window_size=16) as session:
+                vectors = session.embed(window)
+        sizes = [len(body["events"][0]["event_data"]["contents"]) for _, body in _queries(store)]
+        self.assertEqual(sizes, [_common.MAX_CHANNELS_PER_REQUEST, 6])
+        self.assertEqual(len(vectors), channel_count)
 
-    def test_plain_list(self):
-        embeddings, warnings = _common.extract_embeddings({"response": [[1.0]]})
-        self.assertEqual(embeddings, [[1.0]])
-        self.assertEqual(warnings, [])
+    def test_short_input_raises(self):
+        client = self.hermetic_client()
+        store: dict = {}
+        with mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store, success=False)):
+            with _common.OmegaSession(client, window_size=256) as session:
+                with self.assertRaises(RuntimeError):
+                    session.embed([[0.0] * 100])
 
-    def test_empty(self):
-        self.assertEqual(_common.extract_embeddings({}), ([], []))
+    def test_window_size_range(self):
+        client = self.hermetic_client()
+        for bad in (8, 2048):
+            with self.assertRaises(ValueError):
+                _common.OmegaSession(client, window_size=bad)
+
+    def test_embed_once_uses_inference_query(self):
+        client = self.hermetic_client()
+        store: dict = {}
+        with mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store)):
+            windows = _common.embed_once(client, [[0.0] * 1024])
+        self.assertEqual([url for url, _ in store["calls"]],
+                         ["https://example.test/api/inference/query"])
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows[0][0]), 768)
 
 
 class TestReadSeries(unittest.TestCase):
@@ -171,36 +213,38 @@ class TestReadSeries(unittest.TestCase):
 
 
 class TestWindowSizeThreading(_Base):
+    def _session(self, store, dims=8):
+        client = self.hermetic_client()
+        patchers = [mock.patch.object(ArchetypeAI, "requests_post", _fake_serving(store, dims=dims)),
+                    mock.patch.object(_common, "EMBED_DIM", dims)]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return _common.OmegaSession(client, window_size=64)
+
     def test_embed_start_sends_window_of_requested_length(self):
         # --window-size must control the actual window sliced and sent to the
         # API (for BOTH library and test windows); a regression here would
         # silently embed wrong-length windows.
-        client = self.hermetic_client()
         store: dict = {}
-        payload = {"response": {"response": [0.1] * 8, "warning_messages": []}}
+        session = self._session(store)
         series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
-        mean = np.zeros((2, 1))
-        std = np.ones((2, 1))
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
-            start, joint_feature = classify_knn._embed_start(client, series, 0, mean, std, 64)
+        start, joint_feature = classify_knn._embed_start(
+            session, series, 0, np.zeros((2, 1)), np.ones((2, 1)), 64)
         self.assertEqual(start, 0)
-        self.assertEqual(len(store["bodies"]), 2)  # one call per channel
-        for body in store["bodies"]:
-            contents = body["events"][0]["event_data"]["contents"]
-            self.assertEqual(len(contents), 1)  # one channel per request
-            self.assertEqual(len(contents[0]), 64)  # exactly the requested window length
+        queries = _queries(store)
+        self.assertEqual(len(queries), 1)  # all channels in one request
+        contents = queries[0][1]["events"][0]["event_data"]["contents"]
+        self.assertEqual(len(contents), 2)
+        self.assertEqual(len(contents[0]), 64)  # exactly the requested window length
         self.assertEqual(joint_feature.shape, (16,))  # 2 channels x 8 dims, concatenated
 
     def test_embed_start_window_offset(self):
-        client = self.hermetic_client()
         store: dict = {}
-        payload = {"response": {"response": [0.1] * 8, "warning_messages": []}}
+        session = self._session(store)
         series = [[float(value) for value in range(200)], [float(value) for value in range(200)]]
-        mean = np.zeros((2, 1))
-        std = np.ones((2, 1))
-        with mock.patch.object(ArchetypeAI, "requests_post", _capturing_post(payload, store)):
-            classify_knn._embed_start(client, series, 100, mean, std, 32)
-        contents = store["json"]["events"][0]["event_data"]["contents"]
+        classify_knn._embed_start(session, series, 100, np.zeros((2, 1)), np.ones((2, 1)), 32)
+        contents = _queries(store)[0][1]["events"][0]["event_data"]["contents"]
         self.assertEqual(len(contents[0]), 32)
         self.assertEqual(contents[0][0], 100.0)  # slice starts at the requested offset
 
