@@ -131,7 +131,7 @@ See [`embed_query.py`](references/embed_query.py): the call without a session, s
 
 This is what the managed batch pipeline does, reproduced client-side:
 
-0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window. Vet and prep the raw CSVs first (timestamp regularity, gaps, constant channels) with [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
+0. **Prep + normalize once** — fit a per-channel scaler (mean/std) on the n-shot training pool and apply it to every window. Vet the shot files first with [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) (static checks, plus an optional held-out pilot on Omega 1.5) and prep raw CSVs with [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).
 1. **Open a session** with the window length you chose, and use it for every window below.
 2. **Build an n-shot library** — embed several labelled windows per class (e.g. `healthy` / `degraded`), fold each window's per-channel vectors into one joint feature, L2-normalize.
 3. **Classify** a new window the same way and take a majority vote over the *k* nearest library features (euclidean).

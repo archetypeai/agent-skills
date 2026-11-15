@@ -17,7 +17,7 @@ Each window length gets its own Inference API session (`window_size` =
 and cancelled when that eval finishes. All of a window's channels go in one
 request.
 
-Normalization follows the atai-newton-omega-model-data-prep convention: fit ONE
+Normalization follows the atai-newton-omega-model-data-prep / omega-1-5-preflight convention: fit ONE
 per-channel scaler (mean/std) on the n-shot pool and apply it to every window.
 Windows that would span a timestamp gap are skipped (Omega reads a window as
 a contiguous series).

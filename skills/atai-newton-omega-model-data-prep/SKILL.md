@@ -35,7 +35,7 @@ A pre-modeling pipeline for time-series sensor data. Three composable building b
 
 This skill serves both Omega skills: [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) (Omega 1.4 on the Direct Query API) and [`atai-newton-omega-inference-api`](../atai-newton-omega-inference-api/SKILL.md) (Omega 1.5 on the Inference API). The cleaning, splitting and featurizing are the same; see [Using Omega 1.5](#using-omega-15) for the few differences.
 
-**Use the external [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) checks instead when**: you want a *read-only go/no-go gate* before committing to a run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
+**Use the external preflight checks instead when** ([`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) for Omega 1.4, [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) for Omega 1.5): you want a *read-only go/no-go gate* before committing to a run. Preflight makes no changes to the data. This skill makes changes — block-splitting, imputation, dimensionality reduction. The two are complementary: preflight tells you whether the dataset is salvageable; this skill cleans it up.
 
 **Do not use this skill when**:
 - The task is video, image, or text (use [`atai-newton-fusion-model`](../atai-newton-fusion-model/SKILL.md)).
@@ -164,7 +164,7 @@ Everything above applies unchanged when the embedding step is Omega 1.5 on the I
 | [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md) | **Sibling + downstream** — the Omega embedding step that sits between `DataPreprocessor.build()` and `FeaturePreparer.prepare()`, then consumes the resulting `(X, y, metadata)` for per-window KNN against the `/query` Omega embedding. This skill is its on-ramp (clean) and off-ramp (featurize). |
 | [`atai-newton-omega-inference-api`](../atai-newton-omega-inference-api/SKILL.md) | **Sibling + downstream on the Inference API** — the same role as `atai-newton-omega-model`, with Newton Omega 1.5 through a session per window length. See [Using Omega 1.5](#using-omega-15). |
 | [`atai-operational-state-monitoring-agent-data-prep`](../atai-operational-state-monitoring-agent-data-prep/SKILL.md) | **Sibling for the managed OSM agent** — feeding the OSM agent instead of a local KNN? It turns labelled recordings into the role files the OSM platform accepts (exact grid, one training file per state, continuous scored files, a preflight of the platform's rules). Clean messy raw data here first if needed; `FeaturePreparer` has no role there (the platform embeds). |
-| [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) | **Upstream gate (external repo)** — read-only static checks. Run *before* this skill to decide whether the dataset is worth cleaning. |
+| [`omega-1-4-preflight`](https://github.com/archetypeai/omega-1-4-preflight) / [`omega-1-5-preflight`](https://github.com/archetypeai/omega-1-5-preflight) | **Upstream gate (external repos)** — read-only static checks, for Omega 1.4 and Omega 1.5. The 1.5 version adds an optional held-out pilot on the Inference API. Run *before* this skill to decide whether the dataset is worth cleaning. |
 
 ## Common Pitfalls
 
