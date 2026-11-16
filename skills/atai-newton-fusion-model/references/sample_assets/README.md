@@ -5,6 +5,7 @@ These assets exist so the example scripts are runnable out-of-the-box.
 | File | Size | Provenance |
 |------|------|------------|
 | `wind-turbines.png` | ~1.9 MB | AI-generated with ChatGPT (synthetic image, not a real photograph). No attribution required. Default image for `image_query.py`. |
+| `wind-turbines-small.jpg` | ~77 KB | The image above, scaled to 1024 px (ffmpeg). Used by the inline examples in `atai-newton-fusion-inference-api`, which must fit in a request body under 2 MiB. |
 | `1_pass_2_pass_3_pass_B.mp4` | ~7.8 MB | Worker-assembly inspection clip (o-ring → cap → manifold → wrench). Default video for `video_query.py`. Ground truth: all three steps PASS. Recorded by Archetype AI as a demo asset — cleared for distribution. |
 | `1_pass_2_pass_3_pass_B_small.mp4` | ~470 KB | The clip above re-encoded at 480 px, no audio (ffmpeg, libx264 CRF 32). Used by the inline video examples. |
 | `assembly_before.png` / `assembly_after.png` | ~400 KB each | Single frames extracted from the clip above (ffmpeg, at ~0.5s and ~28.5s): parts laid out vs. wrench tightening the cap. Used by the `multi_image` before/after demo in `image_query.py`. |

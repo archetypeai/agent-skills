@@ -44,6 +44,7 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-omega-inference-api](skills/atai-newton-omega-inference-api/) | Get time-series embeddings from Newton Omega 1.5 (`omega-embedding`) on the Inference API — a session per window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search. Shares `atai-newton-omega-model-data-prep` and the bearing sample data with the Direct Query skill |
+| [atai-newton-fusion-inference-api](skills/atai-newton-fusion-inference-api/) | Call Newton C 2.6 (`newton-c-2.6`) or Newton Fusion 1.0 (`newton-fusion-1.0`) on the Inference API with text, an image or a short video — on `/query`, OpenAI Chat Completions or OpenAI Responses — with media inline (no uploads), 224 px / 16-frame input, the ~60 s query limit, and Fusion's reasoning. Shares the sample assets with `atai-newton-fusion-model` |
 
 ### Integrations
 
@@ -154,6 +155,7 @@ cp -r skills/* your-project/.claude/skills/
 
 # Models — Inference API
 /atai-newton-omega-inference-api                    # Omega 1.5 time-series embeddings + client-side KNN via sessions
+/atai-newton-fusion-inference-api                   # C 2.6 / Fusion 1.0 text, image, video on /query, Chat Completions, Responses
 
 # Integrations
 /atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
@@ -182,11 +184,14 @@ Omega:     POST /api/lens/query per channel ──► embeddings ──► local
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
 ```
 
-**Models — the Inference API** (`atai-newton-omega-inference-api`). Omega 1.5 through a session that fixes the window length, all channels in one query:
+**Models — the Inference API.** Omega 1.5 through a session that fixes the window length, all channels in one query (`atai-newton-omega-inference-api`); Newton C 2.6 and Fusion 1.0, one stateless POST per request, media inline (`atai-newton-fusion-inference-api`):
 
 ```
 Omega 1.5: POST /api/inference/sessions (window_size) ──► POST .../sessions/{id}/query per window ──► embeddings ──► local KNN
            POST .../sessions/{id}/cancel when done
+
+Text / video:  POST /api/inference/query (file_ids: ["base64:<mp4>"]) ──────────────► response
+Image / video: POST /api/inference/chat/completions or /responses (data URIs) ──────► response
 ```
 
 **Agents — the Agents API, on Agent Lifecycle 2.0.** Everything lives in a project: you copy a platform blueprint into it, package it, deploy the package, and run sessions on the deployment; the model runs server-side. (Bundles and agent instances, the earlier flow, are gone on production.)
