@@ -88,9 +88,9 @@ On the Inference API, with `atai-newton-omega-inference-api` (each repo's MIGRAT
 
 | Demo | Skills | What it demonstrates |
 |------|--------|----------------------|
-| [Wind turbine monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-wind-turbine-demo-model-serving) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | The Penmanshiel demo on Omega 1.5: one session at a 128-sample window, all channels per query, KNN against a library from other turbines. Catches the frequency-converter fault with no alert on the healthy peer. |
-| [SWaT water treatment (Omega 1.5)](https://github.com/archetypeai/archetypeai-swat-demo-model-serving) | `atai-newton-omega-inference-api` + `atai-newton-fusion-model` | Six-stage plant: one Omega 1.5 query per stage instead of one per sensor (6 instead of 40 per window), plus C 2.6 operator suggestions from the server. No false alarms on held-out normal data. |
-| [Drilling state monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-drilling-demo-model-serving) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | Volve well logs: one Omega 1.5 query per 9-channel window, 0.3 s instead of 1–3 s. Accuracy on 8 held-out wells rises from 89% to 95%. |
+| [Wind turbine monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-wind-turbine-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | The Penmanshiel demo on Omega 1.5: one session at a 128-sample window, all channels per query, KNN against a library from other turbines. Catches the frequency-converter fault with no alert on the healthy peer. |
+| [SWaT water treatment (Omega 1.5)](https://github.com/archetypeai/archetypeai-swat-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-fusion-model` | Six-stage plant: one Omega 1.5 query per stage instead of one per sensor (6 instead of 40 per window), plus C 2.6 operator suggestions from the server. No false alarms on held-out normal data. |
+| [Drilling state monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-drilling-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | Volve well logs: one Omega 1.5 query per 9-channel window, 0.3 s instead of 1–3 s. Accuracy on 8 held-out wells rises from 89% to 95%. |
 
 ## Agent examples
 
