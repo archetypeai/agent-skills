@@ -82,7 +82,7 @@ Worked example, the whole way, with a live app:
 
 ## Endpoints
 
-Every call: `Authorization: Bearer <ATAI_API_KEY>`, under `{root}/api` (`ATAI_API_ENDPOINT` may
+Every call: `Authorization: Bearer <ATAI_API_KEY>` and `X-Atai-Client: agent_skills`, under `{root}/api` (`ATAI_API_ENDPOINT` may
 carry `/api` or not; `atai_api.api_base()` normalises it).
 
 | step | call |

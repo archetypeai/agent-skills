@@ -110,6 +110,29 @@ def test_a_create_post_is_not_retried(fresh_env, monkeypatch):
     assert calls == ["POST", "GET", "GET", "GET"]
 
 
+def test_platform_calls_carry_auth_and_client(fresh_env, monkeypatch, tmp_path):
+    """Every platform call names agent_skills as its X-Atai-Client, so the platform
+    attributes skill traffic to the skills rather than to an unknown client."""
+    import io
+    monkeypatch.setenv("ATAI_API_KEY", "sk-1")
+    monkeypatch.setenv("ATAI_API_ENDPOINT", "https://x.example")
+    sent = []
+
+    def urlopen(req, timeout):
+        sent.append(req)
+        return io.BytesIO(b'{"file_id": "f"}')
+    monkeypatch.setattr(od_api.urllib.request, "urlopen", urlopen)
+    csv = tmp_path / "a.csv"
+    csv.write_text("t,x\n0,1\n")
+    od_api.check_key()
+    od_api.request("GET", "/agents/sessions/ses_1")
+    od_api.upload(csv, "a.csv")
+    assert len(sent) == 3
+    for req in sent:
+        assert req.get_header("Authorization") == "Bearer sk-1"
+        assert req.get_header("X-atai-client") == "agent_skills"
+
+
 def test_endpoint_forms_and_placeholder(fresh_env, monkeypatch):
     monkeypatch.setenv("ATAI_API_KEY", "sk-1")
     for ep in ["https://x.example", "https://x.example/", "https://x.example/api", "https://x.example/v0.5"]:

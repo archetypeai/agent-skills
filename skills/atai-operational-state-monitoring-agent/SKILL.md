@@ -88,7 +88,7 @@ Files API     POST {ATAI_API_ENDPOINT}/api/files                  (multipart upl
               GET  {ATAI_API_ENDPOINT}/api/files/{fil_…}/content  (download a session's output)
 Projects API       {ATAI_API_ENDPOINT}/api/projects
 Agents API         {ATAI_API_ENDPOINT}/api/agents/...
-Authorization: Bearer <API_KEY> on every call
+Authorization: Bearer <API_KEY> and X-Atai-Client: agent_skills on every call
 ```
 
 Set `ATAI_API_ENDPOINT` to the deployment root (`https://platform.u1.archetypeai.app`); if it carries an `/api` or `/vX.Y` suffix, strip it before appending `/api`. The old mounts (`/agents`, `/v0.5/files`) return 404 on that host. Paths below are written relative to the prefix: `/agents/packages` means `{ATAI_API_ENDPOINT}/api/agents/packages`. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint.
@@ -112,7 +112,7 @@ session, deployment and package and keeps the project and its copy for the next 
 ## Step 1 — Upload the input CSV, on an exact sample grid
 
 ```sh
-curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" \
+curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@drilling_volve_f14.csv;type=text/csv" \
   "$ATAI_API_ENDPOINT/api/files"
 ```
@@ -143,9 +143,9 @@ none, so copy it into a project of yours first (copying needs only the right to 
 project):
 
 ```sh
-PROJECT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+PROJECT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/api/projects" -d '{"name": "OSM skill Path 1"}' | jq -r .id)
-BLUEPRINT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+BLUEPRINT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/api/agents/blueprints/playground-osm-drilling/copy" \
   -d "{\"project_id\": \"$PROJECT_ID\", \"blueprint_key\": \"playground-osm-drilling-skill\"}" | jq -r .id)
 ```
@@ -158,11 +158,11 @@ id after that.
 ## Step 3 — Package it, deploy the package as `batch`
 
 ```sh
-PACKAGE_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+PACKAGE_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/api/agents/packages" \
   -d "{\"blueprint_ids\": [\"$BLUEPRINT_ID\"], \"target\": {\"kind\": \"platform\"}, \"name\": \"OSM Path 1\"}" | jq -r .id)
 # poll GET /agents/packages/$PACKAGE_ID until status is "ready" (building → ready | failed)
-DEPLOYMENT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+DEPLOYMENT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/api/agents/deployments" -d "{\"package_id\": \"$PACKAGE_ID\", \"kind\": \"batch\"}" | jq -r .id)
 # poll GET /agents/deployments/$DEPLOYMENT_ID until status is "ready"
 ```
@@ -176,11 +176,11 @@ files.
 ## Step 4 — Run a session over the file, and poll it
 
 ```sh
-SESSION_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "Content-Type: application/json" \
+SESSION_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
   "$ATAI_API_ENDPOINT/api/agents/sessions" -d "{\"deployment_id\": \"$DEPLOYMENT_ID\",
     \"connectors\": {\"source\": [{\"type\": \"file\", \"id\": \"drilling_volve_f14.csv\", \"format\": \"csv\"}]}}" | jq -r .id)
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID"
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/events"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/events"
 ```
 
 A session goes `pending → running → completed | failed | cancelled`; a failed one carries
@@ -192,7 +192,7 @@ each other down under load.
 ## Step 5 — Download the results
 
 ```sh
-curl -H "Authorization: Bearer $ATAI_API_KEY" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/results"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/results"
 ```
 
 Each entry nests its fields under an inner `data` object (`filename`, `num_bytes`, `ref`).
@@ -806,7 +806,7 @@ python cleanup.py --out out --yes
 To see which serving deployments are up:
 
 ```sh
-curl -s "$ATAI_API_ENDPOINT/api/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" \
+curl -s "$ATAI_API_ENDPOINT/api/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   | jq -c '.data[] | select(.kind=="serving") | {id, package_id, project_id, created_at}'
 ```
 

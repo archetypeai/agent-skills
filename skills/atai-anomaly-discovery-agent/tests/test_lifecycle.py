@@ -594,6 +594,39 @@ class QueryRetry(unittest.TestCase):
 
 
 
+class ClientHeader(unittest.TestCase):
+    """Every platform call names agent_skills as its X-Atai-Client, so the platform
+    attributes Path 2 traffic to the skills rather than to an unknown client."""
+
+    def test_platform_calls_carry_auth_and_client(self):
+        sent = []
+
+        class Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b'{"file_id": "f"}'
+
+        def urlopen(req, timeout):
+            sent.append(req)
+            return Resp()
+        with tempfile.NamedTemporaryFile(suffix=".csv") as f, \
+                mock.patch.dict(os.environ, {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": "https://x"}), \
+                mock.patch.object(atai_http.urllib.request, "urlopen", urlopen):
+            atai_http.check_auth(log=lambda *a: None)
+            atai_http.request("GET", "https://x/api/agents/blueprints")
+            atai_http.upload_file(f.name)
+            promote_and_test.request_raw("https://x/api/files/download/p")
+        self.assertEqual(len(sent), 4)
+        for req in sent:
+            self.assertEqual(req.get_header("Authorization"), "Bearer k")
+            self.assertEqual(req.get_header("X-atai-client"), "agent_skills")
+
+
 class LibraryEmbeddings(unittest.TestCase):
     """The library's windows cut as the platform cuts them, embedded over /query, and PCA 1-2."""
 

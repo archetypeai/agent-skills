@@ -424,6 +424,32 @@ class TestRequestShapes(unittest.TestCase):
         self.assertIn("ZERO steps", RUNNER_SRC)
 
 
+class TestClientHeader(unittest.TestCase):
+    """Every platform call carries X-Atai-Client: agent_skills, so the platform
+    attributes skill traffic to the skills rather than to an unknown client."""
+
+    def test_platform_calls_carry_auth_and_client(self):
+        import tempfile
+        from unittest import mock
+        sent = []
+
+        class Resp(io.BytesIO):
+            status = 200
+
+        def urlopen(req, timeout=None):
+            sent.append(req)
+            return Resp(b'{"file_id": "f"}')
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as f, \
+                mock.patch.dict(os.environ, {"ATAI_API_KEY": "k", "ATAI_API_ENDPOINT": "https://x.test"}), \
+                mock.patch.object(mga.urllib.request, "urlopen", urlopen):
+            mga.request("GET", "https://x.test/api/agents/blueprints")
+            mga.upload(f.name, "clip.mp4")
+        self.assertEqual(len(sent), 2)
+        for req in sent:
+            self.assertEqual(req.get_header("Authorization"), "Bearer k")
+            self.assertEqual(req.get_header("X-atai-client"), "agent_skills")
+
+
 class FakeAPI:
     """Stands in for request(): an in-memory platform that records every call."""
 

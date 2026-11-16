@@ -29,7 +29,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import (TERMINAL, check_auth, deploy, deployment_ready, end, lifecycle_url, list_all,  # noqa: E402
+from atai_http import (TERMINAL, authorize, check_auth, deploy, deployment_ready, end, lifecycle_url, list_all,  # noqa: E402
                        load_dotenv, open_session, ready_package, request, result_url, root, same_deployment,
                        upload_all)
 from background import add_background_flag, maybe_detach  # noqa: E402
@@ -83,7 +83,7 @@ def match_rows(rows, finish_col, ranges):
 def fetch(ref):
     """A result file, by its `ref`: a root path (`/api/files/<fil_…>/content`) or a URL."""
     req = urllib.request.Request(result_url(ref))
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    authorize(req)
     with urllib.request.urlopen(req, timeout=600) as resp:
         return resp.read().decode("utf-8", errors="replace")
 

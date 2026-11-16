@@ -30,6 +30,17 @@ def _http_error(code: int, body: str = "{}"):
     return urllib.error.HTTPError("https://example", code, "err", {}, io.BytesIO(body.encode()))
 
 
+class MakeClientTest(unittest.TestCase):
+    def test_client_names_agent_skills(self):
+        """Omega calls carry X-Atai-Client: agent_skills (Nemotron calls go to NVIDIA, so they don't)."""
+        env = {"ATAI_API_KEY": "test-key", "ATAI_API_ENDPOINT": "https://x.test/v0.5"}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(_common, "load_dotenv_if_available", lambda: None):
+            c = _common.make_client()
+        self.assertEqual(c.api_endpoint, "https://x.test/api")
+        self.assertEqual(c.auth_headers["X-Atai-Client"], "agent_skills")
+
+
 class DotenvTest(unittest.TestCase):
     """The repo-root .env convention: found by walking up from cwd."""
 

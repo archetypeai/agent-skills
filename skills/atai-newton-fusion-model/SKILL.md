@@ -56,6 +56,7 @@ This was probed end-to-end against `https://platform.u1.archetypeai.app/api/lens
 ```
 POST {ATAI_API_ENDPOINT}/api/lens/query
 Authorization: Bearer <API_KEY>
+X-Atai-Client: agent_skills
 Content-Type: application/json
 ```
 
@@ -90,7 +91,7 @@ Two attachment paths, both reach the same fusion model — pick by use case — 
 
 ```bash
 curl -X POST $ATAI_API_ENDPOINT/api/files \
-  -H "Authorization: Bearer $ATAI_API_KEY" \
+  -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@dashboard.png;type=image/png"
 ```
 
@@ -148,7 +149,7 @@ C 2.6 reasons over video on `/query` two ways. This distinguishes it from the C 
 
 ```bash
 curl -X POST $ATAI_API_ENDPOINT/api/files \
-  -H "Authorization: Bearer $ATAI_API_KEY" \
+  -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@clip.mp4;type=video/mp4"
 ```
 

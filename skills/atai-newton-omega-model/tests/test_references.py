@@ -103,6 +103,7 @@ class TestMakeClient(_Base):
             client = _common.make_client()
             self.assertEqual(client.api_endpoint, "https://example.test/api", given)
         self.assertEqual(client.auth_headers["Authorization"], "Bearer test-key")
+        self.assertEqual(client.auth_headers["X-Atai-Client"], "agent_skills")
 
 
 class TestEmbedBody(_Base):

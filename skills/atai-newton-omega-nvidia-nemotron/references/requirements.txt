@@ -1,6 +1,6 @@
 # Runtime dependencies for the reference scripts.
 #   pip install -r requirements.txt
 # Nemotron calls use the standard library (urllib) — no OpenAI SDK needed.
-archetypeai
+archetypeai>=26.11.11.0
 python-dotenv
 numpy

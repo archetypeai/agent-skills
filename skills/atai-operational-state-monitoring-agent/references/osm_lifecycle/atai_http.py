@@ -24,6 +24,14 @@ import uuid
 TERMINAL = {"completed", "failed", "canceled", "cancelled"}   # the platform spells it "cancelled"
 RETRY_CODES = (502, 503, 504)
 MAX_WAIT_S = 600
+CLIENT = "agent_skills"   # X-Atai-Client: the platform attributes these calls to the skills, not the SDK
+
+
+def authorize(req):
+    """Add the platform's auth and client headers to a urllib request (platform URLs only)."""
+    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    req.add_header("X-Atai-Client", CLIENT)
+    return req
 
 
 SOURCE = {}          # ATAI_* variable -> "shell" or the .env path it came from
@@ -76,7 +84,7 @@ def check_auth(log=print):
     log(f"endpoint {root()} (from {SOURCE.get('ATAI_API_ENDPOINT', 'the environment')}), "
         f"key …{os.environ.get('ATAI_API_KEY', '')[-4:]} (from {SOURCE.get('ATAI_API_KEY', 'the environment')})")
     req = urllib.request.Request(f"{agents()}/blueprints?limit=1")
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    authorize(req)
     try:
         with urllib.request.urlopen(req, timeout=60):
             return
@@ -267,7 +275,7 @@ def request(method, url, body=None, idempotent=None):
 
     def send():
         req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+        authorize(req)
         if body is not None:
             req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -292,7 +300,7 @@ def upload_file(path, name=None):
 
     def send():
         req = urllib.request.Request(files_url(), data=body, method="POST")
-        req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+        authorize(req)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         with urllib.request.urlopen(req, timeout=300) as resp:
             return json.loads(resp.read())
