@@ -31,12 +31,12 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 
 ### Models
 
-Direct Query API — one stateless `POST /api/lens/query` per request, for when you want control over the pipeline or the raw vectors to build on.
+**Direct Query API** — one stateless `POST /api/lens/query` per request, for when you want control over the pipeline or the raw vectors to build on. Pick the model by the data: numeric time-series (sensor CSVs) → `atai-newton-omega-model`, after `atai-newton-omega-model-data-prep`; text, images or video → `atai-newton-fusion-model`.
 
 | Skill | Description |
 |-------|-------------|
-| [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
-| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over `/api/lens/query` — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
+| [atai-newton-omega-model-data-prep](skills/atai-newton-omega-model-data-prep/) | Clean, split, and featurize multivariate time-series data before the Omega model on the Direct Query API — gap-aware blocking + imputation, out-of-time train/test split, and joint-state (X, y) featurization |
+| [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over the Direct Query API (`/api/lens/query`) — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
 
 ### Integrations

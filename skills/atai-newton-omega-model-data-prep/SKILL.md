@@ -2,8 +2,8 @@
 name: atai-newton-omega-model-data-prep
 description: >
   Clean, split, and featurize multivariate time-series data before
-  embedding it with the Omega model. Bundles three reusable building
-  blocks: `DataPreprocessor` (diagnose timestamp regularity, gaps, and
+  embedding it with the Omega model on the Direct Query API. Bundles
+  three reusable building blocks: `DataPreprocessor` (diagnose timestamp regularity, gaps, and
   nulls; build continuous gap-aware temporal blocks with imputation),
   `DataSplitter` (out-of-time or random train/test split that respects
   temporal order), and `FeaturePreparer` (pivot per-sensor embeddings
