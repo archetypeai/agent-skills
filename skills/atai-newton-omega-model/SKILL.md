@@ -2,19 +2,20 @@
 name: atai-newton-omega-model
 description: >
   Get time-series embeddings from Archetype AI's Omega encoder
-  (`OmegaEncoder::omega_embeddings_1_4`) over the prod `/query` endpoint —
-  send a window of sensor readings, get back a fixed-size vector per
-  channel, no batch job and no session. Use this skill when the user wants
-  to embed multivariate sensor windows (vibration, flow, pressure,
-  network, etc.) for lightweight downstream ML — KNN
+  (`OmegaEncoder::omega_embeddings_1_4`) over the Direct Query API
+  (`POST /api/lens/query`) — send a window of sensor readings, get back a
+  fixed-size vector per channel, no batch job and no session. Use this
+  skill when the user wants to embed multivariate sensor windows
+  (vibration, flow, pressure, network, etc.) for client-side ML — KNN
   classification, anomaly scoring, similarity search, or 2D projection —
-  done client-side over the embeddings. Covers the request shape (`data.numeric_array`,
-  channel-first window), the per-channel 768-d output, the supported
-  16–1024 window-length range, `normalize_input`, and the
+  including a web app over a folder of sensor CSVs. For numeric
+  time-series, this is the Direct Query API skill, not the fusion model.
+  Covers the request shape (`data.numeric_array`, channel-first window),
+  the per-channel 768-d output, the 16–1024 window-length range, `normalize_input`, and the
   "joint multi-channel state" + KNN pattern. For cleaning / splitting /
   windowing raw sensor CSVs first, see `atai-newton-omega-model-data-prep`.
-  Do NOT use for text / image / video reasoning (that's the Newton fusion
-  model on `/query`).
+  Do NOT use for text / image / video reasoning (that's
+  `atai-newton-fusion-model`).
 ---
 
 # Newton Omega Encoder — Time-Series Embeddings via `/query`
