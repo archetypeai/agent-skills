@@ -22,6 +22,8 @@ import urllib.request
 import uuid
 
 TERMINAL = {"completed", "failed", "cancelled"}
+# X-Atai-Client: the platform attributes these calls to the skills, not an unknown client.
+CLIENT = "agent_skills"
 
 def find_dotenv(start: str | None = None) -> str | None:
     """The nearest .env, from the current folder upwards."""
@@ -219,6 +221,7 @@ def request(method: str, url: str, body=None, headers=None, raw: bool = False,
     for attempt in range(retries + 1):
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+        req.add_header("X-Atai-Client", CLIENT)
         if body is not None:
             req.add_header("Content-Type", "application/json")
         for k, v in (headers or {}).items():
@@ -261,6 +264,7 @@ def upload_file(path: str, rename: str | None = None, retries: int = 4) -> dict:
     for attempt in range(retries + 1):
         req = urllib.request.Request(f"{api_base()}/files", data=body, method="POST")
         req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+        req.add_header("X-Atai-Client", CLIENT)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:

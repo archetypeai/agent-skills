@@ -63,7 +63,8 @@ def api() -> str:
 
 
 def _auth() -> dict:
-    return {"Authorization": f"Bearer {os.environ['ATAI_API_KEY']}"}
+    """Auth plus X-Atai-Client, so the platform attributes these calls to the skills."""
+    return {"Authorization": f"Bearer {os.environ['ATAI_API_KEY']}", "X-Atai-Client": "agent_skills"}
 
 
 def check_key() -> None:

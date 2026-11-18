@@ -49,6 +49,29 @@ class TestEndpointResolution(unittest.TestCase):
             if v is not None:
                 os.environ[k] = v
 
+    def test_client_names_agent_skills(self):
+        """Every platform call carries X-Atai-Client: agent_skills, so the platform
+        attributes skill traffic to the skills rather than to an unknown client."""
+        import tempfile
+        from unittest import mock
+        sent = []
+
+        class Resp(io.BytesIO):
+            status = 200
+
+        def urlopen(req, timeout=None):
+            sent.append(req)
+            return Resp(b'{"file_id": "f"}')
+        with tempfile.NamedTemporaryFile(suffix=".txt") as f, \
+                mock.patch.dict(os.environ, {"ATAI_API_ENDPOINT": "https://x.test"}), \
+                mock.patch.object(tva.urllib.request, "urlopen", urlopen):
+            tva.request("GET", "https://x.test/api/agents/blueprints")
+            tva.upload(f.name, "sop.txt")
+        self.assertEqual(len(sent), 2)
+        for req in sent:
+            self.assertEqual(req.get_header("Authorization"), "Bearer test-key")
+            self.assertEqual(req.get_header("X-atai-client"), "agent_skills")
+
     def test_bare_endpoint_kept(self):
         os.environ["ATAI_API_ENDPOINT"] = "https://platform.example.com"
         self.assertEqual(tva.env()[1], "https://platform.example.com")

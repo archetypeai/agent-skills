@@ -113,7 +113,7 @@ def make_client():
         sys.exit(missing_key_message("ATAI_API_ENDPOINT", "e.g. https://platform.u1.archetypeai.app/api — there is no default."))
     api_endpoint = re.sub(r"/api(/lens)?$", "", api_endpoint.rstrip("/"))
     api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint) + "/api"
-    return ArchetypeAI(api_key, api_endpoint=api_endpoint)
+    return ArchetypeAI(api_key, api_endpoint=api_endpoint, client="agent_skills")
 
 
 def _embed_channel(client, channel_values: list[float]) -> list[float]:

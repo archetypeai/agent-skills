@@ -48,6 +48,7 @@ Note the `OmegaEncoder::` prefix (not `Newton::`). Output is a **768-dimensional
 ```
 POST {ATAI_API_ENDPOINT}/api/lens/query
 Authorization: Bearer <API_KEY>
+X-Atai-Client: agent_skills
 Content-Type: application/json
 ```
 

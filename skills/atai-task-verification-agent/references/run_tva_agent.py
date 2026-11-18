@@ -70,6 +70,9 @@ sys.stdout.reconfigure(line_buffering=True)
 # A session's terminal statuses.
 TERMINAL = {"completed", "failed", "cancelled"}
 
+# X-Atai-Client: the platform attributes these calls to the skills, not an unknown client.
+CLIENT = "agent_skills"
+
 # The statuses TaskVerificationResultsParserNode emits.
 STATUSES = ("PASSED", "FAILED", "MISSING")
 
@@ -166,6 +169,13 @@ def env() -> tuple[str, str]:
     return key, api_root(endpoint)
 
 
+def authorize(req: urllib.request.Request, key: str) -> urllib.request.Request:
+    """Add the platform's auth and client headers (platform URLs only, never a presigned one)."""
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("X-Atai-Client", CLIENT)
+    return req
+
+
 def agents_url(path: str = "") -> str:
     return f"{env()[1]}/api/agents{path}"
 
@@ -187,7 +197,7 @@ def request(method: str, url: str, body=None, raw: bool = False,
     attempts = retries + 1 if safe else 1
     for attempt in range(attempts):
         req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {key}")
+        authorize(req, key)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
@@ -283,7 +293,7 @@ def upload(path: str, name: str) -> str:
         f"\r\n--{boundary}--\r\n".encode(),
     ])
     req = urllib.request.Request(f"{root}/api/files", data=body, method="POST")
-    req.add_header("Authorization", f"Bearer {key}")
+    authorize(req, key)
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
     try:
         with urllib.request.urlopen(req, timeout=900) as resp:
@@ -664,7 +674,7 @@ def fetch_results(session_id: str, out_path: str) -> bytes | None:
     def save() -> None:
         req = urllib.request.Request(url)
         if not ref.startswith("http"):            # a presigned URL must not get the bearer header
-            req.add_header("Authorization", f"Bearer {key}")
+            authorize(req, key)
         with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
             fh.write(resp.read())
 

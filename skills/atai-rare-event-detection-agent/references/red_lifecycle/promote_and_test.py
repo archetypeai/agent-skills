@@ -44,7 +44,7 @@ import urllib.request
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from atai_http import TERMINAL, agents, check_auth, files_url, list_trials, load_dotenv, report_event, request, root, same_deployment, upload_all, wait  # noqa: E402
+from atai_http import TERMINAL, agents, authorize, check_auth, files_url, list_trials, load_dotenv, report_event, request, root, same_deployment, upload_all, wait  # noqa: E402
 from background import add_background_flag, maybe_detach  # noqa: E402
 from common import cache_path, example, load_manifest, log, role_paths, stamp  # noqa: E402
 from deliver import pieces  # noqa: E402
@@ -235,7 +235,7 @@ def test_in_pieces(a, m, bp, state, sf):
 
 def request_raw(url):
     req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    authorize(req)
     with urllib.request.urlopen(req, timeout=300) as resp:
         return resp.read()
 

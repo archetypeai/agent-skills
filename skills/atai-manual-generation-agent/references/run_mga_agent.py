@@ -129,6 +129,8 @@ DEFAULT_PROMPT = (
 )
 # A session's terminal statuses.
 TERMINAL = {"completed", "failed", "cancelled", "canceled"}
+# X-Atai-Client: the platform attributes these calls to the skills, not an unknown client.
+CLIENT = "agent_skills"
 # A serving query carries the video inline, and the whole body is capped at 2 MiB.
 QUERY_BODY_CAP = 2 * 1024 * 1024
 QUERY_TIMEOUT_S = 120          # the platform's budget is 58 s; past this the request is lost
@@ -177,6 +179,13 @@ def api_key() -> str:
     return key
 
 
+def authorize(req: urllib.request.Request) -> urllib.request.Request:
+    """Add the platform's auth and client headers (platform URLs only, never a presigned one)."""
+    req.add_header("Authorization", f"Bearer {api_key()}")
+    req.add_header("X-Atai-Client", CLIENT)
+    return req
+
+
 def agents_url(path: str = "") -> str:
     """{root}/api/agents/<path>: blueprints, packages, deployments, sessions."""
     return f"{root()}/api/agents" + (f"/{path}" if path else "")
@@ -197,7 +206,7 @@ def request(method: str, url: str, body=None, *, raw: bool = False,
     tries = 5 if safe else 1
     for attempt in range(tries):
         req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"Bearer {api_key()}")
+        authorize(req)
         if body is not None:
             req.add_header("Content-Type", "application/json")
         try:
@@ -312,7 +321,7 @@ def upload(path: str, name: str) -> str:
     with open(path, "rb") as fh:
         req = urllib.request.Request(f"{root()}/api/files", method="POST",
                                      data=_ChainedReader([head, fh, tail]))
-        req.add_header("Authorization", f"Bearer {api_key()}")
+        authorize(req)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         req.add_header("Content-Length", str(len(head) + os.path.getsize(path) + len(tail)))
         try:

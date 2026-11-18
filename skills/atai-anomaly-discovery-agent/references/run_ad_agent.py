@@ -35,7 +35,7 @@ import urllib.request
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "ad_lifecycle"))
-from atai_http import (TERMINAL, agents, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
+from atai_http import (TERMINAL, agents, authorize, check_auth, create_package, deploy, deployment_ready, end,  # noqa: E402
                        lifecycle_url, load_dotenv, open_session, package_ready, project_url, request,
                        result_url, upload_file)
 
@@ -238,7 +238,7 @@ def complete_results(fetch, wait_s=ARTIFACT_WAIT_S):
 
 def fetch(ref: str, out_path: str) -> None:
     req = urllib.request.Request(result_url(ref))
-    req.add_header("Authorization", f"Bearer {os.environ['ATAI_API_KEY']}")
+    authorize(req)
     with urllib.request.urlopen(req, timeout=300) as resp, open(out_path, "wb") as fh:
         fh.write(resp.read())
 
