@@ -1,20 +1,21 @@
 ---
 name: atai-newton-fusion-inference-api
 description: >
-  Call Newton's multimodal models on the Inference API (also called Model
-  Serving) — Newton C 2.6 (`newton-c-2.6`, the default) and Newton Fusion 1.0
-  (`newton-fusion-1.0`) — with text, an image, or a short video in one
-  stateless request, on any of three APIs under `/api/inference`: Direct Query
-  shape (`/query`), OpenAI Chat Completions, and OpenAI Responses. Use this
-  skill when the user wants per-call multimodal reasoning on the Inference
-  API, wants Newton Fusion 1.0, or wants to call Newton through an OpenAI
-  SDK. Covers the request shape per modality and API, inline media (uploads
-  are refused), the 224 px / 16-frame input, the ~60 s query limit, Fusion's
-  reasoning (`<think>`, `/no_think`, token budget), and how to pick a model.
+  Call Newton's multimodal models on the Inference API — Newton C 2.6
+  (`newton-c-2.6`, the default) and Newton Fusion 1.0 (`newton-fusion-1.0`)
+  — with text, an image, or a short video in one stateless request, on
+  `/inference/query`, OpenAI Chat Completions, or OpenAI Responses. Use
+  this skill for per-call multimodal reasoning on the Inference API —
+  including a web app over a folder of images or videos — for Newton
+  Fusion 1.0, or to call Newton through an OpenAI SDK. Covers the request
+  shape per modality and endpoint, inline media (no uploads), the 224 px /
+  16-frame input, the ~60 s limit, Fusion's reasoning, and model choice.
   Do NOT use when the user asks for the Direct Query API, or needs uploaded
-  files, full-resolution images, more than 16 video frames, or long answers —
-  that's `atai-newton-fusion-model`. Do NOT use for time-series embeddings
-  (`atai-newton-omega-inference-api`).
+  files, full-resolution images, more than 16 video frames, or long
+  answers (`atai-newton-fusion-model`). Do NOT use for numeric time-series
+  (sensor CSVs), even when the user only asks for the Inference API: that's
+  `atai-newton-omega-inference-api`. For a folder with both, use the two
+  skills together.
 ---
 
 # Newton C 2.6 and Fusion 1.0 on the Inference API
