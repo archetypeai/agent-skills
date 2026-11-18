@@ -2,7 +2,7 @@
 
 Mocks the official archetypeai client's transport, so these run with NO
 credentials and NO network. They lock in the verified invariants:
-  * OmegaSession opens a Model Serving session with window_size/step_size,
+  * OmegaSession opens an Inference API session with window_size/step_size,
     sends ALL channels of a window in one `data.numeric_array` query, splits
     the flat [channels x 768] row back into per-channel vectors, reopens the
     session on HTTP 409 session_not_running, and cancels it on exit.
@@ -42,7 +42,7 @@ SAMPLE = REF.parent.parent / "atai-newton-omega-model" / "references" / "sample_
 
 
 def _fake_serving(store: dict, dims: int = 768, ended_once: bool = False, success: bool = True):
-    """Return a fake ArchetypeAI.requests_post that plays Model Serving.
+    """Return a fake ArchetypeAI.requests_post that plays the Inference API.
 
     Records every call in `store["calls"]` as (url, body-or-None). Session
     opens return ids s1, s2, ...; queries return one flat row of

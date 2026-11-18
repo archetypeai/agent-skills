@@ -2,26 +2,26 @@
 name: atai-newton-omega-inference-api
 description: >
   Get time-series embeddings from Archetype AI's Omega encoder on the
-  Inference API (Newton Omega 1.5, model `omega-embedding`, `/api/inference/*`,
-  also called Model Serving) — send a window of sensor readings, get back a
-  768-d vector per channel, no batch job. Use this skill when the user wants to embed multivariate sensor windows
-  (vibration, flow, pressure, network, etc.) for lightweight downstream ML —
-  KNN classification, anomaly scoring, similarity search, or 2D projection —
-  done client-side over the embeddings. Covers sessions and `window_size`
-  (16–1024), the request shape (`data.numeric_array`, channel-first, all
-  channels in one query), the `[windows, channels x 768]` response, the
-  shared-scaler convention, the request-size limit, and the "joint
-  multi-channel state" + KNN pattern. For cleaning / splitting / windowing raw
-  sensor CSVs first, see `atai-newton-omega-model-data-prep`. Do NOT use when
-  the user asks for the Direct Query API or Omega 1.4
-  (`OmegaEncoder::omega_embeddings_1_4` on `/api/lens/query`) — that's
-  `atai-newton-omega-model`. Do NOT use for text / image / video reasoning
-  (that's `atai-newton-fusion-model`).
+  Inference API (Newton Omega 1.5, model `omega-embedding`,
+  `/api/inference/*`) — send a window of sensor readings, get back a 768-d
+  vector per channel. Use this skill to embed multivariate sensor windows
+  (vibration, flow, pressure, etc.) for client-side KNN
+  classification, anomaly scoring, similarity search, or 2D projection —
+  including a web app over a folder of sensor CSVs. For numeric
+  time-series, this is the Inference API skill, not
+  `atai-newton-fusion-inference-api`. Covers sessions and `window_size`
+  (16–1024), the `data.numeric_array` request, the response shape, the
+  shared-scaler convention, the request-size limit, and the joint-state +
+  KNN pattern. Prep raw CSVs first with `atai-newton-omega-model-data-prep`.
+  Do NOT use when the user asks for the Direct Query API or Omega 1.4
+  (`atai-newton-omega-model`). Do NOT use for text, images or video
+  (`atai-newton-fusion-inference-api`); for a folder with both, use the two
+  skills together.
 ---
 
 # Newton Omega 1.5 Encoder — Time-Series Embeddings on the Inference API
 
-Omega is a **time-series encoder**: feed it a window of sensor readings, get back a fixed-size embedding you can do ML on. This skill calls Newton Omega 1.5 on the **Inference API** (also called Model Serving): open a session with your window length, send windows to it, get embeddings back. No batch job.
+Omega is a **time-series encoder**: feed it a window of sensor readings, get back a fixed-size embedding you can do ML on. This skill calls Newton Omega 1.5 on the **Inference API**: open a session with your window length, send windows to it, get embeddings back. No batch job.
 
 ## Which Omega skill?
 
