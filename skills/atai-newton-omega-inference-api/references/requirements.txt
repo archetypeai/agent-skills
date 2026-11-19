@@ -1,5 +1,5 @@
 # Runtime dependencies for the reference scripts.
 #   pip install -r requirements.txt
-archetypeai
+archetypeai>=26.11.11.0
 python-dotenv
 numpy

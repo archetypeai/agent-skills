@@ -64,7 +64,17 @@ Newton Omega 1.5. Output is a **768-dimensional embedding per channel**.
 
 ## Endpoints
 
-All under `{ATAI_API_ENDPOINT}` (e.g. `https://platform.u1.archetypeai.app/api`), with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`:
+`ATAI_API_ENDPOINT` may be the deployment root or end in `/api`; the Console shows the `/api` form (`https://platform.u1.archetypeai.app/api` on production). Build `API_BASE` once: drop a trailing `/` and `/api`, then add `/api`. Write every path against `API_BASE`, so both forms work: a doubled or missing `/api` returns 404.
+
+```bash
+API_BASE="${ATAI_API_ENDPOINT%/}"; API_BASE="${API_BASE%/api}/api"
+```
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
+
+All under `{API_BASE}`, with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`:
 
 | Call | Request | Purpose |
 |---|---|---|

@@ -54,13 +54,23 @@ This was probed end-to-end against `https://platform.u1.archetypeai.app/api/lens
 ## Endpoint
 
 ```
-POST {ATAI_API_ENDPOINT}/api/lens/query
+POST {API_BASE}/lens/query
 Authorization: Bearer <API_KEY>
 X-Atai-Client: agent_skills
 Content-Type: application/json
 ```
 
-**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup instead of silently at query time. Prod is `https://platform.u1.archetypeai.app/api`. The same endpoint serves all three modalities below — what changes is the request body.
+**Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup instead of silently at query time. The same endpoint serves all three modalities below — what changes is the request body.
+
+`ATAI_API_ENDPOINT` may be the deployment root or end in `/api`; the Console shows the `/api` form (`https://platform.u1.archetypeai.app/api` on production). Build `API_BASE` once: drop a trailing `/` and `/api`, then add `/api`. Write every path against `API_BASE`, so both forms work: a doubled or missing `/api` returns 404.
+
+```bash
+API_BASE="${ATAI_API_ENDPOINT%/}"; API_BASE="${API_BASE%/api}/api"
+```
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
 
 ## Wire Shapes
 
@@ -90,7 +100,7 @@ Two attachment paths, both reach the same fusion model — pick by use case — 
 **(a) Upload + reference by filename in `file_ids`** — best when the same image is reused across queries (one upload, many `/query` calls):
 
 ```bash
-curl -X POST $ATAI_API_ENDPOINT/api/files \
+curl -X POST $API_BASE/files \
   -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@dashboard.png;type=image/png"
 ```
@@ -148,7 +158,7 @@ C 2.6 reasons over video on `/query` two ways. This distinguishes it from the C 
 **(a) `.mp4` + `max_frames`** — upload the clip, and GPQ decodes and uniformly samples it server-side before the model sees the frames. No client-side video tooling needed:
 
 ```bash
-curl -X POST $ATAI_API_ENDPOINT/api/files \
+curl -X POST $API_BASE/files \
   -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@clip.mp4;type=video/mp4"
 ```

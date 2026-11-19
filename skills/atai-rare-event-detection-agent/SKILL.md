@@ -119,20 +119,24 @@ share one schema, so the output schema and scoring below apply to both. Worked e
 ## Endpoints
 
 ```
-Files API     POST {ATAI_API_ENDPOINT}/api/files                  (multipart upload)
-              GET  {ATAI_API_ENDPOINT}/api/files/{fil_…}/content  (download a session's output)
-Projects API       {ATAI_API_ENDPOINT}/api/projects
-Agents API         {ATAI_API_ENDPOINT}/api/agents/...
+Files API     POST {API_BASE}/files                  (multipart upload)
+              GET  {API_BASE}/files/{fil_…}/content  (download a session's output)
+Projects API       {API_BASE}/projects
+Agents API         {API_BASE}/agents/...
 Authorization: Bearer <API_KEY> and X-Atai-Client: agent_skills on every call
 ```
 
-Every surface lives under one versionless **`/api`** prefix. Set
-`ATAI_API_ENDPOINT` to the deployment root (`https://platform.u1.archetypeai.app`);
-if it carries an `/api` or `/vX.Y` suffix, strip it before appending `/api`. The
-old mounts (`/agents`, `/v0.5/files`) return 404 on that host. Paths below are
-written relative to the prefix: `/agents/packages` means
-`{ATAI_API_ENDPOINT}/api/agents/packages`. Both `ATAI_API_KEY` and
-`ATAI_API_ENDPOINT` are required; there is no default endpoint.
+Every surface lives under one versionless **`/api`** prefix. `ATAI_API_ENDPOINT` may be the deployment root or end in `/api`; the Console shows the `/api` form (`https://platform.u1.archetypeai.app/api`, or `https://try.archetypeai.app/api` on the free trial). Build `API_BASE` once: drop a trailing `/` and `/api`, then add `/api`. Write every path against `API_BASE`, so both forms work: a doubled or missing `/api` returns 404.
+
+```bash
+API_BASE="${ATAI_API_ENDPOINT%/}"; API_BASE="${API_BASE%/api}/api"
+```
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
+
+The old mounts (`/agents`, `/v0.5/files`) return 404. Paths below are written relative to the prefix: `/agents/packages` means `{API_BASE}/agents/packages`. Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required; there is no default endpoint.
 
 > **Listings page with opaque cursors.** `GET /agents/deployments?package_id=` and `GET
 > /agents/sessions?deployment_id=` find what a package or a deployment holds, `status=`
@@ -161,7 +165,7 @@ call 404s at `/api/api`.
 ```sh
 curl -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   -F "file=@prepared_slice.csv;type=text/csv" \
-  "$ATAI_API_ENDPOINT/api/files"
+  "$API_BASE/files"
 ```
 
 Returns both `file_id` (the filename, what connectors take) and `file_uid`
@@ -188,9 +192,9 @@ project):
 
 ```sh
 PROJECT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/api/projects" -d '{"name": "RED skill Path 1"}' | jq -r .id)
+  "$API_BASE/projects" -d '{"name": "RED skill Path 1"}' | jq -r .id)
 BLUEPRINT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/api/agents/blueprints/playground-red/copy" \
+  "$API_BASE/agents/blueprints/playground-red/copy" \
   -d "{\"project_id\": \"$PROJECT_ID\", \"blueprint_key\": \"playground-red-skill\"}" | jq -r .id)
 ```
 
@@ -211,11 +215,11 @@ id after that.
 
 ```sh
 PACKAGE_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/api/agents/packages" \
+  "$API_BASE/agents/packages" \
   -d "{\"blueprint_ids\": [\"$BLUEPRINT_ID\"], \"target\": {\"kind\": \"platform\"}, \"name\": \"RED Path 1\"}" | jq -r .id)
 # poll GET /agents/packages/$PACKAGE_ID until status is "ready" (building → ready | failed)
 DEPLOYMENT_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/api/agents/deployments" -d "{\"package_id\": \"$PACKAGE_ID\", \"kind\": \"batch\"}" | jq -r .id)
+  "$API_BASE/agents/deployments" -d "{\"package_id\": \"$PACKAGE_ID\", \"kind\": \"batch\"}" | jq -r .id)
 # poll GET /agents/deployments/$DEPLOYMENT_ID until status is "ready"
 ```
 
@@ -229,10 +233,10 @@ files.
 
 ```sh
 SESSION_ID=$(curl -s -X POST -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" -H "Content-Type: application/json" \
-  "$ATAI_API_ENDPOINT/api/agents/sessions" -d "{\"deployment_id\": \"$DEPLOYMENT_ID\",
+  "$API_BASE/agents/sessions" -d "{\"deployment_id\": \"$DEPLOYMENT_ID\",
     \"connectors\": {\"source\": [{\"type\": \"file\", \"id\": \"prepared_slice.csv\", \"format\": \"csv\"}]}}" | jq -r .id)
-curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID"
-curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/events"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$API_BASE/agents/sessions/$SESSION_ID"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$API_BASE/agents/sessions/$SESSION_ID/events"
 ```
 
 A session goes `pending → running → completed | failed | cancelled`, and **its `status` is
@@ -242,7 +246,7 @@ say what happened. There is no `/logs`.
 ### 5. Download the results
 
 ```sh
-curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$ATAI_API_ENDPOINT/api/agents/sessions/$SESSION_ID/results"
+curl -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" "$API_BASE/agents/sessions/$SESSION_ID/results"
 ```
 
 Each entry nests its fields under an inner `data` object (`filename`, `num_bytes`, `ref`).
@@ -893,7 +897,7 @@ python cleanup.py --out out --yes
 To see which serving deployments are up:
 
 ```sh
-curl -s "$ATAI_API_ENDPOINT/api/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
+curl -s "$API_BASE/agents/deployments?status=ready&limit=100" -H "Authorization: Bearer $ATAI_API_KEY" -H "X-Atai-Client: agent_skills" \
   | jq -c '.data[] | select(.kind=="serving") | {id, package_id, project_id, created_at}'
 ```
 
