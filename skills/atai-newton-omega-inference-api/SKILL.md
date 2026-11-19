@@ -47,7 +47,7 @@ The two versions' embeddings aren't comparable, so pick one per project. When th
 
 **Do not use this skill when:**
 - The user asks for the Direct Query API or Omega 1.4 — use [`atai-newton-omega-model`](../atai-newton-omega-model/SKILL.md)
-- The input is text, an image, or a video — that's [`atai-newton-fusion-model`](../atai-newton-fusion-model/SKILL.md)
+- The input is text, an image, or a video — that's [`atai-newton-fusion-inference-api`](../atai-newton-fusion-inference-api/SKILL.md). For a folder with both, use the two skills together.
 - You need fully-managed, server-side classification over millions of rows
 
 For preparing the raw sensor CSVs (timestamp regularity, gap-aware blocks, temporal-order train/test split, the joint-state feature matrix), see [`atai-newton-omega-model-data-prep`](../atai-newton-omega-model-data-prep/SKILL.md).

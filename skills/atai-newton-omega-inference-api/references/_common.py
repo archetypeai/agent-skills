@@ -83,8 +83,8 @@ def make_client() -> ArchetypeAI:
             "https://platform.u1.archetypeai.app/api) or add it to your .env — "
             "there is no default."
         )
-    api_endpoint = re.sub(r"/api(/lens)?$", "", api_endpoint.rstrip("/"))
-    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint) + "/api"
+    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint.rstrip("/"))
+    api_endpoint = re.sub(r"/api(/lens|/inference)?$", "", api_endpoint) + "/api"
     return ArchetypeAI(api_key, api_endpoint=api_endpoint)
 
 

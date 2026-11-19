@@ -113,7 +113,8 @@ class TestMakeClient(_Base):
         """
         for given in ("https://example.test", "https://example.test/",
                       "https://example.test/v0.5", "https://example.test/api",
-                      "https://example.test/api/lens"):
+                      "https://example.test/api/lens", "https://example.test/api/inference",
+                      "https://example.test/api/v0.5"):
             self.hermetic_env(ATAI_API_KEY="test-key", ATAI_API_ENDPOINT=given)
             client = _common.make_client()
             self.assertEqual(client.api_endpoint, "https://example.test/api", given)
@@ -277,6 +278,10 @@ class TestScalerAndWindows(unittest.TestCase):
         # two contiguous blocks of 4, with a big jump between -> window_size=4 yields starts 0 and 4, not 2
         timestamps = [0, 1, 2, 3, 1000, 1001, 1002, 1003]
         self.assertEqual(classify_knn.contiguous_starts(timestamps, window_size=4), [0, 4])
+
+    def test_contiguous_starts_rejects_duplicate_then_skip(self):
+        # first-to-last span is 3, but the window holds a duplicate and a skip
+        self.assertEqual(classify_knn.contiguous_starts([0, 1, 1, 3], window_size=4), [])
 
     def test_read_series_and_time(self):
         timestamps, series = _common.read_series_and_time(SAMPLE / "bearing_healthy.csv")

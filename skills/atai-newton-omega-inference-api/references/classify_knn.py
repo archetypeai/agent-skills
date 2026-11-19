@@ -45,13 +45,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+import requests
 
-from _common import WINDOW, OmegaSession, banner, make_client, read_series, read_series_and_time, window_at
+from _common import TIME_COLUMNS, WINDOW, OmegaSession, banner, make_client, read_series, read_series_and_time, window_at
 
 # Shared with the Direct Query skill (atai-newton-omega-model) rather than copied.
 SAMPLE = Path(__file__).resolve().parent.parent.parent / "atai-newton-omega-model" / "references" / "sample_data"
@@ -80,10 +82,16 @@ def _embed_resilient(session: OmegaSession, scaled_window, retries: int = 4):
     reopens itself if it has ended; this adds a backoff loop around hard
     failures. Returns the L2 joint feature, or None on persistent failure.
     """
+    last_error = None
     for attempt in range(retries):
         try:
             embeddings = session.embed(scaled_window)
-        except Exception:
+        except (requests.RequestException, ValueError) as error:
+            # ValueError is also how the client reports exhausted retries; any
+            # other ValueError (a bad window) is permanent.
+            if isinstance(error, ValueError) and "Request failed after" not in str(error):
+                raise
+            last_error = error
             time.sleep(1.5 * (attempt + 1))
             continue
         if not embeddings:
@@ -92,6 +100,7 @@ def _embed_resilient(session: OmegaSession, scaled_window, retries: int = 4):
             [np.asarray(channel_embedding, dtype=float) for channel_embedding in embeddings]
         )
         return joint_feature / (np.linalg.norm(joint_feature) + 1e-9)
+    print(f"WARN: window skipped after {retries} attempts: {last_error}", file=sys.stderr)
     return None
 
 
@@ -137,7 +146,7 @@ def contiguous_starts(timestamps: list[int], window_size: int = WINDOW) -> list[
     starts: list[int] = []
     start = 0
     while start + window_size <= series_length:
-        if timestamps[start + window_size - 1] - timestamps[start] == window_size - 1:
+        if all(timestamps[i + 1] - timestamps[i] == 1 for i in range(start, start + window_size - 1)):
             starts.append(start)
             start += window_size
         else:
@@ -181,10 +190,13 @@ def load_labels(
             ),
             len(header) - 1,
         )
+        time_index = next(
+            (index for index, name in enumerate(header) if name.strip().lower() in TIME_COLUMNS), 0
+        )
         for row in reader:
             if len(row) <= label_index:
                 continue
-            timestamp = int(float(row[0]))
+            timestamp = int(float(row[time_index]))
             if needed is None or timestamp in needed:
                 labels[timestamp] = row[label_index].strip()
     return labels
@@ -268,6 +280,8 @@ def _run_eval(session, args, window_size, healthy, degraded, mean, std) -> dict:
         for start in degraded_starts
     ]
     library = [(joint_feature, label) for joint_feature, label in library if joint_feature is not None]
+    if not library:
+        sys.exit("No library window could be embedded; see the warnings above.")
     lib_feats = np.vstack([joint_feature for joint_feature, _ in library])
     lib_labels = [label for _, label in library]
     print(f"Library: {lib_feats.shape[0]} windows x {lib_feats.shape[1]} dims\n")

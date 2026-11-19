@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'skills/atai-newton-omega-inference-api/**'
+      - 'skills/atai-newton-omega-model/references/sample_data/**'
       - '.github/workflows/test-atai-newton-omega-inference-api.yml'
   push:
     branches: [main]
     paths:
       - 'skills/atai-newton-omega-inference-api/**'
+      - 'skills/atai-newton-omega-model/references/sample_data/**'
       - '.github/workflows/test-atai-newton-omega-inference-api.yml'
 
 jobs:
