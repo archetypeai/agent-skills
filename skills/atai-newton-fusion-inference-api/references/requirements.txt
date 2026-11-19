@@ -1,0 +1,4 @@
+# Runtime dependencies for the reference scripts.
+#   pip install -r requirements.txt
+archetypeai>=26.11.11.0
+python-dotenv
