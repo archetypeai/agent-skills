@@ -105,6 +105,7 @@ class TestMakeClient(_Base):
             "https://example.test/api/inference",
             "https://example.test/api/lens",
             "https://example.test/v0.5",
+            "https://example.test/api/v0.5",
         ):
             self.hermetic_env(ATAI_API_KEY="k", ATAI_API_ENDPOINT=raw)
             self.assertEqual(_common.make_client().api_endpoint, "https://example.test/api", raw)
@@ -226,6 +227,7 @@ class TestSplitThinking(unittest.TestCase):
 
     def test_reasoning_block(self):
         self.assertEqual(_common.split_thinking("<think>step 1</think> final"), ("final", "step 1"))
+        self.assertEqual(_common.split_thinking("step 1</think>\n\nfinal"), ("final", "step 1"))
 
     def test_unclosed_block_raises(self):
         with self.assertRaises(RuntimeError):

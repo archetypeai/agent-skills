@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'skills/atai-newton-fusion-inference-api/**'
+      - 'skills/atai-newton-fusion-model/references/sample_assets/**'
       - '.github/workflows/test-atai-newton-fusion-inference-api.yml'
   push:
     branches: [main]
     paths:
       - 'skills/atai-newton-fusion-inference-api/**'
+      - 'skills/atai-newton-fusion-model/references/sample_assets/**'
       - '.github/workflows/test-atai-newton-fusion-inference-api.yml'
 
 jobs:

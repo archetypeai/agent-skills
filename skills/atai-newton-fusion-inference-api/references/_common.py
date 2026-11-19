@@ -60,6 +60,8 @@ REASONING_MIN_TOKENS = 4096
 # 3.2 MiB got 413 (production, 2026-11-15). Uploaded files can't be used:
 # /inference/query refuses `fil_` uids and filenames alike on production.
 INLINE_LIMIT_BYTES = 1_800_000
+# Whole request body: 2 MiB is the server's cap (2.1 MiB hung, 3.2 MiB got 413).
+BODY_LIMIT_BYTES = 2_000_000
 
 
 def _try_load_dotenv() -> None:
@@ -95,8 +97,8 @@ def make_client() -> ArchetypeAI:
             "ATAI_API_ENDPOINT is not set. Export it or add it to your .env — "
             "there is no default."
         )
-    api_endpoint = re.sub(r"/api(/lens|/inference)?$", "", api_endpoint.rstrip("/"))
-    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint) + "/api"
+    api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint.rstrip("/"))
+    api_endpoint = re.sub(r"/api(/lens|/inference)?$", "", api_endpoint) + "/api"
     # The first call after a model replica has been idle can take ~40 s.
     return ArchetypeAI(api_key, api_endpoint=api_endpoint, request_timeout_sec=180)
 
@@ -135,7 +137,9 @@ def split_thinking(text: str) -> tuple[str, str]:
     """
     match = re.match(r"\s*<think>([\s\S]*?)(</think>\s*|$)", text)
     if not match:
-        return text.strip(), ""
+        # The chat template may already have opened the block: reasoning, then </think>.
+        thinking, closed, answer = text.partition("</think>")
+        return (answer.strip(), thinking.strip()) if closed else (text.strip(), "")
     if not match.group(2):
         raise RuntimeError(
             "Fusion ran out of tokens while reasoning and gave no answer. "
@@ -159,10 +163,17 @@ def _fusion_params(model: str, reasoning: bool, max_tokens: int, has_media: bool
 
 
 def _post(client: ArchetypeAI, path: str, body: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    data = json.dumps(body)
+    if len(data) > BODY_LIMIT_BYTES:
+        raise ValueError(
+            f"Request body is {len(data) / 1e6:.1f} MB; the Inference API caps it at 2 MiB "
+            "(bigger bodies hang or get 413). Send fewer or smaller media, or use the Direct "
+            "Query API skill (atai-newton-fusion-model), which takes uploaded files."
+        )
     start_time = time.time()
     payload = client.requests_post(
         f"{client.api_endpoint}/inference/{path}",
-        data_payload=json.dumps(body),
+        data_payload=data,
         additional_headers={"Content-Type": "application/json"},
     )
     return payload, int((time.time() - start_time) * 1000)
