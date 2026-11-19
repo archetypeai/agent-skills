@@ -108,7 +108,9 @@ class TestMakeClient(_Base):
             "https://example.test/api/v0.5",
         ):
             self.hermetic_env(ATAI_API_KEY="k", ATAI_API_ENDPOINT=raw)
-            self.assertEqual(_common.make_client().api_endpoint, "https://example.test/api", raw)
+            client = _common.make_client()
+            self.assertEqual(client.api_endpoint, "https://example.test/api", raw)
+            self.assertEqual(client.auth_headers["X-Atai-Client"], "agent_skills")
 
 
 class TestQueryBody(_Base):

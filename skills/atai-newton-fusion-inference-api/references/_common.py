@@ -100,7 +100,7 @@ def make_client() -> ArchetypeAI:
     api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint.rstrip("/"))
     api_endpoint = re.sub(r"/api(/lens|/inference)?$", "", api_endpoint) + "/api"
     # The first call after a model replica has been idle can take ~40 s.
-    return ArchetypeAI(api_key, api_endpoint=api_endpoint, request_timeout_sec=180)
+    return ArchetypeAI(api_key, api_endpoint=api_endpoint, request_timeout_sec=180, client="agent_skills")
 
 
 def resolve_model(name: str) -> str:

@@ -83,22 +83,34 @@ What we saw on the assembly clip's step-by-step PASS/FAIL check (31 s, ground tr
 ## Endpoints
 
 ```
-POST {ATAI_API_ENDPOINT}/inference/query               Direct Query shape (text, video)
-POST {ATAI_API_ENDPOINT}/inference/chat/completions    OpenAI Chat Completions shape (text, image, video)
-POST {ATAI_API_ENDPOINT}/inference/responses           OpenAI Responses shape (text, image, video)
+POST {API_BASE}/inference/query               Direct Query shape (text, video)
+POST {API_BASE}/inference/chat/completions    OpenAI Chat Completions shape (text, image, video)
+POST {API_BASE}/inference/responses           OpenAI Responses shape (text, image, video)
 Authorization: Bearer <API_KEY>
+X-Atai-Client: agent_skills
 Content-Type: application/json
 ```
 
-`ATAI_API_ENDPOINT` is `https://platform.u1.archetypeai.app/api` on production. The body's `model` names the model: `newton-c-2.6` or `newton-fusion-1.0`. Streaming (`"stream": true`) is refused.
+`ATAI_API_ENDPOINT` may be the deployment root or end in `/api`; the Console shows the `/api` form (`https://platform.u1.archetypeai.app/api` on production). Build `API_BASE` once: drop a trailing `/` and `/api`, then add `/api`. Write every path against `API_BASE`, so both forms work: a doubled or missing `/api` returns 404.
+
+```bash
+API_BASE="${ATAI_API_ENDPOINT%/}"; API_BASE="${API_BASE%/api}/api"
+```
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
+
+The body's `model` names the model: `newton-c-2.6` or `newton-fusion-1.0`. Streaming (`"stream": true`) is refused.
 
 **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. The scripts accept the bare root, `/api`, or `/api/inference`.
 
-**OpenAI SDK:** point `base_url` at `{ATAI_API_ENDPOINT}/inference` and use your Archetype key:
+**OpenAI SDK:** point `base_url` at `{API_BASE}/inference` and use your Archetype key:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="https://platform.u1.archetypeai.app/api/inference", api_key=ATAI_API_KEY)
+client = OpenAI(base_url="https://platform.u1.archetypeai.app/api/inference", api_key=ATAI_API_KEY,
+                default_headers={"X-Atai-Client": "agent_skills"})
 reply = client.chat.completions.create(
     model="newton-c-2.6",
     messages=[{"role": "user", "content": [
