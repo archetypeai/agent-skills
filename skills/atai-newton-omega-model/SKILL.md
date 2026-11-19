@@ -46,13 +46,23 @@ Note the `OmegaEncoder::` prefix (not `Newton::`). Output is a **768-dimensional
 ## Endpoint
 
 ```
-POST {ATAI_API_ENDPOINT}/api/lens/query
+POST {API_BASE}/lens/query
 Authorization: Bearer <API_KEY>
 X-Atai-Client: agent_skills
 Content-Type: application/json
 ```
 
-Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup. Prod is `https://platform.u1.archetypeai.app/api`.
+Same `/query` endpoint as the fusion model; the model id selects the Omega encoder. **Both `ATAI_API_KEY` and `ATAI_API_ENDPOINT` are required** — there is no default endpoint, so a wrong-deployment mistake fails loudly at startup.
+
+`ATAI_API_ENDPOINT` may be the deployment root or end in `/api`; the Console shows the `/api` form (`https://platform.u1.archetypeai.app/api` on production). Build `API_BASE` once: drop a trailing `/` and `/api`, then add `/api`. Write every path against `API_BASE`, so both forms work: a doubled or missing `/api` returns 404.
+
+```bash
+API_BASE="${ATAI_API_ENDPOINT%/}"; API_BASE="${API_BASE%/api}/api"
+```
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
 
 ## Request Shape
 

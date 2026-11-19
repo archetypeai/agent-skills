@@ -217,11 +217,18 @@ The reference scripts need **Python 3.11+** (CI tests 3.11, 3.12 and 3.13). The 
 
 ## API Base URL
 
+`ATAI_API_ENDPOINT` can take either form. The Console shows the `/api` form when you create a key:
+
 ```
-https://platform.u1.archetypeai.app
+https://platform.u1.archetypeai.app/api     # production (or the bare root, https://platform.u1.archetypeai.app)
+https://try.archetypeai.app/api             # free trial (or https://try.archetypeai.app)
 ```
 
-**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/lens/query` — so a single client serves them all. Set `ATAI_API_ENDPOINT` to the bare root above; the reference scripts normalise it and append `/api`, and accept a `/v0.5` or `/api` suffix too, so one `.env` serves every skill here.
+**Every surface lives under one versionless `/api` prefix** — `/api/agents`, `/api/files`, `/api/lens/query`, `/api/inference` — so a single client serves them all. The reference scripts reduce either form (and a `/v0.5` suffix) to the root and append `/api`, so one `.env` serves every skill here. Code you write should do the same: build `API_BASE` once, dropping a trailing `/` and `/api` and then adding `/api`, and write every path against it. A doubled or missing `/api` returns 404.
+
+```js
+const API_BASE = ATAI_API_ENDPOINT.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+```
 
 **A wrong prefix is the most common way to lose a run, because it says nothing:** a 404 comes back with an empty body, which the client raises as `ApiError: {}` — no status, no URL, no message. To tell a wrong path from a wrong key, repeat the call **without the auth header**: 404 means the route isn't registered, 401 means it exists and your key or scope is the problem.
 

@@ -85,7 +85,7 @@ def make_client() -> ArchetypeAI:
         )
     api_endpoint = re.sub(r"/v[0-9]+(\.[0-9]+)*$", "", api_endpoint.rstrip("/"))
     api_endpoint = re.sub(r"/api(/lens|/inference)?$", "", api_endpoint) + "/api"
-    return ArchetypeAI(api_key, api_endpoint=api_endpoint)
+    return ArchetypeAI(api_key, api_endpoint=api_endpoint, client="agent_skills")
 
 
 def _post(client: ArchetypeAI, path: str, body: dict) -> dict:
