@@ -39,6 +39,12 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 | [atai-newton-omega-model](skills/atai-newton-omega-model/) | Get time-series embeddings from the Omega encoder (`OmegaEncoder::omega_embeddings_1_4`) over the Direct Query API (`/api/lens/query`) — one stateless call per channel, fanned out in parallel — for client-side KNN classification, anomaly scoring, and similarity search |
 | [atai-newton-fusion-model](skills/atai-newton-fusion-model/) | Call the Newton C 2.6 fusion model on `/api/lens/query` with text, image, or video in one stateless POST — the first C checkpoint to reason over video frames via the Direct Query API |
 
+**Inference API** — platform-hosted models by name on `/api/inference/*`. During the move from the Direct Query API, these sit next to the Direct Query skills above; each says when to use the other. Pick the model by the data, so look in the data folder first: numeric time-series (sensor CSVs) → `atai-newton-omega-inference-api`, after `atai-newton-omega-model-data-prep`; text, images or video → `atai-newton-fusion-inference-api`; a folder with both → both skills. As of November 15, 2026, some inputs still need the Direct Query API: see the [current limitations](https://docs.archetypeai.app/api-reference/inference/migrate-from-direct-query#current-limitations).
+
+| Skill | Description |
+|-------|-------------|
+| [atai-newton-omega-inference-api](skills/atai-newton-omega-inference-api/) | Get time-series embeddings from Newton Omega 1.5 (`omega-embedding`) on the Inference API — a session per window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search. Shares `atai-newton-omega-model-data-prep` and the bearing sample data with the Direct Query skill |
+
 ### Integrations
 
 Newton paired with a third-party model: Newton does the sensing, the other model reasons over what Newton found.
@@ -77,6 +83,14 @@ End-to-end demos built on these skills, on the Direct Query API (SvelteKit unles
 | [Drilling state monitor](https://github.com/archetypeai/archetypeai-drilling-demo) | `atai-newton-omega-model` + `atai-newton-omega-model-data-prep` | Equinor Volve North Sea well SCADA: per-channel Omega embeddings + local KNN classify each window as drilling / not-drilling, against a leakage-free n-shot library precomputed offline from held-out reference wells. Replays real well telemetry with live accuracy vs ACTC ground truth. |
 | [Grid monitor](https://github.com/archetypeai/archetypeai-grid-demo) | `atai-newton-fusion-model` | Live CAISO power-grid feed → C 2.6 **text reasoning**. Formats 5-minute demand/supply data as structured text and asks Newton (one stateless query) about duck-curve dynamics, evening ramp, renewable share, and grid-stress risk, with supply/demand charts. |
 | [WiFi occupancy monitor](https://github.com/archetypeai/archetypeai-wifi-demo) | `atai-newton-fusion-model` | Residential gateway WiFi telemetry → C 2.6 **text reasoning**. Sends an anonymized 15-minute per-device flow/byte/protocol snapshot as JSON via one stateless query; Newton infers home occupancy (OCCUPIED … EMPTY) from traffic patterns alone — no device-type labels, no online flag. |
+
+On the Inference API, with `atai-newton-omega-inference-api` (each repo's MIGRATION.md compares it with the Direct Query version):
+
+| Demo | Skills | What it demonstrates |
+|------|--------|----------------------|
+| [Wind turbine monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-wind-turbine-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | The Penmanshiel demo on Omega 1.5: one session at a 128-sample window, all channels per query, KNN against a library from other turbines. Catches the frequency-converter fault with no alert on the healthy peer. |
+| [SWaT water treatment (Omega 1.5)](https://github.com/archetypeai/archetypeai-swat-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-fusion-model` | Six-stage plant: one Omega 1.5 query per stage instead of one per sensor (6 instead of 40 per window), plus C 2.6 operator suggestions from the server. No false alarms on held-out normal data. |
+| [Drilling state monitor (Omega 1.5)](https://github.com/archetypeai/archetypeai-drilling-demo-inference-api) | `atai-newton-omega-inference-api` + `atai-newton-omega-model-data-prep` | Volve well logs: one Omega 1.5 query per 9-channel window, 0.3 s instead of 1–3 s. Accuracy on 8 held-out wells rises from 89% to 95%. |
 
 ## Agent examples
 
@@ -138,6 +152,9 @@ cp -r skills/* your-project/.claude/skills/
 /atai-newton-omega-model                            # Omega time-series embeddings + client-side KNN via /query
 /atai-newton-fusion-model                           # Multimodal (text/image/video) queries on the C 2.6 fusion model
 
+# Models — Inference API
+/atai-newton-omega-inference-api                    # Omega 1.5 time-series embeddings + client-side KNN via sessions
+
 # Integrations
 /atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
 
@@ -163,6 +180,13 @@ Video frames:  POST /api/lens/query (frames + query_metadata) ──────
 ```
 Omega:     POST /api/lens/query per channel ──► embeddings ──► local KNN ──► verdict
 Nemotron:  verdict + window stats ──► POST chat/completions ──► validated brief
+```
+
+**Models — the Inference API** (`atai-newton-omega-inference-api`). Omega 1.5 through a session that fixes the window length, all channels in one query:
+
+```
+Omega 1.5: POST /api/inference/sessions (window_size) ──► POST .../sessions/{id}/query per window ──► embeddings ──► local KNN
+           POST .../sessions/{id}/cancel when done
 ```
 
 **Agents — the Agents API, on Agent Lifecycle 2.0.** Everything lives in a project: you copy a platform blueprint into it, package it, deploy the package, and run sessions on the deployment; the model runs server-side. (Bundles and agent instances, the earlier flow, are gone on production.)
