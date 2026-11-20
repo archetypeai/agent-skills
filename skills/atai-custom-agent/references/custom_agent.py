@@ -242,9 +242,39 @@ def job_errors(job):
     return [e for e in ev.get("data") or [] if e.get("level") == "ERROR"], ev.get("data") or []
 
 
+def check_timestamps(path):
+    """Validation nodes read timestamps as seconds; epoch milliseconds make every window INVALID_STATE."""
+    with open(path, newline="") as f:
+        rows = csv.reader(f)
+        next(rows, None)
+        first = next(rows, None)
+    try:
+        t = float(first[0])
+    except (TypeError, ValueError, IndexError):
+        return
+    if t > 1e11:
+        sys.exit(f"{path}: first timestamp {t:.0f} looks like epoch milliseconds; "
+                 "write timestamps in seconds (e.g. 1577883600.004), or every window comes back INVALID_STATE")
+
+
+def invalid_share(body):
+    """Share of output rows flagged invalid (CSV or JSON lines), or None if there's no `invalid` field."""
+    text = body.decode("utf-8", "replace")
+    try:
+        rows = [json.loads(l) for l in text.splitlines() if l.strip()]
+    except ValueError:
+        rows = list(csv.DictReader(text.splitlines()))
+    rows = [r for r in rows if isinstance(r, dict) and "invalid" in r]
+    if not rows:
+        return None
+    return sum(str(r["invalid"]).lower() == "true" for r in rows) / len(rows), len(rows)
+
+
 def cmd_batch(a, st):
     pkg = a.package or st.get("package") or sys.exit("no package: run create first or pass --package")
     kind = "mp4" if a.input.lower().endswith(".mp4") else "csv"
+    if kind == "csv":
+        check_timestamps(a.input)
     if "batch_deployment" not in st or a.new_deployment:
         st["batch_deployment"] = call("POST", "/agents/deployments", {"package_id": pkg, "kind": "batch"})["id"]
         st.save()
@@ -288,6 +318,10 @@ def cmd_batch(a, st):
         path = os.path.join(a.out, d.get("filename") or os.path.basename(d["ref"]))
         open(path, "wb").write(body)
         log(f"output {path} ({len(body)} bytes)")
+        share = invalid_share(body)
+        if share and share[0] > 0.5:
+            log(f"WARNING {share[0]:.0%} of {share[1]} windows are invalid: check timestamp units "
+                "(seconds), sampling_rate and gaps against the validation values")
 
 
 # ---------------------------------------------------------------- serving
