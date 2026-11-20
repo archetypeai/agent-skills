@@ -1,0 +1,109 @@
+name: Newton-C 2.6 Video Summary, batch
+description: >
+  Batch variant of the custom Newton-C 2.6 video blueprint. Same reader, preprocessor,
+  Whisper and model settings, but it ends the way the canonical MGA blueprint does
+  (ManualGenerationResultsParserNode -> RecordsSink json/per-request) instead of
+  a text sink, which appears not to run in batch. The parser expects MGA's step
+  format, so this variant keeps MGA's default system prompt and instruction.
+
+values:
+  # Instruction used when an input carries only a video.
+  prompt: "Generate a concise, ordered list of distinct steps with 10 steps or less."
+  max_frames: 32
+  max_new_tokens: 2048
+  size: 224
+  reader_batch_size: 64
+  preprocessor_batch_size: 64
+  preprocessor_batching_delay_ms: 200
+  preprocessor_patch_size: 16
+  preprocessor_merge_size: 2
+  preprocessor_temporal_patch_size: 2
+  preprocessor_image_mean: [0.5, 0.5, 0.5]
+  preprocessor_image_std: [0.5, 0.5, 0.5]
+  preprocessor_rescale_factor: 0.00392156862745098
+  preprocessor_min_pixels: 4096
+  preprocessor_max_pixels: 25165824
+
+models:
+  whisper: "whisper-base"
+  newton_c: "newton-c-2-6-8b"
+
+connectors:
+  source:
+    key: MultiModalSource
+    config:
+      default_text: ${values.prompt}
+  sink:
+    key: RecordsSink
+    config:
+      format: json/per-request
+
+nodes:
+  splitter:
+    key: SplitterNode
+
+  video_reader:
+    key: VideoReaderNode
+    config:
+      max_frames: ${values.max_frames}
+      size: ${values.size}
+      batch_size: ${values.reader_batch_size}
+      # C2 frame sampling (as in canonical newton-c-2-6).
+      index_rule:
+        round_padded:
+          temporal_patch_size: 2
+
+  video_preprocessor:
+    key: VideoPreprocessorNode
+    config:
+      batch_size: ${values.preprocessor_batch_size}
+      batching_delay_ms: ${values.preprocessor_batching_delay_ms}
+      patch_size: ${values.preprocessor_patch_size}
+      merge_size: ${values.preprocessor_merge_size}
+      temporal_patch_size: ${values.preprocessor_temporal_patch_size}
+      image_mean: ${values.preprocessor_image_mean}
+      image_std: ${values.preprocessor_image_std}
+      rescale_factor: ${values.preprocessor_rescale_factor}
+      min_pixels: ${values.preprocessor_min_pixels}
+      max_pixels: ${values.preprocessor_max_pixels}
+      # C2 timestamps (as in canonical newton-c-2-6).
+      timestamp_rule: group_mean
+
+  audio_reader:
+    key: AudioReaderNode
+
+  whisper:
+    key: WhisperModelNode
+    config:
+      model: ${models.whisper}
+
+  # Instruction + video + transcript pairing, with MGA's default system prompt.
+  prompt:
+    key: ManualGenerationPromptGeneratorNode
+
+  newton_c:
+    key: NewtonCModelNode
+    config:
+      model: ${models.newton_c}
+      max_new_tokens: ${values.max_new_tokens}
+      max_seq_len: 24576
+
+  parser:
+    key: ManualGenerationResultsParserNode
+    config:
+      compute_stats: false
+      output_frame_indices: true
+
+graph:
+  edges:
+    - { from: source.text, to: prompt.instruction }
+    - { from: source.video, to: splitter.in }
+    - { from: splitter.left, to: video_reader.in }
+    - { from: splitter.right, to: audio_reader.in }
+    - { from: video_reader.out, to: video_preprocessor.in }
+    - { from: audio_reader.out, to: whisper.in }
+    - { from: video_preprocessor.out, to: prompt.video }
+    - { from: whisper.out, to: prompt.audio }
+    - { from: prompt.out, to: newton_c.in }
+    - { from: newton_c.out, to: parser.in }
+    - { from: parser.out, to: sink.in }

@@ -1,0 +1,17 @@
+{
+  "name": "custom Omega AD on TEP",
+  "primary": "anomaly.macro_f1",
+  "values": {
+    "window_size": 48, "step_size": 8, "metric": "l2", "pca_components": 16,
+    "threshold": 1.215, "feature_names": ["std", "range", "slope", "median"], "output_score": true
+  },
+  "search_space": {
+    "n_neighbors": {"kind": "value", "spec": {"type": "categorical", "values": [5, 10]}},
+    "interpolation_method": {"kind": "value", "spec": {"type": "categorical", "values": ["linear", "ffill"]}}
+  },
+  "max_trials": 4,
+  "ground_truth": {
+    "training": {"anomaly": {"from": {"constant": "normal"}, "downsampling": "last_record"}},
+    "scored":   {"anomaly": {"from": {"column": "label"}, "downsampling": "last_record"}}
+  }
+}

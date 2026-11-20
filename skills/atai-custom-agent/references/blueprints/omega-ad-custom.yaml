@@ -1,0 +1,179 @@
+name: Omega Anomaly Discovery
+description: >
+  Custom AD-style blueprint: Omega embeddings fused with per-channel statistics,
+  scored by a LOF novelty detector fitted on normal-only data. Derived from the
+  canonical `ad` blueprint with different defaults and with the detector's
+  fit-time PCA, whitening, z-score floor and index backend exposed as values.
+
+metrics:
+  targets:
+    - name: anomaly
+      type: binary
+      predicted: predicted_label
+      labels:
+        - ${values.anomaly_label}
+        - ${values.normal_label}
+      positive: ${values.anomaly_label}
+      pairing: by_time
+      objectives:
+        [macro_f1, accuracy, foreground_macro_f1, detection_recall, detection_precision]
+  primary: anomaly.macro_f1
+
+values:
+  # --- Inputs ---
+  timestamp_column: null
+  data_columns: null
+
+  # --- Window (canonical ad: 1024 / 256) ---
+  window_size: 512
+  step_size: 128
+
+  # --- Data preparation ---
+  stream_interpolation_max_gap: 0
+  window_interpolation_max_gap: 8
+  interpolation_method: linear
+
+  # --- Validations ---
+  # Set to false for data sampled above 1 kHz (timestamps are ms, so windows
+  # are never strictly increasing and every window is marked invalid).
+  validate_monotonic_timestamps: true
+  sampling_rate: null
+  max_sample_rate_variance: null
+  sample_rate_interval_tolerance: 0.10
+  max_temporal_gap: null
+  max_nan_gap: 8
+  max_inf_gap: null
+  max_nan: null
+  max_inf: 0
+  min_value: null
+  max_value: null
+
+  # --- Features (canonical ad: all seven) ---
+  feature_names: [std, range, slope, median]
+
+  # --- Detection head ---
+  # Must be provided or searched over by optimize.
+  threshold: ${required}
+  normal_label: normal
+  anomaly_label: anomaly
+  output_score: true
+  output_embeddings: false
+
+  # --- Detection head fit-time hyperparameters ---
+  n_neighbors: 10
+  metric: l2
+  # `exact`, `kd_tree`, `ball_tree`, or null to auto-select.
+  algorithm: null
+  # Canonical ad hardcodes PCA on; exposed here.
+  pca_enabled: true
+  pca_components: 16
+  pca_whiten: true
+  zscore_std_floor: 0.01
+
+models:
+  # Empty on purpose: fitted by optimize, filled in when a trial is promoted.
+  detection_head:
+  encoder: "newton-omega-1-5-safetensors"
+
+connectors:
+  source:
+    key: RecordsSource
+    config:
+      format: csv
+      timestamp_column: ${values.timestamp_column}
+      data_columns: [{ dtype: f32, names: "${values.data_columns}" }]
+  sink:
+    key: RecordsSink
+    config:
+      format: csv
+
+nodes:
+  interpolate:
+    key: ValueInterpolationNode
+    config:
+      max_gap: ${values.stream_interpolation_max_gap}
+      method: ${values.interpolation_method}
+
+  window:
+    key: WindowingNode
+    config:
+      window_size: ${values.window_size}
+      step_size: ${values.step_size}
+
+  windowInterpolate:
+    key: InWindowsInterpolationNode
+    config:
+      max_gap: ${values.window_interpolation_max_gap}
+      method: ${values.interpolation_method}
+
+  samplingRate:
+    key: SamplingRateValidationNode
+    config:
+      sampling_rate: ${values.sampling_rate}
+      validate_monotonic_timestamps: ${values.validate_monotonic_timestamps}
+      sample_rate_interval_tolerance: ${values.sample_rate_interval_tolerance}
+      max_sample_rate_variance: ${values.max_sample_rate_variance}
+      max_temporal_gap: ${values.max_temporal_gap}
+
+  limitValues:
+    key: LimitValuesValidationNode
+    config:
+      max_nan: ${values.max_nan}
+      max_inf: ${values.max_inf}
+      max_nan_gap: ${values.max_nan_gap}
+      max_inf_gap: ${values.max_inf_gap}
+      min_value: ${values.min_value}
+      max_value: ${values.max_value}
+
+  tee:
+    key: TeeNode
+    config:
+      ports: [emb, feat]
+
+  encoder:
+    key: OmegaEncoderNode
+    config:
+      model: ${models.encoder}
+
+  features:
+    key: ChannelFeaturesNode
+    config:
+      features: ${values.feature_names}
+
+  fuse:
+    key: ConcatColumnsNode
+    config:
+      ports: [emb, feat]
+
+  detection_head:
+    key: AnomalyDetectorNode
+    config:
+      model: ${models.detection_head}
+      threshold: ${values.threshold}
+      normal_label: ${values.normal_label}
+      anomaly_label: ${values.anomaly_label}
+      output_score: ${values.output_score}
+      output_embeddings: ${values.output_embeddings}
+      n_neighbors: ${values.n_neighbors}
+      metric: ${values.metric}
+      algorithm: ${values.algorithm}
+      zscore_std_floor: ${values.zscore_std_floor}
+      pca:
+        enabled: ${values.pca_enabled}
+        n_components: ${values.pca_components}
+        whiten: ${values.pca_whiten}
+
+graph:
+  edges:
+    - { from: source.out, to: interpolate.in }
+    - { from: interpolate.out, to: window.in }
+    - { from: window.out, to: windowInterpolate.in }
+    - { from: windowInterpolate.out, to: samplingRate.in }
+    - { from: samplingRate.out, to: limitValues.in }
+    - { from: limitValues.out, to: tee.in }
+    - { from: tee.emb, to: encoder.in }
+    - { from: tee.feat, to: features.in }
+    - { from: encoder.out, to: fuse.emb }
+    - { from: features.out, to: fuse.feat }
+    - { from: fuse.out, to: detection_head.in }
+    - { from: detection_head.out, to: sink.in }
