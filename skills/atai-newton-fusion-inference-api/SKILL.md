@@ -229,6 +229,29 @@ Fusion is a reasoning model. Every reply opens with `<think>…</think>` — emp
 
 With the defaults, repeated calls on the same input returned identical answers in our runs. Don't rely on it for borderline verdicts: aggregate over a few calls if a verdict matters.
 
+## Summarizing a classifier's results
+
+A common pairing with [`atai-newton-omega-inference-api`](../atai-newton-omega-inference-api/SKILL.md): Omega and KNN label each window of a recording, and C 2.6 turns those labels into a few sentences for a non-technical reader. Send what the classifier concluded, never embeddings. Merge consecutive windows with the same label into a timeline first, and compute every number in code:
+
+```json
+{
+  "model": "newton-c-2.6",
+  "system_prompt": "You summarize a person's physical activity from an activity-recognition timeline. Write 3-5 short sentences of plain English for a non-technical reader: what the person did, in what order, and roughly how long. Mention brief misclassifications only if they look like noise. If an agreement score is given, end with one sentence on how reliable the predictions were. No lists, no markdown, no headings.",
+  "query": "Predicted activity timeline (m:ss):\n- 0:00–1:10 standing\n- 1:10–2:30 walking\n...\nTotal predicted time per activity (seconds): standing 70, walking 80, ...\nAgreement with ground-truth labels: 105/127 windows (83%).\n\nWrite the summary now.",
+  "max_new_tokens": 300,
+  "do_sample": false
+}
+```
+
+- About 2.4 s on production for the timeline of a 5–6 minute recording (2026-11-19).
+- The model rewords the numbers rather than computing them, but it can relabel them: in one run it reported "91 out of 120 windows" as "91 out of 120 activity segments". Name the units in the prompt and check the wording before showing it.
+
+## Building a web app
+
+- **Build the UI with [`atai-design-system`](../atai-design-system/SKILL.md).** Load that skill before writing any front-end code; it scaffolds the app and installs the design system's own agent instructions. Don't hand-roll HTML/CSS.
+- **Keep the API key out of the browser.** Call Newton from server routes (for example SvelteKit `+server.ts`) and never put `ATAI_API_KEY` in client code. If the app follows the design system's pattern of pasting the key into the UI, send it to your server routes with each request rather than calling the API from the page.
+- **Give `.env` precedence over the shell** when the app reads it (see [Common Pitfalls](#common-pitfalls)).
+
 ## Latency
 
 Measured on production, 2026-11-15, warm, with the bundled scripts (one run each):
@@ -294,7 +317,7 @@ Every refusal is a bare `400` with no reason, so check this table first when old
 - **Expecting fine detail from a large image.** Images and video frames are squashed to 224 × 224 before the model sees them. Crop to what matters. When it couldn't read small text, C 2.6 answered "?", but **Fusion invented plausible digits** — validate anything Fusion reads from small print.
 - **Expecting more than 16 frames.** Long clips are sampled down to 16 frames. Split long videos into shorter clips when the action is brief or the check is fine-grained.
 - **JSON wrapped in markdown fences.** Parse defensively or restate the no-fences rule in both `system_prompt` and the query.
-- **Shell variables beat `.env`.** `ATAI_API_*` exported in your shell override `.env` (`load_dotenv(override=False)`). Unset them if the scripts hit the wrong environment.
+- **Shell variables beat `.env`.** `ATAI_API_*` exported in your shell override `.env` (`load_dotenv(override=False)`), in the scripts and in any app that reads the environment before `.env`. Unset them, or make the app read `.env` first, if requests hit the wrong environment or fail with a stale key.
 
 ## Local Setup
 
