@@ -1,13 +1,14 @@
 ---
 name: atai-newton-omega-inference-api
 description: >
-  Get time-series embeddings from Archetype AI's Omega encoder on the
+  Get time-series embeddings from the Omega encoder on the
   Inference API (Newton Omega 1.5, model `omega-embedding`,
   `/api/inference/*`) — send a window of sensor readings, get back a 768-d
   vector per channel. Use this skill to embed multivariate sensor windows
-  (vibration, flow, pressure, etc.) for client-side KNN
+  for client-side KNN
   classification, anomaly scoring, similarity search, or 2D projection —
-  including a web app over a folder of sensor CSVs. For numeric
+  including a web app over a folder of sensor CSVs (build its UI with
+  `atai-design-system`). For numeric
   time-series, this is the Inference API skill, not
   `atai-newton-fusion-inference-api`. Covers sessions and `window_size`
   (16–1024), the `data.numeric_array` request, the response shape, the
@@ -161,6 +162,27 @@ It reports a full binary metrics report (`degraded` = positive), and `--window-s
 
 With all four channels in the joint feature, accuracy rises with the window: at 16 the window is shorter than the defect's impulse signature and recall collapses; at 1024 only 2 of 1000 windows are wrong. The answer is not universal, though — embedding **one** channel (`bearing_1` only, as in the platform quickstart) reverses it: 64 scored 94%, 256 85% and 1024 82% on 100 held-out windows, because the long single-channel windows flag healthy windows as degraded. Sweep a few lengths on *your* setup and let held-out F1 pick; the default here is 1024 because it wins on this one.
 
+## Classifying a whole recording
+
+To label every window of a long recording, don't send one query per window. Lay the windows end to end in one session query: with `step_size` equal to `window_size`, the session cuts the input back into the same windows and returns one row per window, in order. The windows don't need to be contiguous in the recording — any windows laid end to end come back as the rows they would give alone.
+
+Measured on production (2026-11-19, one account, 6 channels × 128 timesteps, session `window_size` = `step_size` = 128):
+
+| Request | Latency |
+|---|---:|
+| 1 window | ~0.25 s |
+| 10 windows in one query | 1.8 s |
+| 50 windows in one query | 8.0 s |
+| 100 windows in one query | 15.8 s |
+| 8 one-window queries, one after another | 1.8 s |
+| 8 one-window queries, all in flight | 1.8 s |
+
+- **Request size doesn't change the vectors.** A window's vector was identical (largest difference 0) whether it was sent alone or as one of 10. Unlike Omega 1.4 on the Direct Query API, there is no need to pad every request to a fixed size.
+- **Throughput stayed at about 6 windows/s however the windows were sent.** In this run, queries in flight together took as long as the same queries one after another, and batching saved only the per-request overhead. That differs from the parallel gains in [Latency](#latency) (1024-timestep windows, 8 in flight), so measure on your own account before counting on concurrency.
+- **Send chunks of about 10–50 windows**, so a UI can show progress and each body stays well under the 2 MiB cap: 100 windows × 6 channels × 128 timesteps was a 1.5 MB body at full float precision.
+
+End to end, a recording of 127 windows classified in 21 s and one of 151 windows in 28 s (chunks of 10, two in flight).
+
 ## Latency
 
 Measured per window on production (p50 of 12, sequential, nothing else sharing the model), all channels in one query, 1024 timesteps:
@@ -178,6 +200,15 @@ Measured per window on production (p50 of 12, sequential, nothing else sharing t
 
 Queries to one session are independent, so `classify_knn.py` sends several at once with `--workers`.
 
+## Building a web app
+
+- **Build the UI with [`atai-design-system`](../atai-design-system/SKILL.md).** Load that skill before writing any front-end code; it scaffolds the app and installs the design system's own agent instructions. Don't hand-roll HTML/CSS.
+- **Keep the API key out of the browser.** Call Omega from server routes (for example SvelteKit `+server.ts`) and never put `ATAI_API_KEY` in client code. If the app follows the design system's pattern of pasting the key into the UI, send it to your server routes with each request rather than calling the API from the page.
+- **Give `.env` precedence over the shell** when the app reads it (see [Common Pitfalls](#common-pitfalls)).
+- **Use one session for the whole app.** Open it on first use, reuse it for every request, reopen it on HTTP 409, and cancel it on shutdown. Under a dev server with hot reload, keep the session id on a global so each reload doesn't open a new session against the 16-per-model limit.
+- **Save the n-shot library to disk** (the vectors and the scaler), keyed by model and window length, so restarting the app doesn't embed it again. Rebuild it when either changes.
+- **Cache each window's result**, so selecting a window again or rerunning a recording is instant.
+
 ## Common Pitfalls
 
 - **Channel-first, not row-major.** `contents` is `[channels x timesteps]` (one list per sensor), not `[timesteps x channels]`. Transposing gives garbage embeddings.
@@ -188,6 +219,7 @@ Queries to one session are independent, so `classify_knn.py` sends several at on
 - **No mixing of model versions.** Omega 1.4 and 1.5 vectors are not comparable. Rebuild the library when you switch.
 - **Ended sessions return HTTP 409.** Reopen and retry rather than failing the run; cancel sessions you no longer need.
 - **Very wide windows hit HTTP 413.** Above about 95 channels × 1024 timesteps, split channels across requests (the vectors are the same).
+- **Shell variables beat `.env`.** An `ATAI_API_KEY` or `ATAI_API_ENDPOINT` exported in your shell (for example in `~/.zshrc`) overrides `.env` in the scripts (`load_dotenv(override=False)`) and in any app that reads the environment before `.env`. A stale exported key then fails (for example `403 org_trial_expired`) even though `.env` is right. Unset the variable, or make the app read `.env` first.
 
 ## Local Setup
 
