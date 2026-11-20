@@ -101,5 +101,25 @@ class Check(unittest.TestCase):
         self.assertTrue(any("x_PassthroughNode" in p for p in problems))
 
 
+class Outputs(unittest.TestCase):
+    def test_millisecond_timestamps_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ms, sec = os.path.join(d, "ms.csv"), os.path.join(d, "s.csv")
+            with open(ms, "w") as f:
+                f.write("timestamp,a\n1577883600004,1\n")
+            with open(sec, "w") as f:
+                f.write("timestamp,a\n1577883600.004,1\n")
+            ca.check_timestamps(sec)
+            with self.assertRaises(SystemExit):
+                ca.check_timestamps(ms)
+
+    def test_invalid_share(self):
+        csv_body = b"finish_timestamp,predicted_label,invalid\n1,INVALID_STATE,true\n2,normal,false\n"
+        self.assertEqual(ca.invalid_share(csv_body), (0.5, 2))
+        self.assertEqual(ca.invalid_share(b'{"invalid": true}\n'), (1.0, 1))
+        self.assertIsNone(ca.invalid_share(b'{"score": 1}\n'))
+
+
 if __name__ == "__main__":
     unittest.main()

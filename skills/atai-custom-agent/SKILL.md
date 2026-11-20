@@ -171,6 +171,7 @@ What it does, and the details that bite:
 3. **Session** `POST /agents/sessions {"deployment_id", "connectors": {"source": [{"type": "file", "id": <name or file_id>, "format": "csv" | "mp4"}]}}`.
 4. **Watch the job, not just the session.** A batch session can stay `running` with `error: null` after its pod failed. Read `GET /batch/jobs/{job_id}/events`: any `ERROR` event means it's over (the script then cancels the session and prints the events).
 5. **Results** `GET /agents/sessions/{id}/results`: each `data.ref` is a root path (`/api/…`); fetch it from the host root, not from `…/api`.
+6. **`completed` doesn't mean the windows are valid.** Check the `invalid` column of the output. A job whose every window failed validation still completes, with `predicted_label: INVALID_STATE` and a `NaN` score on every row. The usual cause is **timestamps in epoch milliseconds**: the validation nodes read timestamps as seconds, so `sampling_rate` and `max_temporal_gap` never match. Write them as seconds (`1577883600.004`, not `1577883600004`). Seen on 2-lead ECG at 250 Hz: 3597 of 3597 windows invalid with milliseconds, 0 with seconds. The script refuses a CSV whose first timestamp looks like milliseconds, and warns when more than half the windows come back invalid.
 
 **Batch needs a sink that writes per-request files.** A graph ending in `TextSink` fails in batch right after the model loads ("internal error", pod exit 1) on every environment we tried. For batch, end text-producing graphs the way the canonical MGA blueprint does: a results parser (`ManualGenerationResultsParserNode`) → `RecordsSink` with `format: json/per-request`. That's the only difference between `newton-c-video-summary.yaml` (serving) and `newton-c-video-summary-batch.yaml` (batch). The parser expects MGA's numbered-step format, so the batch variant keeps MGA's default system prompt.
 
@@ -291,4 +292,5 @@ python custom_agent.py cleanup --packages   # and delete the package
 - [ ] Inputs left `null` in the template are pinned on the copy you package
 - [ ] Blueprint keys and uploaded file names are unique
 - [ ] Batch failures read from job events, not session status
+- [ ] Timestamps in seconds; the output's `invalid` share checked after each batch
 - [ ] Serving deployments stopped and deleted after use
