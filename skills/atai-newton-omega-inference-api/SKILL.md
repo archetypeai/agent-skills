@@ -1,13 +1,14 @@
 ---
 name: atai-newton-omega-inference-api
 description: >
-  Get time-series embeddings from Archetype AI's Omega encoder on the
+  Get time-series embeddings from the Omega encoder on the
   Inference API (Newton Omega 1.5, model `omega-embedding`,
   `/api/inference/*`) — send a window of sensor readings, get back a 768-d
   vector per channel. Use this skill to embed multivariate sensor windows
-  (vibration, flow, pressure, etc.) for client-side KNN
+  for client-side KNN
   classification, anomaly scoring, similarity search, or 2D projection —
-  including a web app over a folder of sensor CSVs. For numeric
+  including a web app over a folder of sensor CSVs (build its UI with
+  `atai-design-system`). For numeric
   time-series, this is the Inference API skill, not
   `atai-newton-fusion-inference-api`. Covers sessions and `window_size`
   (16–1024), the `data.numeric_array` request, the response shape, the

@@ -6,9 +6,10 @@ description: >
   (`POST /api/lens/query`) — send a window of sensor readings, get back a
   fixed-size vector per channel, no batch job and no session. Use this
   skill when the user wants to embed multivariate sensor windows
-  (vibration, flow, pressure, network, etc.) for client-side ML — KNN
+  for client-side ML — KNN
   classification, anomaly scoring, similarity search, or 2D projection —
-  including a web app over a folder of sensor CSVs. For numeric
+  including a web app over a folder of sensor CSVs (build its UI with
+  `atai-design-system`). For numeric
   time-series, this is the Direct Query API skill, not the fusion model.
   Covers the request shape (`data.numeric_array`, channel-first window),
   the per-channel 768-d output, the 16–1024 window-length range, `normalize_input`, and the

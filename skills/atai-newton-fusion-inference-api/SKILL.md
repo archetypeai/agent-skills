@@ -2,11 +2,12 @@
 name: atai-newton-fusion-inference-api
 description: >
   Call Newton's multimodal models on the Inference API — Newton C 2.6
-  (`newton-c-2.6`, the default) and Newton Fusion 1.0 (`newton-fusion-1.0`)
+  (`newton-c-2.6`, default) and Newton Fusion 1.0 (`newton-fusion-1.0`)
   — with text, an image, or a short video in one stateless request, on
   `/inference/query`, OpenAI Chat Completions, or OpenAI Responses. Use
-  this skill for per-call multimodal reasoning on the Inference API —
-  including a web app over a folder of images or videos — for Newton
+  for per-call multimodal reasoning on the Inference API —
+  including a web app over images or videos (build its UI with
+  `atai-design-system`) — for Newton
   Fusion 1.0, or to call Newton through an OpenAI SDK. Covers the request
   shape per modality and endpoint, inline media (no uploads), the 224 px /
   16-frame input, the ~60 s limit, Fusion's reasoning, and model choice.

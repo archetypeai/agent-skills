@@ -3,15 +3,15 @@ name: atai-newton-fusion-model
 description: >
   Call Newton's C 2.6 fusion model (`Newton::c2_6_8b_fp8_260424d7a55d5e`)
   on the Direct Query API (`POST /api/lens/query`) with text, image, and
-  video inputs in a single stateless request — no session, no batch job,
-  no SSE plumbing. Use this skill when the user wants per-call multimodal
+  video inputs in a single stateless request — no session or batch job.
+  Use this skill when the user wants per-call multimodal
   reasoning (describe an image, summarize a clip, classify a state from
   images or video plus context) without managing session lifecycle.
   Covers the request shape per modality, the two image-attachment paths
   (file_ids vs base64), multi-image mode, both video paths (`.mp4` +
   `max_frames`, and client-sampled frames + `query_metadata`), generation
   parameters, JSON-output prompting, latency budgets, and the C 2.6
-  identifier gotcha.
+  identifier gotcha. For a web app, build the UI with `atai-design-system`.
   Do NOT use for streaming / session-based activity monitoring, large
   multi-file batch jobs, or time-series embedding (KNN / anomaly). For a
   numeric time-series dataset (sensor CSVs), use `atai-newton-omega-model`,
