@@ -8,7 +8,7 @@ Inspired by [mongodb/agent-skills](https://github.com/mongodb/agent-skills).
 
 ## Skills
 
-Four groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/api/lens/query` and leave the orchestration to you, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
+Five groups: **Agents** run a maintained pipeline server-side over the Agents API, **Models** call Newton directly on `/api/lens/query` and leave the orchestration to you, **Fine-tuning** adapts a Newton model to your own data, **Integrations** pair a Newton model with a third-party model, and **Design** covers the demo front-end.
 
 ### Agents
 
@@ -46,6 +46,14 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 |-------|-------------|
 | [atai-newton-omega-inference-api](skills/atai-newton-omega-inference-api/) | Get time-series embeddings from Newton Omega 1.5 (`omega-embedding`) on the Inference API — a session per window length (16–1024), all channels in one query — for client-side KNN classification, anomaly scoring, and similarity search. Shares `atai-newton-omega-model-data-prep` and the bearing sample data with the Direct Query skill |
 | [atai-newton-fusion-inference-api](skills/atai-newton-fusion-inference-api/) | Call Newton C 2.6 (`newton-c-2.6`) or Newton Fusion 1.0 (`newton-fusion-1.0`) on the Inference API with text, an image or a short video — on `/query`, OpenAI Chat Completions or OpenAI Responses — with media inline (no uploads), 224 px / 16-frame input, the ~60 s query limit, and Fusion's reasoning. Shares the sample assets with `atai-newton-fusion-model` |
+
+### Fine-tuning
+
+Train a Newton model on your own labelled data and measure it against the base model.
+
+| Skill | Description |
+|-------|-------------|
+| [atai-newton-c-fine-tuning](skills/atai-newton-c-fine-tuning/) | LoRA-fine-tune Newton C 2.5.1-8b (the only Newton model fine-tunable on production) on labelled video clips with the `/fine-tuning` API, serve the checkpoint through a batch `activity-detection` job on the **`worker.checkpoint` port** (`config.checkpoint_id` is silently ignored), and compare against the base model closed-set and open-ended (LLM-judged against the label set). Covers the two data formats, multipart JSONL upload, the create body, statuses and checkpoints, cursor pagination, and what to expect (~3 h, fixed 1,024 steps). Developer key. Worked example: [fine-tuning-example-newton-c](https://github.com/archetypeai/fine-tuning-example-newton-c) |
 
 ### Integrations
 
@@ -158,6 +166,9 @@ cp -r skills/* your-project/.claude/skills/
 # Models — Inference API
 /atai-newton-omega-inference-api                    # Omega 1.5 time-series embeddings + client-side KNN via sessions
 /atai-newton-fusion-inference-api                   # C 2.6 / Fusion 1.0 text, image, video on /query, Chat Completions, Responses
+
+# Fine-tuning
+/atai-newton-c-fine-tuning                          # Fine-tune Newton C on labelled video; base vs fine-tuned, scored
 
 # Integrations
 /atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
