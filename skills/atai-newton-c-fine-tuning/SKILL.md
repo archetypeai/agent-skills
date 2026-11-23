@@ -139,7 +139,7 @@ POST /fine-tuning/jobs
 - **Statuses:** `PENDING` → `ADMITTED` → `RUNNING` → `COMPLETED`. Success can also be reported as `SUCCEEDED`: accept both before reading checkpoints.
 - **Steps are fixed at 1,024**, whatever the dataset size. `n_epochs` is accepted; there is no `max_steps`. On 300 clips that is ~56 epochs.
 - **Checkpoints:** `GET /fine-tuning/jobs/{id}/checkpoints` → `[{id: "ckp_…", step, metrics: {eval_loss, epoch, …}}]`. Keep the lowest `eval_loss`. Both runs of the example produced a single checkpoint, at step 1024.
-- **`fine_tuned_model` stays `null`.** There is no served model name; you serve the `ckp_…` id (next section).
+- **`fine_tuned_model` stays `null`.** There is no served model name; you serve the `ckp_…` id (next section), which only your org can use.
 - **Budget ~3 h.** Measured: 10,460 s (2 h 54 min) on production, 2026-11-23, 300 training clips. The Console shows live loss and steps.
 
 ## Serving the Checkpoint
@@ -164,6 +164,8 @@ POST /batch/jobs
 ```
 
 The baseline is the same body **without** `worker.checkpoint`.
+
+**A checkpoint belongs to the org that trained it.** Other orgs can't serve it, so there is no shared fine-tuned model to borrow: every org runs its own fine-tune on its own data, and serves its own `ckp_…`.
 
 > **⚠️ `config.checkpoint_id` is accepted and silently ignored** — the job runs the base model and the before/after comes out identical. A checkpoint id as `model_variant` is rejected. **If your fine-tuned run matches the baseline clip for clip, check the port first.**
 
