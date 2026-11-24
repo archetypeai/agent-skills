@@ -1,0 +1,35 @@
+name: Test atai-newton-omega-fine-tuning
+
+on:
+  pull_request:
+    paths:
+      - 'skills/atai-newton-omega-fine-tuning/**'
+      - '.github/workflows/test-atai-newton-omega-fine-tuning.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/atai-newton-omega-fine-tuning/**'
+      - '.github/workflows/test-atai-newton-omega-fine-tuning.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # the runner is stdlib only; pytest runs the tests (unittest or pytest style)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run the network-free tests
+        run: python -m pytest skills/atai-newton-omega-fine-tuning/tests -v

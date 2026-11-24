@@ -49,11 +49,12 @@ Managed end-to-end pipelines — upload an input, run a platform blueprint, poll
 
 ### Fine-tuning
 
-Train a Newton model on your own labelled data and measure it against the base model.
+Train on your own labelled data: LoRA for Newton C, a classification head for Omega.
 
 | Skill | Description |
 |-------|-------------|
 | [atai-newton-c-fine-tuning](skills/atai-newton-c-fine-tuning/) | LoRA-fine-tune Newton C 2.5.1-8b (the only Newton model fine-tunable on production) on labelled video clips with the `/fine-tuning` API, serve the checkpoint through a batch `activity-detection` job on the **`worker.checkpoint` port** (`config.checkpoint_id` is silently ignored), and compare against the base model closed-set and open-ended (LLM-judged against the label set). Covers the two data formats, multipart JSONL upload, the create body, statuses and checkpoints, cursor pagination, and what to expect (~3 h, fixed 1,024 steps). Developer key. Worked example: [fine-tuning-example-newton-c](https://github.com/archetypeai/fine-tuning-example-newton-c) |
+| [atai-newton-omega-fine-tuning](skills/atai-newton-omega-fine-tuning/) | Fine-tune a classification **head** on frozen Newton Omega 1.5 embeddings of labelled sensor CSVs with the `/fine-tuning` API (the encoder's weights don't change), run it on new recordings in a `machine-state-classification` batch job (head on `worker.fine_tune_checkpoint`, `worker.n_shots` still required, same window as training), and score it. Covers the `n_shot` CSV format, the reader window, checkpoints (best = highest step; a lone 0.33 checkpoint means the head never learned), how much data a head needs vs KNN, and the `knn` method's status on production. Worked example: [fine-tuning-example-newton-omega](https://github.com/archetypeai/fine-tuning-example-newton-omega) |
 
 ### Integrations
 
@@ -169,6 +170,7 @@ cp -r skills/* your-project/.claude/skills/
 
 # Fine-tuning
 /atai-newton-c-fine-tuning                          # Fine-tune Newton C on labelled video; base vs fine-tuned, scored
+/atai-newton-omega-fine-tuning                      # Fine-tune an Omega head on labelled sensor CSVs; run it in a batch job, scored
 
 # Integrations
 /atai-newton-omega-nvidia-nemotron                  # Omega + KNN verdicts explained by NVIDIA Nemotron (fault briefs, operator actions)
