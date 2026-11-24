@@ -24,6 +24,8 @@ description: >
 
 Baseline the base model, fine-tune it with LoRA, serve the checkpoint, and compare — all over the API, no GPU or weights. Worked example with full results: [fine-tuning-example-newton-c](https://github.com/archetypeai/fine-tuning-example-newton-c) (UCF101, 10 classes).
 
+> **Data:** the example and the numbers below use a 10-class subset of UCF101 — K. Soomro, A. R. Zamir and M. Shah, "UCF101: A Dataset of 101 Human Actions Classes From Videos in The Wild", CRCV-TR-12-01, 2012 ([arXiv:1212.0402](https://arxiv.org/abs/1212.0402)). The clips aren't redistributed; the example downloads them.
+
 ## When to Apply
 
 - The user has labelled video clips (or frames) and wants Newton C to name their classes, in their vocabulary
