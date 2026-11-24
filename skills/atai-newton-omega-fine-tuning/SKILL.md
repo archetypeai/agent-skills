@@ -23,6 +23,8 @@ description: >
 
 Train a small classifier ("head") on frozen Omega 1.5 embeddings of your labelled windows, then run it over new recordings in a batch job. Worked example with full results: [fine-tuning-example-newton-omega](https://github.com/archetypeai/fine-tuning-example-newton-omega) (SWaT water-treatment plant, normal vs attack).
 
+> **Data:** the example and the numbers below use the Secure Water Treatment (SWaT) dataset, SWaT.A1_Dec 2015, from iTrust, Centre for Research in Cyber Security, Singapore University of Technology and Design ([dataset page](https://www.sutd.edu.sg/itrust/itrust-labs/datasets/dataset-characteristics/swat/)). iTrust's [terms](https://www.sutd.edu.sg/itrust/itrust-labs/datasets/terms-of-usage/) ask for that credit in published work and that the dataset not be shared, so it isn't redistributed: request it from iTrust.
+
 ## When to Apply
 
 - The user has labelled sensor CSVs, one class per file, and wants a trained classifier over Omega embeddings
