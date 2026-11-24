@@ -101,7 +101,7 @@ POST /fine-tuning/jobs
 - **Statuses:** `PENDING` → `ADMITTED` → `RUNNING` → `COMPLETED`; accept `SUCCEEDED` too.
 - **Checkpoints:** the worker saves one each time validation macro-F1 improves, so **the highest step is the best**. `GET /fine-tuning/jobs/{id}/checkpoints` → `[{id: "ckp_…", step, metrics: {macro_f1}}]`.
 - **A single checkpoint at the one-class score means the head never learned.** With two balanced classes that is macro-F1 0.333 at step 1: the head predicts one class everywhere. `train` warns when it sees it ([How much data](#how-much-data)).
-- **Seeds matter.** The same data gave macro-F1 0.75–0.92 across six seeds (June 2026). Pin `seed`; if a run underperforms, try another.
+- **Seeds matter, and so does file order.** The same data gave macro-F1 0.75–0.92 across six seeds (June 2026). A seed reproduces a run only with the same files in the same order: listing the classes in a different order gave a different trajectory (7 checkpoints to 0.996 validation, vs 4 to 0.984) and 90.7% vs 90.3% on test. Pin `seed`; if a run underperforms, try another.
 - **Timing (production, 2026-11-23):** 240 s for 8 files × 5,000 rows; 59 s for 2 files × 2,000 rows.
 - **Checkpoints belong to the org that trained them.** There is no `fine_tuned_model` name; you attach the `ckp_…` id.
 
@@ -136,7 +136,7 @@ POST /batch/jobs
 - **Confirm the head was used from the events:** `preparing_classifier: Loading fine-tuned configuration`, then `inferencing`. A KNN run shows `train.started` on the n-shot files and `Training classifier` instead.
 - `classifier_config` (KNN settings) is unused with a checkpoint; leave it out.
 - **Output:** one CSV per input file, `timestamp,Prediction`, one row per window (the timestamp of the window's last row). Each output entry names its input in `input_file_id`; match classes by that, not by the output file name.
-- **Timing:** ~35 s per 5,000-row file at step 1; 12 files ≈ 7 min.
+- **Timing:** ~35 s per 5,000-row file at step 1; 12 files (54,476 windows) took 412 s.
 - Outputs, events and checkpoints are cursor-paginated (`data`, `has_more`, `next_cursor`, newest first; next page `after=<next_cursor>`). See [`list_all()`](references/omega_ft.py).
 
 ## How much data
@@ -152,6 +152,7 @@ SWaT, normal vs attack, 51 sensors at 1 Hz (40 channels kept), window 128, held-
 - **A head needs enough data.** On 2,000 rows per class it never learned (one checkpoint, 0.333).
 - **With little data, KNN wins; with enough, the head wins.** Here the head caught the same attacks as KNN with 3.7× fewer false alarms (2,055 vs 7,659 normal windows misclassified).
 - On 2026-11-23 the head and KNN numbers matched an earlier run (July 2026, platform 1.x) window for window.
+- **This skill's scripts, same day, same data** (classes listed in a different order): 90.7% accuracy, macro-F1 0.907, attack recall 89.8%, normal recall 91.6%.
 
 ## Common Pitfalls
 
