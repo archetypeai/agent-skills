@@ -169,10 +169,12 @@ The baseline is the same body **without** `worker.checkpoint`.
 
 > **⚠️ `config.checkpoint_id` is accepted and silently ignored** — the job runs the base model and the before/after comes out identical. A checkpoint id as `model_variant` is rejected. **If your fine-tuned run matches the baseline clip for clip, check the port first.**
 
+**Confirm the adapter loaded from the job's events, not from the scores.** A job that applied the checkpoint logs `inference.checkpoint.loaded: Serving a fine-tuned checkpoint` before `inference.init.started`; a base-model run doesn't. Identical predictions alone prove nothing: on 10 easy clips, base and fine-tuned answered the same on every one, with the checkpoint loaded.
+
 - `kind` is required on every input.
 - Outputs: `GET /batch/jobs/{id}/outputs` → entries with `data.ref = "/api/files/fil_…/content"`. The ref is a root path: strip `/api` before joining it to an endpoint that already ends in `/api`, or you get `/api/api/…` and a 404.
 - Success for a batch job is `COMPLETED`. Score only after it: a `RUNNING` job returns partial or empty outputs.
-- ~5–10 min for 75 clips, closed or open.
+- ~5–10 min for 75 clips, closed or open; ~4–5 min even for 10 clips, since most of it is loading the model (production, 2026-11-23: 253 s base, 301 s fine-tuned).
 
 ## Pagination
 
