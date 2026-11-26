@@ -587,8 +587,7 @@ until it is stopped; free-trial accounts serve on CPU only, so answers can be sl
    `timestamp_column` from values, which batch takes from the CSV header but a served query
    doesn't carry; a package carries no values, so `optimize.py` pins both at Optimize.
 2. **Deploy it as serving:** `POST /agents/deployments {"package_id": …, "kind": "serving"}`,
-   wait until `ready` (the agent placed and loaded, seconds), then `POST /agents/sessions
-   {"deployment_id": …}` with no connectors, and wait until the session is `running`.
+   wait until `ready` (the agent placed and loaded, seconds), then `POST /agents/sessions {"deployment_id": …}` with no connectors, and wait until the session is `running`.
 3. **One query per window:** `POST /agents/sessions/{ses}/query`, a list per channel:
 
    ```json

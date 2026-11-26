@@ -625,8 +625,7 @@ python deliver.py --roles $R --out out --name red-sample
    "target": {"kind": "platform"}, "name": …}`, then poll until `status` is `ready`.
 2. **Deploy** it in batch: `POST /agents/deployments {"package_id": "<pkg_…>", "kind": "batch"}`,
    ready at once.
-3. **A session per delivery file**, `--parallel 3` at a time: `POST /agents/sessions
-   {"deployment_id": "<dpl_…>", "connectors": {"source": [{"type": "file", "id": "<file_id>",
+3. **A session per delivery file**, `--parallel 3` at a time: `POST /agents/sessions {"deployment_id": "<dpl_…>", "connectors": {"source": [{"type": "file", "id": "<file_id>",
    "format": "csv"}]}}`; poll `GET /agents/sessions/{id}` until `completed`.
 4. **Download** from `GET /agents/sessions/{id}/results`: `data[0].data.ref` is a root path,
    `/api/files/<fil_…>/content`. Each output is downloaded again until its last window
